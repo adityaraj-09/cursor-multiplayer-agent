@@ -1,0 +1,9 @@
+node_modules
+web/node_modules
+web/.next
+dist
+data.db*
+.env
+.env.local
+.git
+*.log

@@ -56,6 +56,21 @@ export interface RoomInfo {
   prUrl?: string;
   autoCreatePR?: boolean;
   keyHint?: string;
+  ownerId?: string;
+  inviteCode?: string;
+}
+
+export interface UserInfo {
+  id: string;
+  email: string;
+  name: string;
+}
+
+export interface WorkerInfo {
+  id: string;
+  name: string;
+  status: "online" | "offline" | "busy";
+  lastSeenAt: number;
 }
 
 export interface ModelInfo {
@@ -92,6 +107,49 @@ export interface ClientToServerEvents {
   "request-drive": () => void;
   "release-drive": () => void;
   "grant-drive": (toSocketId: string) => void;
+}
+
+/** Worker ↔ Server events (Socket.IO /worker namespace) */
+export interface WorkerToServerEvents {
+  "worker:ready": (info: {
+    workerId: string;
+    machineName: string;
+  }) => void;
+  "worker:agent-event": (data: {
+    roomId: string;
+    event: AgentStreamEventPayload;
+  }) => void;
+  "worker:file-diff": (data: {
+    roomId: string;
+    msgId: string;
+    toolName: string;
+    path: string;
+    patch: string;
+  }) => void;
+}
+
+export interface ServerToWorkerEvents {
+  "worker:run-prompt": (data: {
+    roomId: string;
+    prompt: string;
+    repoPath: string;
+    modelId: string;
+    sessionId?: string | null;
+  }) => void;
+  "worker:abort": (data: { roomId: string }) => void;
+  "worker:error": (message: string) => void;
+}
+
+export interface AgentStreamEventPayload {
+  kind: string;
+  sessionId?: string;
+  text?: string;
+  callId?: string;
+  name?: string;
+  detail?: string;
+  path?: string;
+  message?: string;
+  result?: string;
 }
 
 export const AVATAR_COLORS = [

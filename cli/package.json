@@ -1,0 +1,42 @@
+{
+  "name": "@oblivihon/steer",
+  "version": "0.1.0",
+  "description": "CLI worker for Steer — run local Cursor agents for multiplayer sessions",
+  "type": "module",
+  "bin": {
+    "steer": "./dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/index.ts",
+    "prepublishOnly": "pnpm build"
+  },
+  "keywords": [
+    "cursor",
+    "agent",
+    "cli",
+    "steer",
+    "multiplayer"
+  ],
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "commander": "^13.0.0",
+    "socket.io-client": "^4.8.0",
+    "chalk": "^5.4.0",
+    "ora": "^8.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}

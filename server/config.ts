@@ -12,3 +12,6 @@ export const DEFAULT_MODEL = process.env.DEFAULT_MODEL?.trim() || "composer-2.5"
 export function getEnvCursorApiKey(): string {
   return process.env.CURSOR_API_KEY?.trim() || "";
 }
+
+export const AUTH_SECRET = process.env.AUTH_SECRET || "dev-secret-change-in-production";
+export const IS_PRODUCTION = process.env.NODE_ENV === "production";

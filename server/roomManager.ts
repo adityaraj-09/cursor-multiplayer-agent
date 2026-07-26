@@ -11,11 +11,13 @@ import {
 import { DiffWatcher } from "./diffWatcher.js";
 import { extractToolPath, getFileDiff, isEditTool } from "./gitDiff.js";
 import { listCliModels } from "./cliModels.js";
+import { WorkerRelay } from "./workerRelay.js";
 import * as db from "./db.js";
 import {
   DEFAULT_AGENT_COMMAND,
   DEFAULT_MODEL,
   DEFAULT_REPO_PATH,
+  IS_PRODUCTION,
 } from "./config.js";
 import {
   decryptApiKey,
@@ -27,6 +29,7 @@ import { getServerApiKey } from "./serverKey.js";
 import type {
   AgentRuntime,
   AuthMode,
+  AgentStreamEventPayload,
   ChatMessage,
   CloudMeta,
   ModelInfo,
@@ -114,6 +117,7 @@ export class RoomManager {
 
   constructor(
     private io: Server<ClientToServerEvents, ServerToClientEvents>,
+    private workerRelay?: WorkerRelay,
   ) {
     this.restoreRooms();
   }
@@ -390,16 +394,198 @@ export class RoomManager {
     void this.runAgent(room, sanitized);
   }
 
-  private async runAgent(room: RoomState, prompt: string): Promise<void> {
+  /**
+   * Dispatch a local room's prompt to a connected CLI worker.
+   * Returns true if dispatched, false if no worker available (falls back to in-process).
+   */
+  private tryDispatchToWorker(room: RoomState, prompt: string): boolean {
+    if (!this.workerRelay) return false;
+    if (room.row.auth_mode !== "cli") return false;
+    if (room.row.runtime !== "local") return false;
+
+    const ownerId = room.row.owner_id ?? undefined;
+    if (!ownerId) return false;
+
+    const worker = this.workerRelay.findWorkerForUser(ownerId);
+    if (!worker) return false;
+
     this.io.to(room.id).emit("agent-status", "running");
 
     let assistantId: string | null = null;
     let assistantContent = "";
-    /** Cumulative agent text observed this run (for slicing post-tool segments). */
     let seenFullText = "";
-    /** Length of seenFullText when the current assistant bubble opened. */
     let bubbleBaseLen = 0;
-    /** After any tool event, the next assistant text becomes a new bubble below. */
+    let afterTools = false;
+    room.toolMsgIds.clear();
+    room.toolPaths.clear();
+
+    const closeAssistant = (status: ChatMessage["status"] = "done") => {
+      if (!assistantId) return;
+      db.updateMessageContent(assistantId, assistantContent, status);
+      this.io.to(room.id).emit("chat-delta", assistantId, assistantContent, status);
+      assistantId = null;
+      assistantContent = "";
+    };
+
+    const emitAssistantFromWorker = (text: string, status: ChatMessage["status"]) => {
+      if (afterTools) {
+        closeAssistant("done");
+        afterTools = false;
+        bubbleBaseLen = seenFullText.length;
+      }
+      if (!assistantId) {
+        let display = "";
+        if (seenFullText && text.startsWith(seenFullText)) {
+          display = text.slice(seenFullText.length).replace(/^\n+/, "");
+        } else if (!text || text === seenFullText) {
+          display = "";
+        } else {
+          display = text;
+        }
+        if (!display) {
+          if (text.length > seenFullText.length) seenFullText = text;
+          return;
+        }
+        bubbleBaseLen = seenFullText.length;
+        const msg: ChatMessage = {
+          id: nanoid(12),
+          roomId: room.id,
+          role: "assistant",
+          content: display,
+          status,
+          ts: Date.now(),
+        };
+        assistantId = msg.id;
+        assistantContent = display;
+        seenFullText = text.startsWith(seenFullText)
+          ? text
+          : seenFullText ? `${seenFullText}\n${text}` : text;
+        db.insertMessage(msg);
+        this.io.to(room.id).emit("chat-message", msg);
+        return;
+      }
+      let display: string;
+      if (text.length >= bubbleBaseLen) {
+        display = text.slice(bubbleBaseLen).replace(/^\n+/, "");
+        seenFullText = text.length >= seenFullText.length ? text : seenFullText;
+      } else {
+        display = text;
+        seenFullText = text;
+      }
+      assistantContent = display || assistantContent;
+      db.updateMessageContent(assistantId, assistantContent, status);
+      this.io.to(room.id).emit("chat-delta", assistantId, assistantContent, status);
+    };
+
+    const unsubEvent = this.workerRelay.onAgentEvent(room.id, (_roomId, event) => {
+      switch (event.kind) {
+        case "session":
+          if (event.sessionId) {
+            db.setCursorSessionId(room.id, event.sessionId);
+            room.row.cursor_session_id = event.sessionId;
+          }
+          break;
+        case "assistant_delta":
+        case "assistant_final":
+          emitAssistantFromWorker(
+            event.text || "",
+            event.kind === "assistant_final" ? "done" : "streaming",
+          );
+          break;
+        case "tool_start": {
+          closeAssistant("done");
+          afterTools = true;
+          bubbleBaseLen = seenFullText.length;
+          const msg: ChatMessage = {
+            id: nanoid(12),
+            roomId: room.id,
+            role: "tool",
+            content: event.detail || "Running…",
+            toolName: event.name || "tool",
+            status: "streaming",
+            ts: Date.now(),
+          };
+          if (event.callId) room.toolMsgIds.set(event.callId, msg.id);
+          if (event.path && event.callId) room.toolPaths.set(event.callId, event.path);
+          db.insertMessage(msg);
+          this.io.to(room.id).emit("chat-message", msg);
+          break;
+        }
+        case "tool_done": {
+          const id = event.callId ? room.toolMsgIds.get(event.callId) : undefined;
+          if (id) {
+            const content = event.detail || "Done";
+            db.updateMessageContent(id, content, "done");
+            this.io.to(room.id).emit("chat-message", {
+              id,
+              roomId: room.id,
+              role: "tool",
+              content,
+              toolName: event.name || "tool",
+              status: "done",
+              ts: Date.now(),
+            });
+          }
+          afterTools = true;
+          break;
+        }
+        case "error":
+          emitAssistantFromWorker(event.message || "Unknown error", "error");
+          this.io.to(room.id).emit("agent-status", "error", event.message);
+          break;
+        case "done":
+          emitAssistantFromWorker(event.result || "", "done");
+          closeAssistant("done");
+          this.io.to(room.id).emit("agent-status", "idle");
+          this.workerRelay?.releaseWorker(room.id);
+          unsubEvent();
+          unsubDiff();
+          break;
+      }
+    });
+
+    const unsubDiff = this.workerRelay.onFileDiff(room.id, (_roomId, msgId, toolName, path, patch) => {
+      db.updateMessageDiff(msgId, path, "done", patch);
+      this.io.to(room.id).emit("chat-message", {
+        id: msgId,
+        roomId: room.id,
+        role: "tool",
+        content: path,
+        toolName,
+        diffPatch: patch,
+        status: "done",
+        ts: Date.now(),
+      });
+    });
+
+    const dispatched = this.workerRelay.dispatchToWorker(
+      room.id,
+      worker.workerId,
+      prompt,
+      room.row.repo_path,
+      room.row.model_id || "auto",
+      room.row.cursor_session_id,
+    );
+
+    if (!dispatched) {
+      unsubEvent();
+      unsubDiff();
+      return false;
+    }
+
+    return true;
+  }
+
+  private async runAgent(room: RoomState, prompt: string): Promise<void> {
+    // Try dispatching to a connected CLI worker first (production local rooms)
+    if (this.tryDispatchToWorker(room, prompt)) return;
+
+    this.io.to(room.id).emit("agent-status", "running");
+
+    let assistantId: string | null = null;
+    let assistantContent = "";
+    let seenFullText = "";
+    let bubbleBaseLen = 0;
     let afterTools = false;
     room.toolMsgIds.clear();
     room.toolPaths.clear();

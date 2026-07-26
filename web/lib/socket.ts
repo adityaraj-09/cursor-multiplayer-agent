@@ -8,7 +8,8 @@ export type AppSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
 
 // Next.js rewrites do not proxy WebSocket upgrades — connect to Express directly.
 const SOCKET_URL =
-  process.env.NEXT_PUBLIC_SOCKET_URL || "http://localhost:3000";
+  process.env.NEXT_PUBLIC_SOCKET_URL ||
+  (typeof window !== "undefined" ? window.location.origin : "http://localhost:3000");
 
 let socketInstance: AppSocket | null = null;
 let currentKey: string | null = null;

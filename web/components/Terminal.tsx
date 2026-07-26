@@ -140,7 +140,7 @@ export default function Terminal({
         const cleaned = sanitizeTerminalOutput(data);
         if (cleaned) term.write(cleaned);
       };
-      socket.on("pty-output", onPtyOutput);
+      (socket as unknown as { on: (event: string, cb: (data: string) => void) => void }).on("pty-output", onPtyOutput);
 
       resizeObserver = new ResizeObserver(() => {
         if (disposed) return;
@@ -158,7 +158,7 @@ export default function Terminal({
     return () => {
       disposed = true;
       abort.abort();
-      if (onPtyOutput) socket.off("pty-output", onPtyOutput);
+      if (onPtyOutput) (socket as unknown as { off: (event: string, cb: (data: string) => void) => void }).off("pty-output", onPtyOutput);
       dataUnsub?.dispose();
       resizeObserver?.disconnect();
       termRef.current?.dispose();

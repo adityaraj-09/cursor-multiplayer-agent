@@ -4,18 +4,140 @@ import type {
   ModelInfo,
   RepoInfo,
   RoomInfo,
+  UserInfo,
 } from "../../shared/events";
 
 const API_BASE = "/api";
 
+const TOKEN_KEY = "shared-agent-token";
+const USER_KEY = "shared-agent-user";
+
+export function getStoredToken(): string | null {
+  if (typeof window === "undefined") return null;
+  return localStorage.getItem(TOKEN_KEY);
+}
+
+export function getStoredUser(): UserInfo | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = localStorage.getItem(USER_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+export function storeAuth(token: string, user: UserInfo): void {
+  localStorage.setItem(TOKEN_KEY, token);
+  localStorage.setItem(USER_KEY, JSON.stringify(user));
+}
+
+export function clearAuth(): void {
+  localStorage.removeItem(TOKEN_KEY);
+  localStorage.removeItem(USER_KEY);
+}
+
+function authHeaders(): Record<string, string> {
+  const token = getStoredToken();
+  if (!token) return {};
+  return { Authorization: `Bearer ${token}` };
+}
+
+export async function register(
+  email: string,
+  name: string,
+  password: string,
+): Promise<{ user: UserInfo; token: string }> {
+  const res = await fetch(`${API_BASE}/auth/register`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, name, password }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Registration failed");
+  }
+  const data = await res.json();
+  storeAuth(data.token, data.user);
+  return data;
+}
+
+export async function login(
+  email: string,
+  password: string,
+): Promise<{ user: UserInfo; token: string }> {
+  const res = await fetch(`${API_BASE}/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Login failed");
+  }
+  const data = await res.json();
+  storeAuth(data.token, data.user);
+  return data;
+}
+
+export async function logout(): Promise<void> {
+  try {
+    await fetch(`${API_BASE}/auth/logout`, {
+      method: "POST",
+      headers: { ...authHeaders() },
+    });
+  } finally {
+    clearAuth();
+  }
+}
+
+export async function fetchMe(): Promise<UserInfo | null> {
+  const token = getStoredToken();
+  if (!token) return null;
+  const res = await fetch(`${API_BASE}/auth/me`, {
+    headers: { ...authHeaders() },
+  });
+  if (!res.ok) return null;
+  const data = await res.json();
+  return data.user;
+}
+
+export async function joinViaInvite(code: string): Promise<{ roomId: string }> {
+  const res = await fetch(`${API_BASE}/auth/invite/${code}/join`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Failed to join");
+  }
+  return res.json();
+}
+
+export async function createInviteLink(
+  roomId: string,
+  maxUses?: number,
+): Promise<{ code: string }> {
+  const res = await fetch(`${API_BASE}/auth/${roomId}/invite`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ maxUses }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Failed to create invite");
+  }
+  return res.json();
+}
+
 export async function fetchRooms(): Promise<RoomInfo[]> {
-  const res = await fetch(`${API_BASE}/rooms`);
+  const res = await fetch(`${API_BASE}/rooms`, { headers: authHeaders() });
   if (!res.ok) throw new Error("Failed to fetch rooms");
   return res.json();
 }
 
 export async function fetchRoom(id: string): Promise<RoomInfo> {
-  const res = await fetch(`${API_BASE}/rooms/${id}`);
+  const res = await fetch(`${API_BASE}/rooms/${id}`, { headers: authHeaders() });
   if (!res.ok) throw new Error("Room not found");
   return res.json();
 }
@@ -101,7 +223,7 @@ export async function createRoom(data: {
 }): Promise<RoomInfo> {
   const res = await fetch(`${API_BASE}/rooms`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...authHeaders() },
     body: JSON.stringify(data),
   });
   if (!res.ok) {
@@ -112,7 +234,10 @@ export async function createRoom(data: {
 }
 
 export async function stopRoom(id: string): Promise<void> {
-  const res = await fetch(`${API_BASE}/rooms/${id}/stop`, { method: "POST" });
+  const res = await fetch(`${API_BASE}/rooms/${id}/stop`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
   if (!res.ok) throw new Error("Failed to stop room");
 }
 

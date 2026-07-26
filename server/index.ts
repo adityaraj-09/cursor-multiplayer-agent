@@ -2,11 +2,15 @@ import "dotenv/config";
 import express from "express";
 import { createServer } from "http";
 import { Server } from "socket.io";
-import { PORT } from "./config.js";
+import { PORT, IS_PRODUCTION } from "./config.js";
 import { RoomManager } from "./roomManager.js";
+import { WorkerRelay } from "./workerRelay.js";
 import { listModelsForKey, listReposForKey } from "./sdkAgent.js";
 import { listCliModels } from "./cliModels.js";
 import { encryptionConfigured } from "./keyCrypto.js";
+import { authMiddleware } from "./auth.js";
+import authRoutes from "./authRoutes.js";
+import * as db from "./db.js";
 import {
   clearServerApiKey,
   getServerApiKey,
@@ -30,13 +34,29 @@ function parseAuthMode(raw: unknown): AuthMode {
 const app = express();
 app.use(express.json({ limit: "1mb" }));
 
+// Auth middleware — attaches req.user when Bearer token is valid
+app.use(
+  authMiddleware(
+    (token) => db.getSession(token) as { user_id: string; expires_at: number } | undefined,
+    (id) => db.getUserById(id) as { id: string; email: string; name: string } | undefined,
+  ),
+);
+
 const httpServer = createServer(app);
 const io = new Server<ClientToServerEvents, ServerToClientEvents>(httpServer, {
-  cors: { origin: "*", methods: ["GET", "POST"] },
+  cors: { origin: IS_PRODUCTION ? undefined : "*", methods: ["GET", "POST", "PATCH", "DELETE"] },
   path: "/socket.io/",
 });
 
-const roomManager = new RoomManager(io);
+const workerRelay = new WorkerRelay(io as unknown as Server, (token) => {
+  const session = db.getSession(token) as
+    | { user_id: string; expires_at: number }
+    | undefined;
+  if (!session || session.expires_at < Date.now()) return null;
+  return { userId: session.user_id, workerId: `w-${session.user_id}` };
+});
+
+const roomManager = new RoomManager(io, workerRelay);
 
 function resolveRequestKey(
   authMode: AuthMode,
@@ -57,6 +77,9 @@ function resolveRequestKey(
   }
   return serverKey;
 }
+
+// User auth routes
+app.use("/api/auth", authRoutes);
 
 app.get("/api/auth/status", (_req, res) => {
   res.json({
@@ -144,6 +167,15 @@ app.post("/api/repositories", async (req, res) => {
         err instanceof Error ? err.message : "Failed to list repositories",
     });
   }
+});
+
+/** GET /api/workers — online workers for current user */
+app.get("/api/workers", (req, res) => {
+  if (!req.user) {
+    res.json({ workers: [] });
+    return;
+  }
+  res.json({ workers: workerRelay.getOnlineWorkersForUser(req.user.id) });
 });
 
 app.get("/api/rooms", (_req, res) => {
@@ -258,6 +290,7 @@ httpServer.listen(PORT, "0.0.0.0", () => {
 
 process.on("SIGINT", () => {
   console.log("\nShutting down...");
+  workerRelay.shutdown();
   roomManager.shutdown();
   httpServer.close();
   process.exit(0);

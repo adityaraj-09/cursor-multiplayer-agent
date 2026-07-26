@@ -3,10 +3,12 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import RoomCard from "../components/RoomCard";
+import { useAuth } from "../components/AuthProvider";
 import { fetchRooms } from "../lib/api";
 import type { RoomInfo } from "../../shared/events";
 
 export default function Dashboard() {
+  const { user, logout, loading: authLoading } = useAuth();
   const [rooms, setRooms] = useState<RoomInfo[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -35,12 +37,32 @@ export default function Dashboard() {
               Shared Agent
             </span>
           </div>
-          <Link
-            href="/create"
-            className="h-8 px-3.5 rounded-md bg-[#e4e4e4] text-[#141414] text-[13px] font-medium hover:bg-white transition-colors flex items-center"
-          >
-            New session
-          </Link>
+          <div className="flex items-center gap-3">
+            {!authLoading && user ? (
+              <>
+                <span className="text-[12px] text-[#6e6e6e]">{user.name}</span>
+                <button
+                  onClick={() => void logout()}
+                  className="h-7 px-2.5 rounded-md text-[12px] text-[#a0a0a0] hover:text-[#e4e4e4] border border-[#2b2b2b] hover:border-[#3c3c3c] transition-colors"
+                >
+                  Sign out
+                </button>
+              </>
+            ) : !authLoading ? (
+              <Link
+                href="/login"
+                className="h-7 px-2.5 rounded-md text-[12px] text-[#a0a0a0] hover:text-[#e4e4e4] border border-[#2b2b2b] hover:border-[#3c3c3c] transition-colors flex items-center"
+              >
+                Sign in
+              </Link>
+            ) : null}
+            <Link
+              href="/create"
+              className="h-8 px-3.5 rounded-md bg-[#e4e4e4] text-[#141414] text-[13px] font-medium hover:bg-white transition-colors flex items-center"
+            >
+              New session
+            </Link>
+          </div>
         </div>
       </header>
 
