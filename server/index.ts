@@ -32,6 +32,12 @@ function parseAuthMode(raw: unknown): AuthMode {
   return "server";
 }
 
+/** Express may type route params as `string | string[]`. */
+function routeParam(value: string | string[] | undefined): string {
+  if (Array.isArray(value)) return value[0] || "";
+  return value || "";
+}
+
 const corsOrigin:
   | boolean
   | string[]
@@ -254,11 +260,12 @@ app.get("/api/rooms", requireAuth, (req, res) => {
 });
 
 app.get("/api/rooms/:id", requireAuth, (req, res) => {
-  if (!roomManager.userCanAccessRoom(req.params.id, req.user!.id)) {
+  const id = routeParam(req.params.id);
+  if (!roomManager.userCanAccessRoom(id, req.user!.id)) {
     res.status(404).json({ error: "Room not found" });
     return;
   }
-  const room = roomManager.getRoomInfo(req.params.id);
+  const room = roomManager.getRoomInfo(id);
   if (!room) {
     res.status(404).json({ error: "Room not found" });
     return;
@@ -296,7 +303,7 @@ app.post("/api/rooms", requireAuth, async (req, res) => {
 
 app.get("/api/rooms/:id/models", async (req, res) => {
   try {
-    const models = await roomManager.listModelsForRoom(req.params.id);
+    const models = await roomManager.listModelsForRoom(routeParam(req.params.id));
     res.json({ models });
   } catch (err) {
     res.status(400).json({
@@ -308,7 +315,7 @@ app.get("/api/rooms/:id/models", async (req, res) => {
 app.patch("/api/rooms/:id/model", (req, res) => {
   try {
     const room = roomManager.setModel(
-      req.params.id,
+      routeParam(req.params.id),
       String(req.body?.modelId || ""),
     );
     res.json(room);
@@ -320,12 +327,13 @@ app.patch("/api/rooms/:id/model", (req, res) => {
 });
 
 app.post("/api/rooms/:id/stop", (req, res) => {
-  const room = roomManager.getRoomInfo(req.params.id);
+  const id = routeParam(req.params.id);
+  const room = roomManager.getRoomInfo(id);
   if (!room) {
     res.status(404).json({ error: "Room not found" });
     return;
   }
-  roomManager.stopRoom(req.params.id);
+  roomManager.stopRoom(id);
   res.json({ ok: true });
 });
 
