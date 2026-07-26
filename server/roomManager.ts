@@ -267,7 +267,15 @@ export class RoomManager {
     let diffWatcher: DiffWatcher | null = null;
     const cleanups: (() => void)[] = [];
 
-    if (row.runtime === "local" && row.repo_path) {
+    // CLI local rooms use a path on the worker machine — don't watch/git
+    // on the API host (simple-git throws if the directory is missing).
+    const canWatchLocally =
+      row.runtime === "local" &&
+      row.auth_mode !== "cli" &&
+      Boolean(row.repo_path) &&
+      existsSync(row.repo_path);
+
+    if (canWatchLocally) {
       diffWatcher = new DiffWatcher(row.repo_path);
       diffWatcher
         .start()
