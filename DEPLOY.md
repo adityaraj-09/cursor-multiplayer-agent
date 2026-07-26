@@ -40,8 +40,9 @@ This project defaults to **SQLite** when `DATABASE_URL` is unset — good for on
 
 | Key | Value |
 |-----|--------|
-| `API_URL` | `https://steer-api.onrender.com` (server-side rewrites) |
-| `NEXT_PUBLIC_SOCKET_URL` | `https://steer-api.onrender.com` (browser WebSocket) |
+| `NEXT_PUBLIC_API_URL` | `https://cursor-multiplayer-agent.onrender.com` (browser → API) |
+| `API_URL` | same Render URL (optional server rewrites) |
+| `NEXT_PUBLIC_SOCKET_URL` | same Render URL (browser WebSocket) |
 | `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | From Clerk |
 | `CLERK_SECRET_KEY` | Same as Render |
 | `NEXT_PUBLIC_CLERK_SIGN_IN_URL` | `/login` |

@@ -7,7 +7,16 @@ import type {
   UserInfo,
 } from "../../shared/events";
 
-const API_BASE = "/api";
+/**
+ * On Vercel+Render, set NEXT_PUBLIC_API_URL=https://your-api.onrender.com
+ * so the browser calls Render directly (avoids Vercel rewrite → localhost).
+ * Locally, leave unset and use Next rewrites to http://localhost:3000.
+ */
+const API_BASE = (
+  process.env.NEXT_PUBLIC_API_URL || ""
+).replace(/\/+$/, "")
+  ? `${process.env.NEXT_PUBLIC_API_URL!.replace(/\/+$/, "")}/api`
+  : "/api";
 
 type TokenGetter = () => Promise<string | null>;
 let tokenGetter: TokenGetter | null = null;
