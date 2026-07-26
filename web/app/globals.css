@@ -144,6 +144,18 @@ body {
   letter-spacing: 0.04em;
 }
 
+/* Compact diffs inside chat bubbles */
+.inline-diff .d2h-file-wrapper {
+  margin: 0;
+  border: none;
+  border-radius: 0;
+}
+
+.inline-diff .d2h-file-header {
+  padding: 6px 10px;
+  font-size: 11px;
+}
+
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;

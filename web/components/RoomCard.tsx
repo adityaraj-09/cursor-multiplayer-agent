@@ -1,5 +1,6 @@
 "use client";
 
+import type { ReactNode } from "react";
 import Link from "next/link";
 import type { RoomInfo } from "../../shared/events";
 
@@ -10,7 +11,10 @@ interface RoomCardProps {
 export default function RoomCard({ room }: RoomCardProps) {
   const isActive = room.status === "active";
   const timeAgo = getTimeAgo(room.createdAt);
-  const shortPath = room.repoPath.replace(/^.*\/Projects\//, "~/Projects/");
+  const target =
+    room.runtime === "cloud"
+      ? (room.repoUrl || "").replace("https://github.com/", "")
+      : room.repoPath.replace(/^.*\/Projects\//, "~/Projects/");
 
   return (
     <Link
@@ -35,8 +39,20 @@ export default function RoomCard({ room }: RoomCardProps) {
         </span>
       </div>
 
+      <div className="flex flex-wrap gap-1.5 mb-2">
+        <Badge>{room.runtime === "cloud" ? "Cloud" : "Local"}</Badge>
+        <Badge>
+          {room.authMode === "cli"
+            ? "Local login"
+            : room.authMode === "byok"
+              ? "BYOK"
+              : "Server key"}
+        </Badge>
+        <Badge>{room.modelId}</Badge>
+      </div>
+
       <p className="text-[12px] text-[#6e6e6e] font-mono truncate mb-3">
-        {shortPath}
+        {target || "—"}
       </p>
 
       <div className="flex items-center justify-between text-[11px] text-[#6e6e6e]">
@@ -48,6 +64,14 @@ export default function RoomCard({ room }: RoomCardProps) {
         <span>{timeAgo}</span>
       </div>
     </Link>
+  );
+}
+
+function Badge({ children }: { children: ReactNode }) {
+  return (
+    <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#252525] text-[#a0a0a0] border border-[#2b2b2b]">
+      {children}
+    </span>
   );
 }
 

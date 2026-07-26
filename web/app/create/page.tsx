@@ -1,24 +1,169 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { createRoom } from "../../lib/api";
+import {
+  createRoom,
+  fetchAuthStatus,
+  fetchModels,
+  fetchRepositories,
+  setServerKey,
+} from "../../lib/api";
+import type {
+  AgentRuntime,
+  AuthMode,
+  ModelInfo,
+  RepoInfo,
+} from "../../../shared/events";
+
+function authLabel(mode: AuthMode): string {
+  if (mode === "cli") return "Local login";
+  if (mode === "byok") return "Bring your own";
+  return "Server key";
+}
 
 export default function CreateSession() {
   const router = useRouter();
   const [name, setName] = useState("");
+  const [runtime, setRuntime] = useState<AgentRuntime>("local");
+  const [authMode, setAuthMode] = useState<AuthMode>("cli");
+  const [apiKey, setApiKey] = useState("");
+  const [serverKeyInput, setServerKeyInput] = useState("");
   const [repoPath, setRepoPath] = useState("");
-  const [agentCommand, setAgentCommand] = useState(
-    "cursor agent --force --trust",
-  );
+  const [repoUrl, setRepoUrl] = useState("");
+  const [startingRef, setStartingRef] = useState("main");
+  const [autoCreatePR, setAutoCreatePR] = useState(true);
+  const [modelId, setModelId] = useState("");
+  const [models, setModels] = useState<ModelInfo[]>([]);
+  const [repos, setRepos] = useState<RepoInfo[]>([]);
+  const [serverKeyConfigured, setServerKeyConfigured] = useState(false);
+  const [serverKeyHint, setServerKeyHint] = useState<string | null>(null);
+  const [serverKeySource, setServerKeySource] = useState<
+    "env" | "stored" | "none"
+  >("none");
+  const [byokAvailable, setByokAvailable] = useState(false);
+  const [loadingCatalog, setLoadingCatalog] = useState(false);
+  const [savingServerKey, setSavingServerKey] = useState(false);
   const [error, setError] = useState("");
   const [creating, setCreating] = useState(false);
+
+  const refreshAuth = () =>
+    fetchAuthStatus()
+      .then((s) => {
+        setServerKeyConfigured(s.serverKeyConfigured);
+        setServerKeyHint(s.serverKeyHint);
+        setServerKeySource(s.serverKeySource);
+        setByokAvailable(s.byokAvailable);
+      })
+      .catch(() => {});
+
+  useEffect(() => {
+    void refreshAuth();
+  }, []);
+
+  const selectRuntime = (r: AgentRuntime) => {
+    setRuntime(r);
+    setModelId("");
+    setModels([]);
+    setRepos([]);
+    if (r === "local") setAuthMode("cli");
+    else if (authMode === "cli") setAuthMode("server");
+  };
+
+  const handlePickupServerKey = async () => {
+    if (!serverKeyInput.trim()) {
+      setError("Paste a Cursor API key to save as the server key");
+      return;
+    }
+    setSavingServerKey(true);
+    setError("");
+    try {
+      const result = await setServerKey(serverKeyInput.trim());
+      setServerKeyConfigured(result.serverKeyConfigured);
+      setServerKeyHint(result.serverKeyHint);
+      setServerKeySource(result.serverKeySource);
+      setServerKeyInput("");
+      setAuthMode("server");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save server key");
+    } finally {
+      setSavingServerKey(false);
+    }
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      if (authMode === "server" && !serverKeyConfigured) {
+        setModels([]);
+        setRepos([]);
+        return;
+      }
+      if (authMode === "byok" && !apiKey.trim()) {
+        setModels([]);
+        setRepos([]);
+        return;
+      }
+      setLoadingCatalog(true);
+      setError("");
+      try {
+        const opts = {
+          authMode,
+          apiKey: authMode === "byok" ? apiKey.trim() : undefined,
+        };
+        const [m, r] = await Promise.all([
+          fetchModels(opts),
+          runtime === "cloud" ? fetchRepositories(opts) : Promise.resolve([]),
+        ]);
+        if (cancelled) return;
+        setModels(m);
+        setRepos(r);
+        if (!modelId && m.length > 0) {
+          const preferred =
+            m.find((x) => x.id === "auto") ||
+            m.find((x) => x.id === "composer-2.5") ||
+            m[0];
+          setModelId(preferred.id);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setModels([]);
+          setRepos([]);
+          setError(err instanceof Error ? err.message : "Failed to load models");
+        }
+      } finally {
+        if (!cancelled) setLoadingCatalog(false);
+      }
+    };
+    const t = setTimeout(load, authMode === "byok" ? 400 : 0);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authMode, apiKey, runtime, serverKeyConfigured]);
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     if (!name.trim()) {
       setError("Session name is required");
+      return;
+    }
+    if (!modelId) {
+      setError("Select a model");
+      return;
+    }
+    if (authMode === "byok" && !apiKey.trim()) {
+      setError("Paste your Cursor API key for BYOK");
+      return;
+    }
+    if (authMode === "server" && !serverKeyConfigured) {
+      setError("Server key is not configured");
+      return;
+    }
+    if (runtime === "cloud" && !repoUrl.trim()) {
+      setError("Choose or paste a GitHub repo URL");
       return;
     }
 
@@ -28,8 +173,15 @@ export default function CreateSession() {
     try {
       const room = await createRoom({
         name: name.trim(),
-        repoPath: repoPath.trim() || undefined,
-        agentCommand: agentCommand.trim() || undefined,
+        runtime,
+        authMode,
+        modelId,
+        repoPath: runtime === "local" ? repoPath.trim() || undefined : undefined,
+        repoUrl: runtime === "cloud" ? repoUrl.trim() : undefined,
+        startingRef:
+          runtime === "cloud" ? startingRef.trim() || "main" : undefined,
+        autoCreatePR: runtime === "cloud" ? autoCreatePR : undefined,
+        apiKey: authMode === "byok" ? apiKey.trim() : undefined,
       });
       router.push(`/room/${room.id}`);
     } catch (err: unknown) {
@@ -40,6 +192,9 @@ export default function CreateSession() {
 
   const inputClass =
     "w-full h-10 px-3 bg-[#252525] border border-[#2b2b2b] rounded-md text-[13px] text-[#e4e4e4] placeholder:text-[#6e6e6e] outline-none focus:border-[#4d9fff] transition-colors";
+
+  const authOptions: AuthMode[] =
+    runtime === "local" ? ["cli", "server", "byok"] : ["server", "byok"];
 
   return (
     <div className="min-h-screen bg-[#141414]">
@@ -61,7 +216,8 @@ export default function CreateSession() {
           Create session
         </h1>
         <p className="text-[13px] text-[#6e6e6e] mb-8">
-          Start a Cursor Agent in a local repo and share the room.
+          Local sessions use your Cursor CLI login — no API key. Cloud needs a
+          server key or BYOK.
         </p>
 
         <form onSubmit={handleSubmit} className="space-y-5">
@@ -79,32 +235,209 @@ export default function CreateSession() {
             />
           </div>
 
-          <div>
-            <label className="block text-[12px] text-[#a0a0a0] mb-1.5">
-              Repository path
-            </label>
-            <input
-              type="text"
-              value={repoPath}
-              onChange={(e) => setRepoPath(e.target.value)}
-              placeholder="./demo-repo"
-              className={`${inputClass} font-mono`}
-            />
-            <p className="text-[11px] text-[#6e6e6e] mt-1.5">
-              Defaults to the demo repo if left empty.
-            </p>
-          </div>
+          <fieldset>
+            <legend className="block text-[12px] text-[#a0a0a0] mb-1.5">
+              Runtime
+            </legend>
+            <div className="flex gap-2">
+              {(["local", "cloud"] as const).map((r) => (
+                <button
+                  key={r}
+                  type="button"
+                  onClick={() => selectRuntime(r)}
+                  className={`h-9 px-3 rounded-md text-[13px] border transition-colors ${
+                    runtime === r
+                      ? "bg-[#252525] border-[#4d9fff] text-[#e4e4e4]"
+                      : "bg-[#1a1a1a] border-[#2b2b2b] text-[#6e6e6e]"
+                  }`}
+                >
+                  {r === "local" ? "Local" : "Cloud"}
+                </button>
+              ))}
+            </div>
+          </fieldset>
+
+          <fieldset>
+            <legend className="block text-[12px] text-[#a0a0a0] mb-1.5">
+              Auth
+            </legend>
+            <div className="flex flex-wrap gap-2 mb-2">
+              {authOptions.map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  disabled={mode === "byok" && !byokAvailable}
+                  onClick={() => {
+                    setAuthMode(mode);
+                    setModelId("");
+                  }}
+                  className={`h-9 px-3 rounded-md text-[13px] border transition-colors disabled:opacity-40 ${
+                    authMode === mode
+                      ? "bg-[#252525] border-[#4d9fff] text-[#e4e4e4]"
+                      : "bg-[#1a1a1a] border-[#2b2b2b] text-[#6e6e6e]"
+                  }`}
+                >
+                  {authLabel(mode)}
+                </button>
+              ))}
+            </div>
+            {authMode === "cli" && (
+              <p className="text-[11px] text-[#6e6e6e]">
+                Uses the Cursor account already logged in on this machine (
+                <code className="text-[#a0a0a0]">cursor agent</code>). No API
+                key required.
+              </p>
+            )}
+            {authMode === "server" && (
+              <div className="space-y-2">
+                {serverKeyConfigured ? (
+                  <p className="text-[11px] text-[#6e6e6e]">
+                    Using server key {serverKeyHint}{" "}
+                    {serverKeySource === "env"
+                      ? "(from CURSOR_API_KEY)"
+                      : "(picked up & encrypted in DB)"}
+                  </p>
+                ) : (
+                  <p className="text-[11px] text-[#6e6e6e]">
+                    No server key yet — paste one below to pick it up (stored
+                    encrypted), or set CURSOR_API_KEY in .env.
+                  </p>
+                )}
+                <div className="flex gap-2">
+                  <input
+                    type="password"
+                    value={serverKeyInput}
+                    onChange={(e) => setServerKeyInput(e.target.value)}
+                    placeholder={
+                      serverKeyConfigured
+                        ? "Replace server key…"
+                        : "cursor_… (server key)"
+                    }
+                    className={`${inputClass} font-mono flex-1`}
+                    autoComplete="off"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => void handlePickupServerKey()}
+                    disabled={savingServerKey || !serverKeyInput.trim()}
+                    className="h-10 px-3 rounded-md bg-[#252525] border border-[#2b2b2b] text-[13px] text-[#e4e4e4] hover:border-[#3c3c3c] disabled:opacity-40 shrink-0"
+                  >
+                    {savingServerKey ? "Saving…" : "Save"}
+                  </button>
+                </div>
+              </div>
+            )}
+            {authMode === "byok" && (
+              <>
+                <input
+                  type="password"
+                  value={apiKey}
+                  onChange={(e) => setApiKey(e.target.value)}
+                  placeholder="cursor_…"
+                  className={`${inputClass} font-mono`}
+                  autoComplete="off"
+                />
+                <p className="text-[11px] text-[#6e6e6e] mt-1.5">
+                  Room-scoped key, encrypted at rest. Joiners share this room’s
+                  agent; usage bills this key.
+                </p>
+              </>
+            )}
+          </fieldset>
+
+          {runtime === "local" ? (
+            <div>
+              <label className="block text-[12px] text-[#a0a0a0] mb-1.5">
+                Repository path
+              </label>
+              <input
+                type="text"
+                value={repoPath}
+                onChange={(e) => setRepoPath(e.target.value)}
+                placeholder="./demo-repo"
+                className={`${inputClass} font-mono`}
+              />
+            </div>
+          ) : (
+            <>
+              <div>
+                <label className="block text-[12px] text-[#a0a0a0] mb-1.5">
+                  GitHub repository
+                </label>
+                {repos.length > 0 && (
+                  <select
+                    value={repos.some((r) => r.url === repoUrl) ? repoUrl : ""}
+                    onChange={(e) => setRepoUrl(e.target.value)}
+                    className={`${inputClass} mb-2`}
+                  >
+                    <option value="">Select connected repo…</option>
+                    {repos.map((r) => (
+                      <option key={r.url} value={r.url}>
+                        {r.url.replace("https://github.com/", "")}
+                      </option>
+                    ))}
+                  </select>
+                )}
+                <input
+                  type="url"
+                  value={repoUrl}
+                  onChange={(e) => setRepoUrl(e.target.value)}
+                  placeholder="https://github.com/org/repo"
+                  className={`${inputClass} font-mono`}
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[12px] text-[#a0a0a0] mb-1.5">
+                    Starting ref
+                  </label>
+                  <input
+                    type="text"
+                    value={startingRef}
+                    onChange={(e) => setStartingRef(e.target.value)}
+                    placeholder="main"
+                    className={`${inputClass} font-mono`}
+                  />
+                </div>
+                <label className="flex items-end gap-2 pb-2 text-[13px] text-[#a0a0a0] cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={autoCreatePR}
+                    onChange={(e) => setAutoCreatePR(e.target.checked)}
+                    className="rounded"
+                  />
+                  Auto-create PR
+                </label>
+              </div>
+            </>
+          )}
 
           <div>
             <label className="block text-[12px] text-[#a0a0a0] mb-1.5">
-              Agent command
+              Model {loadingCatalog ? "· loading…" : ""}
             </label>
-            <input
-              type="text"
-              value={agentCommand}
-              onChange={(e) => setAgentCommand(e.target.value)}
-              className={`${inputClass} font-mono`}
-            />
+            <select
+              value={modelId}
+              onChange={(e) => setModelId(e.target.value)}
+              disabled={models.length === 0}
+              className={inputClass}
+            >
+              {models.length === 0 ? (
+                <option value="">
+                  {authMode === "byok" && !apiKey.trim()
+                    ? "Enter API key to load models"
+                    : authMode === "server" && !serverKeyConfigured
+                      ? "Configure server key to load models"
+                      : "No models available"}
+                </option>
+              ) : (
+                models.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.displayName}
+                  </option>
+                ))
+              )}
+            </select>
           </div>
 
           {error && (

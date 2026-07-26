@@ -12,6 +12,34 @@ export interface SteerLogEntry {
   ts: number;
 }
 
+export type ChatRole = "user" | "assistant" | "tool" | "system";
+export type ChatStatus = "streaming" | "done" | "error";
+export type AgentRuntime = "local" | "cloud";
+/** cli = local Cursor login (no API key). server/byok require a Cursor API key. */
+export type AuthMode = "cli" | "server" | "byok";
+
+export interface ChatMessage {
+  id: string;
+  roomId: string;
+  role: ChatRole;
+  content: string;
+  senderName?: string;
+  senderColor?: string;
+  toolName?: string;
+  /** Unified diff when this message is a file edit. */
+  diffPatch?: string;
+  status: ChatStatus;
+  ts: number;
+}
+
+export interface CloudMeta {
+  repoUrl?: string;
+  startingRef?: string;
+  branch?: string;
+  prUrl?: string;
+  autoCreatePR?: boolean;
+}
+
 export interface RoomInfo {
   id: string;
   name: string;
@@ -20,11 +48,35 @@ export interface RoomInfo {
   participantCount: number;
   status: string;
   createdAt: number;
+  runtime: AgentRuntime;
+  authMode: AuthMode;
+  modelId: string;
+  repoUrl?: string;
+  startingRef?: string;
+  prUrl?: string;
+  autoCreatePR?: boolean;
+  keyHint?: string;
 }
 
+export interface ModelInfo {
+  id: string;
+  displayName: string;
+  description?: string;
+}
+
+export interface RepoInfo {
+  url: string;
+}
+
+export type AgentRunStatus = "idle" | "running" | "error";
+
 export interface ServerToClientEvents {
-  scrollback: (data: string) => void;
-  "pty-output": (data: string) => void;
+  "chat-history": (messages: ChatMessage[]) => void;
+  "chat-message": (message: ChatMessage) => void;
+  "chat-delta": (id: string, content: string, status?: ChatStatus) => void;
+  "agent-status": (status: AgentRunStatus, detail?: string) => void;
+  "cloud-meta": (meta: CloudMeta) => void;
+  "model-updated": (modelId: string) => void;
   presence: (participants: Participant[]) => void;
   "diff-update": (patch: string) => void;
   "steer-log": (entry: SteerLogEntry) => void;
@@ -36,14 +88,10 @@ export interface ServerToClientEvents {
 }
 
 export interface ClientToServerEvents {
-  "pty-input": (data: string) => void;
   "steer-message": (text: string) => void;
   "request-drive": () => void;
   "release-drive": () => void;
   "grant-drive": (toSocketId: string) => void;
-  resize: (cols: number, rows: number) => void;
-  /** Scroll tmux history so everyone can review past messages/responses. */
-  "scroll-history": (direction: "up" | "down", lines?: number) => void;
 }
 
 export const AVATAR_COLORS = [

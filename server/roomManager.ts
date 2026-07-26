@@ -1,19 +1,36 @@
 import { Server, Socket } from "socket.io";
 import { nanoid } from "nanoid";
+import { resolve } from "path";
+import { existsSync } from "fs";
+import { AgentRunner } from "./agentRunner.js";
 import {
-  ensureSession,
-  killSession,
-  sendKeys,
-  hasSession,
-  scrollHistory,
-  exitCopyMode,
-} from "./tmuxSession.js";
-import { PtyRunner } from "./ptyRunner.js";
+  SdkAgentSession,
+  listModelsForKey,
+  type SdkStreamEvent,
+} from "./sdkAgent.js";
 import { DiffWatcher } from "./diffWatcher.js";
+import { extractToolPath, getFileDiff, isEditTool } from "./gitDiff.js";
+import { listCliModels } from "./cliModels.js";
 import * as db from "./db.js";
+import {
+  DEFAULT_AGENT_COMMAND,
+  DEFAULT_MODEL,
+  DEFAULT_REPO_PATH,
+} from "./config.js";
+import {
+  decryptApiKey,
+  encryptApiKey,
+  encryptionConfigured,
+  maskApiKey,
+} from "./keyCrypto.js";
+import { getServerApiKey } from "./serverKey.js";
 import type {
+  AgentRuntime,
+  AuthMode,
+  ChatMessage,
+  CloudMeta,
+  ModelInfo,
   Participant,
-  SteerLogEntry,
   RoomInfo,
   ServerToClientEvents,
   ClientToServerEvents,
@@ -28,17 +45,67 @@ interface ParticipantInfo {
   color: string;
 }
 
+export interface CreateRoomRequest {
+  name: string;
+  runtime: AgentRuntime;
+  authMode: AuthMode;
+  modelId?: string;
+  repoPath?: string;
+  repoUrl?: string;
+  startingRef?: string;
+  autoCreatePR?: boolean;
+  apiKey?: string;
+}
+
+type AgentBackend = AgentRunner | SdkAgentSession;
+
 interface RoomState {
   id: string;
-  repoPath: string;
-  agentCommand: string;
-  pty: PtyRunner;
-  diffWatcher: DiffWatcher;
+  row: db.RoomRow;
+  agent: AgentBackend;
+  diffWatcher: DiffWatcher | null;
   participants: Map<string, ParticipantInfo>;
   driverSocketId: string | null;
   pendingDriveRequest: { socketId: string; name: string } | null;
   colorIndex: number;
-  ptyCleanup: (() => void)[];
+  cleanups: (() => void)[];
+  toolMsgIds: Map<string, string>;
+  toolPaths: Map<string, string>;
+  cloudMeta: CloudMeta;
+}
+
+function normalizeAuthMode(
+  runtime: AgentRuntime,
+  raw: AuthMode | string | undefined,
+): AuthMode {
+  if (runtime === "local" && (raw === "cli" || !raw)) return "cli";
+  if (raw === "byok") return "byok";
+  if (raw === "cli") {
+    if (runtime === "cloud") {
+      throw new Error("CLI login auth is only available for local runtime");
+    }
+    return "cli";
+  }
+  return "server";
+}
+
+function resolveApiKey(row: db.RoomRow): string {
+  if (row.auth_mode === "cli") {
+    throw new Error("CLI auth does not use an API key");
+  }
+  if (row.auth_mode === "byok") {
+    if (!row.key_ciphertext) {
+      throw new Error("BYOK room is missing encrypted API key");
+    }
+    return decryptApiKey(row.key_ciphertext);
+  }
+  const serverKey = getServerApiKey();
+  if (!serverKey) {
+    throw new Error(
+      "Server API key is not configured — set CURSOR_API_KEY or pick one up in Create session",
+    );
+  }
+  return serverKey;
 }
 
 export class RoomManager {
@@ -52,75 +119,176 @@ export class RoomManager {
   }
 
   private restoreRooms(): void {
-    const rows = db.listRooms();
-    for (const row of rows) {
-      if (row.status === "active" && hasSession(row.id)) {
-        try {
-          this.initRoomState(row.id, row.repo_path, row.agent_command);
-          console.log(`Restored room "${row.name}" (${row.id})`);
-        } catch (err) {
-          console.error(`Failed to restore room ${row.id}:`, err);
-          db.updateRoomStatus(row.id, "stopped");
-        }
+    for (const row of db.listRooms()) {
+      if (row.status !== "active") continue;
+      try {
+        this.initRoomState(row);
+        console.log(`Restored room "${row.name}" (${row.id})`);
+      } catch (err) {
+        console.error(`Failed to restore room ${row.id}:`, err);
+        db.updateRoomStatus(row.id, "stopped");
       }
     }
   }
 
-  createRoom(
-    name: string,
-    repoPath: string,
-    agentCommand: string,
-  ): RoomInfo {
+  async createRoom(req: CreateRoomRequest): Promise<RoomInfo> {
+    const name = req.name.trim();
+    if (!name) throw new Error("name is required");
+
+    const runtime: AgentRuntime = req.runtime === "cloud" ? "cloud" : "local";
+    const authMode = normalizeAuthMode(runtime, req.authMode);
+    const modelId =
+      (req.modelId || (authMode === "cli" ? "auto" : DEFAULT_MODEL)).trim() ||
+      (authMode === "cli" ? "auto" : DEFAULT_MODEL);
+
+    let keyCiphertext: string | null = null;
+    let keyHint: string | null = null;
+    let apiKey = "";
+
+    if (authMode === "byok") {
+      const raw = req.apiKey?.trim();
+      if (!raw) throw new Error("apiKey is required for BYOK");
+      if (!encryptionConfigured()) {
+        throw new Error("KEY_ENCRYPTION_SECRET is not configured on the server");
+      }
+      keyCiphertext = encryptApiKey(raw);
+      keyHint = maskApiKey(raw);
+      apiKey = raw;
+    } else if (authMode === "server") {
+      apiKey = getServerApiKey();
+      if (!apiKey) {
+        throw new Error(
+          "Server key is not configured — set CURSOR_API_KEY or pick one up in Create session",
+        );
+      }
+    }
+
+    let repoPath = DEFAULT_REPO_PATH;
+    let repoUrl: string | null = null;
+    let startingRef: string | null = null;
+    const autoCreatePR = Boolean(req.autoCreatePR);
+
+    if (runtime === "local") {
+      repoPath = resolve(req.repoPath?.trim() || DEFAULT_REPO_PATH);
+      if (!existsSync(repoPath)) {
+        throw new Error(`Repo path does not exist: ${repoPath}`);
+      }
+    } else {
+      repoUrl = req.repoUrl?.trim() || "";
+      if (!repoUrl) throw new Error("repoUrl is required for cloud runtime");
+      if (!/^https:\/\/github\.com\//i.test(repoUrl)) {
+        throw new Error("Cloud repoUrl must be an https://github.com/... URL");
+      }
+      startingRef = req.startingRef?.trim() || "main";
+      repoPath = ""; // not used for cloud
+    }
+
     const id = nanoid(10);
-    ensureSession(repoPath, id, agentCommand);
-    const row = db.createRoom(id, name, repoPath, agentCommand);
-    this.initRoomState(id, repoPath, agentCommand);
-    console.log(`Created room "${name}" (${id}) in ${repoPath}`);
+    let cursorAgentId: string | null = null;
+    let agent: AgentBackend;
+
+    if (authMode === "cli") {
+      agent = new AgentRunner(repoPath, null, modelId);
+    } else {
+      const sdk = new SdkAgentSession({
+        runtime,
+        apiKey,
+        model: { id: modelId },
+        name,
+        localCwd: runtime === "local" ? repoPath : undefined,
+        repoUrl: runtime === "cloud" ? repoUrl! : undefined,
+        startingRef: startingRef || undefined,
+        autoCreatePR,
+      });
+      cursorAgentId = await sdk.ensureStarted();
+      agent = sdk;
+    }
+
+    const row = db.createRoom({
+      id,
+      name,
+      repoPath: repoPath || repoUrl || "",
+      agentCommand: DEFAULT_AGENT_COMMAND,
+      runtime,
+      authMode,
+      modelId,
+      repoUrl,
+      startingRef,
+      cursorAgentId,
+      autoCreatePR,
+      keyCiphertext,
+      keyHint,
+    });
+
+    this.initRoomState(row, agent);
+    console.log(
+      `Created ${runtime}/${authMode} room "${name}" (${id}) model=${modelId}`,
+    );
     return this.toRoomInfo(row, 0);
   }
 
-  private initRoomState(
-    id: string,
-    repoPath: string,
-    agentCommand: string,
-  ): void {
-    const pty = new PtyRunner(id);
-    pty.attach();
+  private initRoomState(row: db.RoomRow, existing?: AgentBackend): void {
+    let agent: AgentBackend;
+    if (existing) {
+      agent = existing;
+    } else if (row.auth_mode === "cli") {
+      agent = new AgentRunner(
+        row.repo_path,
+        row.cursor_session_id,
+        row.model_id || "auto",
+      );
+    } else {
+      const apiKey = resolveApiKey(row);
+      agent = new SdkAgentSession({
+        runtime: row.runtime === "cloud" ? "cloud" : "local",
+        apiKey,
+        model: { id: row.model_id || DEFAULT_MODEL },
+        name: row.name,
+        agentId: row.cursor_agent_id,
+        localCwd: row.runtime === "local" ? row.repo_path : undefined,
+        repoUrl: row.repo_url || undefined,
+        startingRef: row.starting_ref || undefined,
+        autoCreatePR: Boolean(row.auto_create_pr),
+      });
+    }
 
-    const diffWatcher = new DiffWatcher(repoPath);
-    diffWatcher.start().catch((err) => console.error(`DiffWatcher error for ${id}:`, err));
-
+    let diffWatcher: DiffWatcher | null = null;
     const cleanups: (() => void)[] = [];
 
-    const ptyUnsub = pty.onData((data) => {
-      this.io.to(id).emit("pty-output", data);
-    });
-    cleanups.push(ptyUnsub);
+    if (row.runtime === "local" && row.repo_path) {
+      diffWatcher = new DiffWatcher(row.repo_path);
+      diffWatcher
+        .start()
+        .catch((err) =>
+          console.error(`DiffWatcher error for ${row.id}:`, err),
+        );
+      cleanups.push(() => {
+        void diffWatcher?.stop();
+      });
+      const unsub = diffWatcher.onDiff((patch) => {
+        this.io.to(row.id).emit("diff-update", patch);
+      });
+      cleanups.push(unsub);
+    }
 
-    const ptyExitUnsub = pty.onExit((code) => {
-      console.log(`PTY for room ${id} exited (code ${code}), reattaching...`);
-      setTimeout(() => {
-        if (this.rooms.has(id)) pty.attach();
-      }, 1000);
-    });
-    cleanups.push(ptyExitUnsub);
-
-    const diffUnsub = diffWatcher.onDiff((patch) => {
-      this.io.to(id).emit("diff-update", patch);
-    });
-    cleanups.push(diffUnsub);
-
-    this.rooms.set(id, {
-      id,
-      repoPath,
-      agentCommand,
-      pty,
+    this.rooms.set(row.id, {
+      id: row.id,
+      row,
+      agent,
       diffWatcher,
       participants: new Map(),
       driverSocketId: null,
       pendingDriveRequest: null,
       colorIndex: 0,
-      ptyCleanup: cleanups,
+      cleanups,
+      toolMsgIds: new Map(),
+      toolPaths: new Map(),
+      cloudMeta: {
+        repoUrl: row.repo_url || undefined,
+        startingRef: row.starting_ref || undefined,
+        prUrl: row.pr_url || undefined,
+        autoCreatePR: Boolean(row.auto_create_pr),
+      },
     });
   }
 
@@ -137,22 +305,22 @@ export class RoomManager {
     this.socketRooms.set(socket.id, roomId);
     socket.join(roomId);
 
-    if (!room.driverSocketId) {
-      room.driverSocketId = socket.id;
+    if (!room.driverSocketId) room.driverSocketId = socket.id;
+
+    socket.emit("chat-history", db.getMessages(roomId, 500));
+
+    if (room.diffWatcher) {
+      const lastPatch = room.diffWatcher.getLastPatch();
+      if (lastPatch) socket.emit("diff-update", lastPatch);
     }
 
-    const scrollback = room.pty.getScrollback();
-    if (scrollback) socket.emit("scrollback", scrollback);
+    if (room.row.runtime === "cloud") {
+      socket.emit("cloud-meta", room.cloudMeta);
+    }
 
-    const lastPatch = room.diffWatcher.getLastPatch();
-    if (lastPatch) socket.emit("diff-update", lastPatch);
-
-    const steerHistory = db.getSteerHistory(roomId, 50);
-    if (steerHistory.length > 0) socket.emit("steer-history", steerHistory);
-
+    socket.emit("agent-status", room.agent.isBusy() ? "running" : "idle");
     this.broadcastPresence(room);
     db.updateRoomActivity(roomId);
-
     console.log(`${name} joined room ${roomId} (${socket.id})`);
     return true;
   }
@@ -160,7 +328,6 @@ export class RoomManager {
   leaveRoom(socket: Socket): void {
     const roomId = this.socketRooms.get(socket.id);
     if (!roomId) return;
-
     const room = this.rooms.get(roomId);
     if (!room) return;
 
@@ -197,58 +364,277 @@ export class RoomManager {
     console.log(`${p?.name || "Unknown"} left room ${roomId}`);
   }
 
-  handlePtyInput(socket: Socket, data: string): void {
-    const room = this.getRoomForSocket(socket.id);
-    if (!room) return;
-
-    if (socket.id !== room.driverSocketId) {
-      socket.emit("error", "Only the driver can send raw keystrokes");
-      return;
-    }
-    // Leave history-scroll mode so keystrokes reach the agent
-    exitCopyMode(room.id);
-    room.pty.write(data);
-  }
-
-  /** Anyone can scroll conversation history (tmux copy-mode). */
-  handleScrollHistory(
-    socket: Socket,
-    direction: "up" | "down",
-    lines?: number,
-  ): void {
-    const room = this.getRoomForSocket(socket.id);
-    if (!room) return;
-    if (direction !== "up" && direction !== "down") return;
-    try {
-      scrollHistory(room.id, direction, lines ?? 3);
-    } catch (err) {
-      console.error("scroll-history error:", err);
-    }
-  }
-
   handleSteerMessage(socket: Socket, text: string): void {
     const room = this.getRoomForSocket(socket.id);
     if (!room) return;
     if (!text || typeof text !== "string") return;
 
-    const sanitized = text.slice(0, MAX_STEER_LENGTH);
-
-    try {
-      sendKeys(room.id, sanitized);
-    } catch {
-      room.pty.write(sanitized + "\r");
-    }
+    const sanitized = text.slice(0, MAX_STEER_LENGTH).trim();
+    if (!sanitized) return;
 
     const p = room.participants.get(socket.id);
-    const entry: SteerLogEntry = {
-      sender: p?.name || "Unknown",
-      color: p?.color || "#888",
-      text: sanitized,
+    const userMsg: ChatMessage = {
+      id: nanoid(12),
+      roomId: room.id,
+      role: "user",
+      content: sanitized,
+      senderName: p?.name || "Unknown",
+      senderColor: p?.color || "#888",
+      status: "done",
       ts: Date.now(),
     };
 
-    db.insertSteerMessage(room.id, entry.sender, entry.color, entry.text, entry.ts);
-    this.io.to(room.id).emit("steer-log", entry);
+    db.insertMessage(userMsg);
+    this.io.to(room.id).emit("chat-message", userMsg);
+    db.updateRoomActivity(room.id);
+    void this.runAgent(room, sanitized);
+  }
+
+  private async runAgent(room: RoomState, prompt: string): Promise<void> {
+    this.io.to(room.id).emit("agent-status", "running");
+
+    let assistantId: string | null = null;
+    let assistantContent = "";
+    /** Cumulative agent text observed this run (for slicing post-tool segments). */
+    let seenFullText = "";
+    /** Length of seenFullText when the current assistant bubble opened. */
+    let bubbleBaseLen = 0;
+    /** After any tool event, the next assistant text becomes a new bubble below. */
+    let afterTools = false;
+    room.toolMsgIds.clear();
+    room.toolPaths.clear();
+
+    const attachFileDiff = async (
+      msgId: string,
+      toolName: string,
+      detail: string,
+      pathHint?: string,
+    ) => {
+      if (room.row.runtime !== "local" || !room.row.repo_path) return;
+      if (!isEditTool(toolName)) return;
+      const path = pathHint || extractToolPath(detail);
+      if (!path) return;
+
+      // Small delay so the filesystem / git index settle after the write
+      await new Promise((r) => setTimeout(r, 120));
+      const patch = await getFileDiff(room.row.repo_path, path);
+      if (!patch) return;
+
+      const content = detail || path;
+      db.updateMessageDiff(msgId, content, "done", patch);
+      this.io.to(room.id).emit("chat-message", {
+        id: msgId,
+        roomId: room.id,
+        role: "tool",
+        content,
+        toolName,
+        diffPatch: patch,
+        status: "done",
+        ts: Date.now(),
+      });
+    };
+
+    const closeAssistant = (status: ChatMessage["status"] = "done") => {
+      if (!assistantId) return;
+      db.updateMessageContent(assistantId, assistantContent, status);
+      this.io.to(room.id).emit(
+        "chat-delta",
+        assistantId,
+        assistantContent,
+        status,
+      );
+      assistantId = null;
+      assistantContent = "";
+    };
+
+    const emitAssistant = (
+      incoming: string,
+      status: ChatMessage["status"],
+    ) => {
+      const text = incoming ?? "";
+
+      if (afterTools) {
+        closeAssistant("done");
+        afterTools = false;
+        bubbleBaseLen = seenFullText.length;
+      }
+
+      if (!assistantId) {
+        let display = "";
+        if (seenFullText && text.startsWith(seenFullText)) {
+          display = text.slice(seenFullText.length).replace(/^\n+/, "");
+        } else if (!text || text === seenFullText) {
+          display = "";
+        } else {
+          display = text;
+        }
+
+        if (!display) {
+          if (text.length > seenFullText.length) seenFullText = text;
+          return;
+        }
+
+        bubbleBaseLen = seenFullText.length;
+        const msg: ChatMessage = {
+          id: nanoid(12),
+          roomId: room.id,
+          role: "assistant",
+          content: display,
+          status,
+          ts: Date.now(),
+        };
+        assistantId = msg.id;
+        assistantContent = display;
+        seenFullText = text.startsWith(seenFullText)
+          ? text
+          : seenFullText
+            ? `${seenFullText}\n${text}`
+            : text;
+        db.insertMessage(msg);
+        this.io.to(room.id).emit("chat-message", msg);
+        return;
+      }
+
+      // Same bubble — prefer segment slice when the agent sends a cumulative buffer
+      let display: string;
+      if (text.length >= bubbleBaseLen && (
+        text.startsWith(seenFullText.slice(0, bubbleBaseLen)) ||
+        seenFullText.startsWith(text.slice(0, bubbleBaseLen))
+      )) {
+        display = text.slice(bubbleBaseLen).replace(/^\n+/, "");
+        seenFullText = text.length >= seenFullText.length ? text : seenFullText;
+      } else {
+        display = text;
+        seenFullText = text;
+      }
+
+      assistantContent = display || assistantContent;
+      db.updateMessageContent(assistantId, assistantContent, status);
+      this.io.to(room.id).emit(
+        "chat-delta",
+        assistantId,
+        assistantContent,
+        status,
+      );
+    };
+
+    try {
+      const agentId = room.agent.getAgentId();
+      if (agentId && agentId !== room.row.cursor_agent_id) {
+        db.setCursorAgentId(room.id, agentId);
+        room.row.cursor_agent_id = agentId;
+      }
+
+      await room.agent.run(prompt, (event) => {
+        switch (event.kind) {
+          case "session":
+            db.setCursorSessionId(room.id, event.sessionId);
+            room.row.cursor_session_id = event.sessionId;
+            break;
+          case "assistant_delta":
+          case "assistant_final":
+            emitAssistant(
+              event.text,
+              event.kind === "assistant_final" ? "done" : "streaming",
+            );
+            break;
+          case "tool_start": {
+            closeAssistant("done");
+            afterTools = true;
+            bubbleBaseLen = seenFullText.length;
+
+            const path =
+              event.path || extractToolPath(event.detail) || undefined;
+            const msg: ChatMessage = {
+              id: nanoid(12),
+              roomId: room.id,
+              role: "tool",
+              content: event.detail || "Running…",
+              toolName: event.name,
+              status: "streaming",
+              ts: Date.now(),
+            };
+            room.toolMsgIds.set(event.callId, msg.id);
+            if (path) room.toolPaths.set(event.callId, path);
+            db.insertMessage(msg);
+            this.io.to(room.id).emit("chat-message", msg);
+            break;
+          }
+          case "tool_done": {
+            const id = room.toolMsgIds.get(event.callId);
+            const path =
+              event.path ||
+              room.toolPaths.get(event.callId) ||
+              extractToolPath(event.detail) ||
+              undefined;
+            if (path) room.toolPaths.set(event.callId, path);
+            if (id) {
+              const content = event.detail || "Done";
+              db.updateMessageContent(id, content, "done");
+              this.io.to(room.id).emit("chat-message", {
+                id,
+                roomId: room.id,
+                role: "tool",
+                content,
+                toolName: event.name,
+                status: "done",
+                ts: Date.now(),
+              });
+              void attachFileDiff(id, event.name, content, path);
+            }
+            afterTools = true;
+            break;
+          }
+          case "error":
+            emitAssistant(event.message, "error");
+            this.io.to(room.id).emit("agent-status", "error", event.message);
+            break;
+          case "done": {
+            emitAssistant(event.result, "done");
+            closeAssistant("done");
+            const git =
+              "git" in event
+                ? (event as SdkStreamEvent & { kind: "done" }).git
+                : undefined;
+            if (git?.branches?.length) {
+              const branch = git.branches[0];
+              room.cloudMeta = {
+                ...room.cloudMeta,
+                repoUrl: branch.repoUrl || room.cloudMeta.repoUrl,
+                branch: branch.branch,
+                prUrl: branch.prUrl || room.cloudMeta.prUrl,
+              };
+              if (branch.prUrl) {
+                db.setPrUrl(room.id, branch.prUrl);
+                room.row.pr_url = branch.prUrl;
+              }
+              this.io.to(room.id).emit("cloud-meta", room.cloudMeta);
+            }
+            break;
+          }
+        }
+      });
+
+      const latestId = room.agent.getAgentId();
+      if (latestId && latestId !== room.row.cursor_agent_id) {
+        db.setCursorAgentId(room.id, latestId);
+        room.row.cursor_agent_id = latestId;
+      }
+
+      const sessionId = room.agent.getSessionId();
+      if (sessionId && sessionId !== room.row.cursor_session_id) {
+        db.setCursorSessionId(room.id, sessionId);
+        room.row.cursor_session_id = sessionId;
+      }
+
+      this.io.to(room.id).emit("agent-status", "idle");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      emitAssistant(message, "error");
+      this.io.to(room.id).emit("agent-status", "error", message);
+      this.io.to(room.id).emit("agent-status", "idle");
+    }
+
     db.updateRoomActivity(room.id);
   }
 
@@ -267,9 +653,7 @@ export class RoomManager {
 
     room.pendingDriveRequest = { socketId: socket.id, name: p.name };
     const driverSocket = this.io.sockets.sockets.get(room.driverSocketId);
-    if (driverSocket) {
-      driverSocket.emit("drive-requested", p.name);
-    }
+    if (driverSocket) driverSocket.emit("drive-requested", p.name);
   }
 
   handleGrantDrive(socket: Socket, toSocketId: string): void {
@@ -281,8 +665,7 @@ export class RoomManager {
     room.driverSocketId = toSocketId;
     room.pendingDriveRequest = null;
     this.broadcastPresence(room);
-    const granted = this.io.sockets.sockets.get(toSocketId);
-    if (granted) granted.emit("drive-granted");
+    this.io.sockets.sockets.get(toSocketId)?.emit("drive-granted");
   }
 
   handleReleaseDrive(socket: Socket): void {
@@ -295,8 +678,9 @@ export class RoomManager {
       room.participants.has(room.pendingDriveRequest.socketId)
     ) {
       room.driverSocketId = room.pendingDriveRequest.socketId;
-      const granted = this.io.sockets.sockets.get(room.driverSocketId);
-      if (granted) granted.emit("drive-granted");
+      this.io.sockets.sockets
+        .get(room.driverSocketId)
+        ?.emit("drive-granted");
       room.pendingDriveRequest = null;
     } else {
       room.driverSocketId = null;
@@ -312,17 +696,8 @@ export class RoomManager {
     this.io.to(room.id).emit("drive-released");
   }
 
-  handleResize(socket: Socket, cols: number, rows: number): void {
-    const room = this.getRoomForSocket(socket.id);
-    if (!room) return;
-    if (typeof cols === "number" && typeof rows === "number" && cols > 0 && rows > 0) {
-      room.pty.resize(cols, rows);
-    }
-  }
-
   listRooms(): RoomInfo[] {
-    const rows = db.listRooms();
-    return rows.map((row) => {
+    return db.listRooms().map((row) => {
       const room = this.rooms.get(row.id);
       return this.toRoomInfo(row, room?.participants.size || 0);
     });
@@ -331,30 +706,54 @@ export class RoomManager {
   getRoomInfo(id: string): RoomInfo | null {
     const row = db.getRoom(id);
     if (!row) return null;
+    return this.toRoomInfo(row, this.rooms.get(id)?.participants.size || 0);
+  }
+
+  async listModelsForRoom(id: string): Promise<ModelInfo[]> {
+    const row = db.getRoom(id);
+    if (!row) throw new Error("Room not found");
+    if (row.auth_mode === "cli") return listCliModels();
+    const apiKey = resolveApiKey(row);
+    return listModelsForKey(apiKey);
+  }
+
+  setModel(id: string, modelIdRaw: string): RoomInfo {
+    const modelId = modelIdRaw.trim();
+    if (!modelId) throw new Error("modelId is required");
+
     const room = this.rooms.get(id);
+    const row = db.getRoom(id);
+    if (!row || row.status !== "active") throw new Error("Room not found");
+
+    if (room?.agent.isBusy()) {
+      throw new Error("Wait for the agent to finish before changing model");
+    }
+
+    db.setModelId(id, modelId);
+    row.model_id = modelId;
+    if (room) {
+      room.row.model_id = modelId;
+      room.agent.setModel(modelId);
+      this.io.to(id).emit("model-updated", modelId);
+    }
+
     return this.toRoomInfo(row, room?.participants.size || 0);
   }
 
   stopRoom(id: string): void {
     const room = this.rooms.get(id);
     if (room) {
-      for (const unsub of room.ptyCleanup) unsub();
-      room.pty.destroy();
-      room.diffWatcher.stop();
+      for (const unsub of room.cleanups) unsub();
+      void room.agent.dispose();
       this.rooms.delete(id);
     }
-    killSession(id);
     db.updateRoomStatus(id, "stopped");
   }
 
   shutdown(): void {
-    for (const [id] of this.rooms) {
-      const room = this.rooms.get(id);
-      if (room) {
-        for (const unsub of room.ptyCleanup) unsub();
-        room.pty.destroy();
-        room.diffWatcher.stop();
-      }
+    for (const [, room] of this.rooms) {
+      for (const unsub of room.cleanups) unsub();
+      void room.agent.dispose();
     }
     this.rooms.clear();
   }
@@ -387,6 +786,14 @@ export class RoomManager {
       participantCount,
       status: row.status,
       createdAt: row.created_at,
+      runtime: (row.runtime as AgentRuntime) || "local",
+      authMode: (row.auth_mode as AuthMode) || "cli",
+      modelId: row.model_id || DEFAULT_MODEL,
+      repoUrl: row.repo_url || undefined,
+      startingRef: row.starting_ref || undefined,
+      prUrl: row.pr_url || undefined,
+      autoCreatePR: Boolean(row.auto_create_pr),
+      keyHint: row.key_hint || undefined,
     };
   }
 }

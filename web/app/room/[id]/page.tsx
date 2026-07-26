@@ -4,13 +4,17 @@ import { useState, useEffect, useCallback } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { useSocket } from "../../../hooks/useSocket";
-import { fetchRoom } from "../../../lib/api";
-import Terminal from "../../../components/Terminal";
+import {
+  fetchRoom,
+  fetchRoomModels,
+  updateRoomModel,
+} from "../../../lib/api";
+import ChatPanel from "../../../components/ChatPanel";
 import SidePanel from "../../../components/SidePanel";
 import PresenceBar from "../../../components/PresenceBar";
 import SteerInput from "../../../components/SteerInput";
 import DriverControls from "../../../components/DriverControls";
-import type { RoomInfo } from "../../../../shared/events";
+import type { ModelInfo, RoomInfo } from "../../../../shared/events";
 
 export default function RoomPage() {
   const params = useParams();
@@ -89,17 +93,26 @@ export default function RoomPage() {
     );
   }
 
-  return <LiveRoom roomId={roomId} userName={userName} roomInfo={roomInfo} />;
+  return (
+    <LiveRoom
+      roomId={roomId}
+      userName={userName}
+      roomInfo={roomInfo}
+      onRoomInfo={setRoomInfo}
+    />
+  );
 }
 
 function LiveRoom({
   roomId,
   userName,
   roomInfo,
+  onRoomInfo,
 }: {
   roomId: string;
   userName: string;
   roomInfo: RoomInfo | null;
+  onRoomInfo: (info: RoomInfo) => void;
 }) {
   const {
     socket,
@@ -107,20 +120,63 @@ function LiveRoom({
     participants,
     amDriver,
     mySocketId,
-    steerLog,
+    messages,
+    agentStatus,
     pendingRequest,
-    scrollback,
     lastDiff,
+    cloudMeta,
+    modelId: liveModelId,
     sendSteer,
-    sendPtyInput,
     requestDrive,
     releaseDrive,
     grantDrive,
-    sendResize,
-    sendScrollHistory,
   } = useSocket(roomId, userName);
 
+  const runtime = roomInfo?.runtime || "local";
+  const authMode = roomInfo?.authMode || "cli";
+  const modelId = liveModelId || roomInfo?.modelId || "auto";
+
+  const [models, setModels] = useState<ModelInfo[]>([]);
+  const [modelError, setModelError] = useState("");
+  const [savingModel, setSavingModel] = useState(false);
   const [dismissedRequest, setDismissedRequest] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchRoomModels(roomId)
+      .then((list) => {
+        if (!cancelled) setModels(list);
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setModelError(
+            err instanceof Error ? err.message : "Failed to load models",
+          );
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [roomId]);
+
+  const handleModelChange = useCallback(
+    async (next: string) => {
+      if (!next || next === modelId) return;
+      setSavingModel(true);
+      setModelError("");
+      try {
+        const updated = await updateRoomModel(roomId, next);
+        onRoomInfo(updated);
+      } catch (err) {
+        setModelError(
+          err instanceof Error ? err.message : "Failed to change model",
+        );
+      } finally {
+        setSavingModel(false);
+      }
+    },
+    [modelId, onRoomInfo, roomId],
+  );
 
   const handleGrantDrive = useCallback(() => {
     const requester = participants.find((p) => p.name === pendingRequest);
@@ -155,13 +211,28 @@ function LiveRoom({
             }`}
             title={connected ? "Connected" : "Disconnected"}
           />
+          <span className="hidden md:inline text-[11px] text-[#6e6e6e] px-1.5 py-0.5 rounded bg-[#252525] border border-[#2b2b2b]">
+            {runtime === "cloud" ? "Cloud" : "Local"}
+          </span>
+          <span className="hidden lg:inline text-[11px] text-[#6e6e6e] px-1.5 py-0.5 rounded bg-[#252525] border border-[#2b2b2b]">
+            {authMode === "cli"
+              ? "Local login"
+              : authMode === "byok"
+                ? "BYOK"
+                : "Server key"}
+          </span>
+          {agentStatus === "running" && (
+            <span className="text-[11px] text-[#4d9fff] hidden sm:inline">
+              Running
+            </span>
+          )}
         </div>
 
         <div className="flex items-center gap-3">
           <PresenceBar participants={participants} mySocketId={mySocketId} />
           <div className="w-px h-4 bg-[#2b2b2b]" />
           <span className="text-[11px] text-[#6e6e6e] hidden sm:inline">
-            {amDriver ? "Driving" : "Viewing"}
+            {amDriver ? "Host" : "Joined"}
           </span>
           <DriverControls
             amDriver={amDriver}
@@ -178,28 +249,40 @@ function LiveRoom({
         <div className="flex-1 flex flex-col min-h-0 min-w-0 overflow-hidden">
           <div className="flex items-center px-3 h-8 border-b border-[#2b2b2b] bg-[#1a1a1a] shrink-0">
             <span className="text-[11px] text-[#6e6e6e] uppercase tracking-wide">
-              Agent
+              Conversation
             </span>
           </div>
-          <Terminal
-            socket={socket}
-            amDriver={amDriver}
-            scrollback={scrollback}
-            onInput={sendPtyInput}
-            onResize={sendResize}
-            onScrollHistory={sendScrollHistory}
-          />
+          <ChatPanel messages={messages} agentStatus={agentStatus} />
         </div>
 
         <SidePanel
           socket={socket}
           lastDiff={lastDiff}
-          steerLog={steerLog}
+          runtime={runtime}
+          cloudMeta={cloudMeta}
+          prUrl={roomInfo?.prUrl}
         />
       </main>
 
       <footer className="border-t border-[#2b2b2b] bg-[#1a1a1a] shrink-0">
-        <SteerInput onSend={sendSteer} />
+        {modelError && (
+          <p className="px-3 pt-2 text-[11px] text-[#f07070]">{modelError}</p>
+        )}
+        <SteerInput
+          onSend={sendSteer}
+          disabled={agentStatus === "running"}
+          models={models}
+          modelId={modelId}
+          onModelChange={(id) => void handleModelChange(id)}
+          modelDisabled={
+            savingModel || agentStatus === "running" || models.length === 0
+          }
+          placeholder={
+            agentStatus === "running"
+              ? "Agent is working…"
+              : "Message the agent…"
+          }
+        />
       </footer>
     </div>
   );

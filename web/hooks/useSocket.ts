@@ -2,8 +2,12 @@
 
 import { useEffect, useState, useCallback, useRef } from "react";
 import { getSocket, disconnectSocket, type AppSocket } from "../lib/socket";
-import type { Participant, SteerLogEntry } from "../../shared/events";
-import { sanitizeTerminalOutput } from "../../shared/terminalFilter";
+import type {
+  AgentRunStatus,
+  ChatMessage,
+  CloudMeta,
+  Participant,
+} from "../../shared/events";
 
 interface UseSocketReturn {
   socket: AppSocket | null;
@@ -11,17 +15,16 @@ interface UseSocketReturn {
   participants: Participant[];
   amDriver: boolean;
   mySocketId: string | null;
-  steerLog: SteerLogEntry[];
+  messages: ChatMessage[];
+  agentStatus: AgentRunStatus;
   pendingRequest: string | null;
-  scrollback: string;
   lastDiff: string;
+  cloudMeta: CloudMeta | null;
+  modelId: string | null;
   sendSteer: (text: string) => void;
-  sendPtyInput: (data: string) => void;
   requestDrive: () => void;
   releaseDrive: () => void;
   grantDrive: (toSocketId: string) => void;
-  sendResize: (cols: number, rows: number) => void;
-  sendScrollHistory: (direction: "up" | "down", lines?: number) => void;
 }
 
 export function useSocket(roomId: string, name: string): UseSocketReturn {
@@ -29,10 +32,12 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
   const [connected, setConnected] = useState(false);
   const [participants, setParticipants] = useState<Participant[]>([]);
   const [mySocketId, setMySocketId] = useState<string | null>(null);
-  const [steerLog, setSteerLog] = useState<SteerLogEntry[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [agentStatus, setAgentStatus] = useState<AgentRunStatus>("idle");
   const [pendingRequest, setPendingRequest] = useState<string | null>(null);
-  const [scrollback, setScrollback] = useState("");
   const [lastDiff, setLastDiff] = useState("");
+  const [cloudMeta, setCloudMeta] = useState<CloudMeta | null>(null);
+  const [modelId, setModelId] = useState<string | null>(null);
   const socketRef = useRef<AppSocket | null>(null);
 
   const amDriver =
@@ -53,18 +58,38 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
 
     const onDisconnect = () => setConnected(false);
     const onPresence = (p: Participant[]) => setParticipants(p);
-    const onSteerLog = (entry: SteerLogEntry) => {
-      setSteerLog((prev) => [...prev, entry]);
+    const onChatHistory = (history: ChatMessage[]) => setMessages(history);
+    const onChatMessage = (msg: ChatMessage) => {
+      setMessages((prev) => {
+        const idx = prev.findIndex((m) => m.id === msg.id);
+        if (idx >= 0) {
+          const next = [...prev];
+          next[idx] = { ...next[idx], ...msg };
+          return next;
+        }
+        return [...prev, msg];
+      });
     };
-    const onSteerHistory = (entries: SteerLogEntry[]) => {
-      setSteerLog(entries);
+    const onChatDelta = (
+      id: string,
+      content: string,
+      status?: ChatMessage["status"],
+    ) => {
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === id
+            ? { ...m, content, status: status ?? "streaming" }
+            : m,
+        ),
+      );
     };
+    const onAgentStatus = (status: AgentRunStatus) => setAgentStatus(status);
     const onDriveRequested = (requesterName: string) => {
       setPendingRequest(requesterName);
     };
-    const onScrollback = (data: string) =>
-      setScrollback(sanitizeTerminalOutput(data));
     const onDiffUpdate = (patch: string) => setLastDiff(patch);
+    const onCloudMeta = (meta: CloudMeta) => setCloudMeta(meta);
+    const onModelUpdated = (id: string) => setModelId(id);
     const onError = (message: string) => {
       console.warn("Server error:", message);
     };
@@ -74,41 +99,45 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
     s.on("connect", onConnect);
     s.on("disconnect", onDisconnect);
     s.on("presence", onPresence);
-    s.on("steer-log", onSteerLog);
-    s.on("steer-history", onSteerHistory);
+    s.on("chat-history", onChatHistory);
+    s.on("chat-message", onChatMessage);
+    s.on("chat-delta", onChatDelta);
+    s.on("agent-status", onAgentStatus);
     s.on("drive-requested", onDriveRequested);
-    s.on("scrollback", onScrollback);
     s.on("diff-update", onDiffUpdate);
+    s.on("cloud-meta", onCloudMeta);
+    s.on("model-updated", onModelUpdated);
     s.on("error", onError);
 
     return () => {
       s.off("connect", onConnect);
       s.off("disconnect", onDisconnect);
       s.off("presence", onPresence);
-      s.off("steer-log", onSteerLog);
-      s.off("steer-history", onSteerHistory);
+      s.off("chat-history", onChatHistory);
+      s.off("chat-message", onChatMessage);
+      s.off("chat-delta", onChatDelta);
+      s.off("agent-status", onAgentStatus);
       s.off("drive-requested", onDriveRequested);
-      s.off("scrollback", onScrollback);
       s.off("diff-update", onDiffUpdate);
+      s.off("cloud-meta", onCloudMeta);
+      s.off("model-updated", onModelUpdated);
       s.off("error", onError);
       disconnectSocket();
       socketRef.current = null;
       setSocket(null);
       setConnected(false);
       setParticipants([]);
-      setSteerLog([]);
-      setScrollback("");
+      setMessages([]);
       setLastDiff("");
+      setCloudMeta(null);
+      setModelId(null);
       setMySocketId(null);
+      setAgentStatus("idle");
     };
   }, [roomId, name]);
 
   const sendSteer = useCallback((text: string) => {
     socketRef.current?.emit("steer-message", text);
-  }, []);
-
-  const sendPtyInput = useCallback((data: string) => {
-    socketRef.current?.emit("pty-input", data);
   }, []);
 
   const requestDrive = useCallback(() => {
@@ -124,33 +153,21 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
     setPendingRequest(null);
   }, []);
 
-  const sendResize = useCallback((cols: number, rows: number) => {
-    socketRef.current?.emit("resize", cols, rows);
-  }, []);
-
-  const sendScrollHistory = useCallback(
-    (direction: "up" | "down", lines?: number) => {
-      socketRef.current?.emit("scroll-history", direction, lines);
-    },
-    [],
-  );
-
   return {
     socket,
     connected,
     participants,
     amDriver,
     mySocketId,
-    steerLog,
+    messages,
+    agentStatus,
     pendingRequest,
-    scrollback,
     lastDiff,
+    cloudMeta,
+    modelId,
     sendSteer,
-    sendPtyInput,
     requestDrive,
     releaseDrive,
     grantDrive,
-    sendResize,
-    sendScrollHistory,
   };
 }
