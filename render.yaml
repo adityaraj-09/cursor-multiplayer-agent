@@ -1,0 +1,43 @@
+# Render Blueprint — API with SQLite on a persistent disk
+# https://render.com/docs/blueprint-spec
+#
+# Do NOT set DATABASE_URL (empty/omitted → SQLite).
+# Disk is required so data.db survives deploys/restarts.
+#
+# After create, set in dashboard:
+#   CLERK_SECRET_KEY, CORS_ORIGIN, CURSOR_API_KEY (optional)
+
+services:
+  - type: web
+    name: steer-api
+    runtime: node
+    plan: starter
+    region: oregon
+    rootDir: .
+    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm exec tsc --outDir dist
+    startCommand: node dist/server/index.js
+    healthCheckPath: /api/auth/status
+    disk:
+      name: steer-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "3000"
+      # SQLite on the persistent disk (no Postgres)
+      - key: SQLITE_PATH
+        value: /var/data/steer.db
+      - key: CLERK_SECRET_KEY
+        sync: false
+      - key: AUTH_SECRET
+        generateValue: true
+      - key: KEY_ENCRYPTION_SECRET
+        generateValue: true
+      - key: CORS_ORIGIN
+        sync: false
+      - key: CURSOR_API_KEY
+        sync: false
+      - key: DEFAULT_MODEL
+        value: auto

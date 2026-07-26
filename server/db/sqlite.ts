@@ -7,8 +7,14 @@ import type {
   SteerLogEntry,
 } from "../../shared/events.js";
 
-const DB_PATH = resolve(import.meta.dirname, "../../data.db");
+/** Override with SQLITE_PATH / DB_PATH for persistent disks (e.g. Render). */
+const DB_PATH = resolve(
+  process.env.SQLITE_PATH ||
+    process.env.DB_PATH ||
+    resolve(import.meta.dirname, "../../data.db"),
+);
 
+console.log(`[db] SQLite at ${DB_PATH}`);
 const db = new Database(DB_PATH);
 
 db.pragma("journal_mode = WAL");

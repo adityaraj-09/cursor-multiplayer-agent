@@ -1,5 +1,72 @@
 # Deployment Guide
 
+## Recommended: Vercel (frontend) + Render (API)
+
+### A. Render — API + SQLite (single node)
+
+This project defaults to **SQLite** when `DATABASE_URL` is unset — good for one Render web service.
+
+1. Push this repo to GitHub.
+2. [Render Dashboard](https://dashboard.render.com) → **New** → **Blueprint** → select the repo (`render.yaml`).
+   Or create a **Web Service** (Node) manually:
+   - Build: `corepack enable && pnpm install --frozen-lockfile && pnpm exec tsc --outDir dist`
+   - Start: `node dist/server/index.js`
+   - Health check: `/api/auth/status`
+   - **Disk**: mount `/var/data` (1 GB+) so SQLite survives deploys
+3. Set env vars:
+
+| Key | Value |
+|-----|--------|
+| `SQLITE_PATH` | `/var/data/steer.db` |
+| *(no `DATABASE_URL`)* | omit — forces SQLite |
+| `CLERK_SECRET_KEY` | From Clerk |
+| `AUTH_SECRET` | `openssl rand -hex 32` |
+| `KEY_ENCRYPTION_SECRET` | `openssl rand -hex 32` |
+| `CORS_ORIGIN` | Your Vercel URL, e.g. `https://steer.vercel.app` |
+| `CURSOR_API_KEY` | Optional (Cloud agents) |
+
+4. Note the service URL, e.g. `https://steer-api.onrender.com`.
+
+**Important:** without a **persistent disk**, Render’s filesystem is ephemeral and you’ll lose the DB on every deploy.  
+**Free tier note:** idle spin-down breaks long-lived WebSockets — prefer paid starter for prod.  
+**Later:** if you need multiple API instances, switch to Postgres (`DATABASE_URL=postgres://...`).
+
+### B. Vercel — Next.js web
+
+1. [Vercel](https://vercel.com) → **Add New Project** → import the same repo.
+2. Set **Root Directory** to `web`.
+3. Framework: Next.js (auto).
+4. Environment variables:
+
+| Key | Value |
+|-----|--------|
+| `API_URL` | `https://steer-api.onrender.com` (server-side rewrites) |
+| `NEXT_PUBLIC_SOCKET_URL` | `https://steer-api.onrender.com` (browser WebSocket) |
+| `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | From Clerk |
+| `CLERK_SECRET_KEY` | Same as Render |
+| `NEXT_PUBLIC_CLERK_SIGN_IN_URL` | `/login` |
+| `NEXT_PUBLIC_CLERK_AFTER_SIGN_IN_URL` | `/` |
+
+5. Deploy. Copy the Vercel URL into Render’s `CORS_ORIGIN` (and redeploy API if needed).
+
+### C. Clerk dashboard
+
+Add both origins under **Paths / Domains**:
+- `https://your-app.vercel.app`
+- `http://localhost:3001` (dev)
+
+### D. CLI workers (Local runtime)
+
+Users point `steer login` at the **Render** API URL:
+
+```bash
+steer login
+# Server URL: https://steer-api.onrender.com
+steer start
+```
+
+---
+
 ## Quick start (Docker Compose)
 
 ```bash

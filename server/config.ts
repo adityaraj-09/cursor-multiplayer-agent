@@ -15,3 +15,9 @@ export function getEnvCursorApiKey(): string {
 
 export const AUTH_SECRET = process.env.AUTH_SECRET || "dev-secret-change-in-production";
 export const IS_PRODUCTION = process.env.NODE_ENV === "production";
+
+/** Comma-separated browser origins allowed in production (e.g. Vercel URL). */
+export const CORS_ORIGINS: string[] = (process.env.CORS_ORIGIN || "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);

@@ -1,8 +1,9 @@
 import "dotenv/config";
 import express from "express";
+import cors from "cors";
 import { createServer } from "http";
 import { Server } from "socket.io";
-import { PORT, IS_PRODUCTION } from "./config.js";
+import { PORT, IS_PRODUCTION, CORS_ORIGINS } from "./config.js";
 import { RoomManager } from "./roomManager.js";
 import { WorkerRelay } from "./workerRelay.js";
 import { listModelsForKey, listReposForKey } from "./sdkAgent.js";
@@ -31,7 +32,30 @@ function parseAuthMode(raw: unknown): AuthMode {
   return "server";
 }
 
+const corsOrigin:
+  | boolean
+  | string[]
+  | ((
+      origin: string | undefined,
+      cb: (err: Error | null, allow?: boolean) => void,
+    ) => void) =
+  !IS_PRODUCTION
+    ? true
+    : CORS_ORIGINS.length === 0
+      ? true // set CORS_ORIGIN in prod for lock-down
+      : (origin, cb) => {
+          if (!origin || CORS_ORIGINS.includes(origin)) cb(null, true);
+          else cb(null, false);
+        };
+
 const app = express();
+app.use(
+  cors({
+    origin: corsOrigin,
+    methods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-Cursor-Api-Key"],
+  }),
+);
 app.use(express.json({ limit: "1mb" }));
 
 // Auth middleware — Clerk JWT or CLI session token → req.user
@@ -39,8 +63,14 @@ app.use(authMiddleware());
 
 const httpServer = createServer(app);
 const io = new Server<ClientToServerEvents, ServerToClientEvents>(httpServer, {
-  cors: { origin: IS_PRODUCTION ? undefined : "*", methods: ["GET", "POST", "PATCH", "DELETE"] },
+  cors: {
+    origin: corsOrigin,
+    methods: ["GET", "POST", "PATCH", "DELETE"],
+  },
   path: "/socket.io/",
+  // Render / proxies
+  transports: ["websocket", "polling"],
+  allowEIO3: true,
 });
 
 const workerRelay = new WorkerRelay(io as unknown as Server, (token) => {
