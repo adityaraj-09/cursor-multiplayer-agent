@@ -249,11 +249,15 @@ app.post("/api/workers/pick-folder", requireAuth, async (req, res) => {
   }
 });
 
-app.get("/api/rooms", (_req, res) => {
-  res.json(roomManager.listRooms());
+app.get("/api/rooms", requireAuth, (req, res) => {
+  res.json(roomManager.listRoomsForUser(req.user!.id));
 });
 
-app.get("/api/rooms/:id", (req, res) => {
+app.get("/api/rooms/:id", requireAuth, (req, res) => {
+  if (!roomManager.userCanAccessRoom(req.params.id, req.user!.id)) {
+    res.status(404).json({ error: "Room not found" });
+    return;
+  }
   const room = roomManager.getRoomInfo(req.params.id);
   if (!room) {
     res.status(404).json({ error: "Room not found" });

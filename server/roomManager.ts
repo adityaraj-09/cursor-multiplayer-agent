@@ -954,6 +954,20 @@ export class RoomManager {
     });
   }
 
+  listRoomsForUser(userId: string): RoomInfo[] {
+    return db.listRoomsByUser(userId).map((row) => {
+      const room = this.rooms.get(row.id);
+      return this.toRoomInfo(row, room?.participants.size || 0);
+    });
+  }
+
+  userCanAccessRoom(roomId: string, userId: string): boolean {
+    const row = db.getRoom(roomId);
+    if (!row) return false;
+    if (row.owner_id === userId) return true;
+    return db.isRoomMember(roomId, userId);
+  }
+
   getRoomInfo(id: string): RoomInfo | null {
     const row = db.getRoom(id);
     if (!row) return null;

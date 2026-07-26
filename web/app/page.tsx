@@ -13,17 +13,37 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    if (authLoading) return;
+    if (!user) {
+      setRooms([]);
+      setLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setLoading(true);
     fetchRooms()
-      .then(setRooms)
+      .then((r) => {
+        if (!cancelled) setRooms(r);
+      })
       .catch(console.error)
-      .finally(() => setLoading(false));
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
 
     const interval = setInterval(() => {
-      fetchRooms().then(setRooms).catch(console.error);
+      fetchRooms()
+        .then((r) => {
+          if (!cancelled) setRooms(r);
+        })
+        .catch(console.error);
     }, 5000);
 
-    return () => clearInterval(interval);
-  }, []);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [user, authLoading]);
 
   return (
     <div className="min-h-screen bg-[#141414]">
@@ -82,7 +102,20 @@ export default function Dashboard() {
           </p>
         </div>
 
-        {loading ? (
+        {!authLoading && !user ? (
+          <div className="border border-dashed border-[#2b2b2b] rounded-lg py-16 text-center">
+            <p className="text-[#a0a0a0] text-[14px] mb-1">Sign in to continue</p>
+            <p className="text-[#6e6e6e] text-[13px] mb-5">
+              Your sessions are private to your account.
+            </p>
+            <Link
+              href="/login"
+              className="inline-flex h-8 px-3.5 rounded-md bg-[#e4e4e4] text-[#141414] text-[13px] font-medium hover:bg-white transition-colors items-center"
+            >
+              Sign in
+            </Link>
+          </div>
+        ) : loading || authLoading ? (
           <div className="text-[#6e6e6e] text-[13px] py-16 text-center">
             Loading sessions…
           </div>
