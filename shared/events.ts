@@ -131,6 +131,11 @@ export interface WorkerToServerEvents {
     path: string | null;
     error?: string;
   }) => void;
+  "worker:models-listed": (data: {
+    requestId: string;
+    models?: Array<{ id: string; displayName: string }>;
+    error?: string;
+  }) => void;
 }
 
 export interface ServerToWorkerEvents {
@@ -143,6 +148,7 @@ export interface ServerToWorkerEvents {
   }) => void;
   "worker:abort": (data: { roomId: string }) => void;
   "worker:pick-folder": (data: { requestId: string }) => void;
+  "worker:list-models": (data: { requestId: string }) => void;
   "worker:error": (message: string) => void;
 }
 

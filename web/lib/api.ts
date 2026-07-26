@@ -187,7 +187,10 @@ export async function fetchModels(opts: {
 }): Promise<ModelInfo[]> {
   const res = await fetch(`${API_BASE}/models`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      ...(await authHeaders()),
+    },
     body: JSON.stringify(opts),
   });
   if (!res.ok) {

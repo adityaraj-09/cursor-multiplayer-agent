@@ -906,7 +906,13 @@ export class RoomManager {
   async listModelsForRoom(id: string): Promise<ModelInfo[]> {
     const row = db.getRoom(id);
     if (!row) throw new Error("Room not found");
-    if (row.auth_mode === "cli") return listCliModels();
+    if (row.auth_mode === "cli") {
+      const ownerId = row.owner_id;
+      if (ownerId && this.workerRelay?.hasOnlineWorker(ownerId)) {
+        return this.workerRelay.requestListModels(ownerId);
+      }
+      return listCliModels();
+    }
     const apiKey = resolveApiKey(row);
     return listModelsForKey(apiKey);
   }

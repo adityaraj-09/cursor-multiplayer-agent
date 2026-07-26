@@ -4,6 +4,7 @@ import { createHash } from "crypto";
 import chalk from "chalk";
 import { loadConfig } from "./config.js";
 import { pickFolder } from "./pickFolder.js";
+import { listLocalModels } from "./listModels.js";
 import {
   runAgent,
   abortAgent,
@@ -152,6 +153,28 @@ export function startWorker(repoPathOverride?: string): void {
         socket.emit("worker:folder-picked", {
           requestId: payload.requestId,
           path: null,
+          error: message,
+        });
+      }
+    },
+  );
+
+  socket.on(
+    "worker:list-models",
+    async (payload: { requestId: string }) => {
+      console.log(chalk.cyan("  Listing Cursor models…"));
+      try {
+        const models = await listLocalModels();
+        console.log(chalk.green(`  ✓ ${models.length} models`));
+        socket.emit("worker:models-listed", {
+          requestId: payload.requestId,
+          models,
+        });
+      } catch (err) {
+        const message = (err as Error).message;
+        console.error(chalk.red(`  ✗ List models error: ${message}`));
+        socket.emit("worker:models-listed", {
+          requestId: payload.requestId,
           error: message,
         });
       }

@@ -1,14 +1,15 @@
 import { execFile } from "child_process";
 import { promisify } from "util";
-import type { ModelInfo } from "../shared/events.js";
 
 const execFileAsync = promisify(execFile);
 
 const ANSI_RE = /\x1b\[[0-9;]*[a-zA-Z]/g;
 const MODEL_LINE_RE = /^([a-zA-Z0-9][a-zA-Z0-9._-]*)\s+[-–—]\s+(.+)$/;
 
-let cache: { at: number; models: ModelInfo[] } | null = null;
-const CACHE_MS = 60_000;
+export interface ModelInfo {
+  id: string;
+  displayName: string;
+}
 
 function stripAnsi(text: string): string {
   return text.replace(ANSI_RE, "").replace(/\r/g, "");
@@ -41,7 +42,6 @@ async function runListModels(): Promise<string> {
         maxBuffer: 16 * 1024 * 1024,
         env: {
           ...process.env,
-          // Avoid interactive/TUI noise when spawned from the server
           NO_COLOR: "1",
           FORCE_COLOR: "0",
           TERM: "dumb",
@@ -50,7 +50,6 @@ async function runListModels(): Promise<string> {
     );
     return stdout || "";
   } catch (err) {
-    // cursor sometimes exits non-zero even with a full model list on stdout
     const e = err as {
       code?: string;
       stdout?: string;
@@ -60,7 +59,7 @@ async function runListModels(): Promise<string> {
     if (e.stdout && String(e.stdout).trim()) return String(e.stdout);
     if (e.code === "ENOENT") {
       throw new Error(
-        "cursor CLI not available on this server. For local agents, run `steer start` and retry.",
+        "cursor CLI not found. Install Cursor and ensure `cursor` is on PATH.",
       );
     }
     throw new Error(
@@ -71,24 +70,12 @@ async function runListModels(): Promise<string> {
   }
 }
 
-/** Models available to the logged-in Cursor CLI (no API key). */
-export async function listCliModels(): Promise<ModelInfo[]> {
-  if (cache && Date.now() - cache.at < CACHE_MS) {
-    return cache.models;
-  }
-
+/** Models available to the logged-in Cursor CLI on this machine. */
+export async function listLocalModels(): Promise<ModelInfo[]> {
   const stdout = await runListModels();
   const models = parseModels(stdout);
-
   if (models.length === 0) {
-    console.warn(
-      "[cliModels] parsed 0 models; stdout head:",
-      JSON.stringify(stripAnsi(stdout).slice(0, 240)),
-    );
     return [{ id: "auto", displayName: "Auto" }];
   }
-
-  console.log(`[cliModels] loaded ${models.length} models via CLI`);
-  cache = { at: Date.now(), models };
   return models;
 }

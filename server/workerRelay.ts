@@ -3,6 +3,7 @@ import type {
   WorkerToServerEvents,
   ServerToWorkerEvents,
   AgentStreamEventPayload,
+  ModelInfo,
 } from "../shared/events.js";
 
 interface WorkerConnection {
@@ -41,6 +42,14 @@ export class WorkerRelay {
     string,
     {
       resolve: (path: string | null) => void;
+      reject: (err: Error) => void;
+      timer: ReturnType<typeof setTimeout>;
+    }
+  >();
+  private listModelsWaiters = new Map<
+    string,
+    {
+      resolve: (models: ModelInfo[]) => void;
       reject: (err: Error) => void;
       timer: ReturnType<typeof setTimeout>;
     }
@@ -112,6 +121,18 @@ export class WorkerRelay {
           waiter.reject(new Error(data.error));
         } else {
           waiter.resolve(data.path);
+        }
+      });
+
+      socket.on("worker:models-listed", (data) => {
+        const waiter = this.listModelsWaiters.get(data.requestId);
+        if (!waiter) return;
+        clearTimeout(waiter.timer);
+        this.listModelsWaiters.delete(data.requestId);
+        if (data.error) {
+          waiter.reject(new Error(data.error));
+        } else {
+          waiter.resolve(data.models || []);
         }
       });
 
@@ -257,12 +278,44 @@ export class WorkerRelay {
     });
   }
 
+  /**
+   * Ask the user's CLI worker to run `cursor agent --list-models` locally.
+   * Required in production — the hosted API has no Cursor CLI.
+   */
+  requestListModels(userId: string, timeoutMs = 60_000): Promise<ModelInfo[]> {
+    const worker = this.findAnyWorkerForUser(userId);
+    if (!worker) {
+      return Promise.reject(
+        new Error(
+          "No online Steer worker. Run `steer start` on your machine first.",
+        ),
+      );
+    }
+
+    const requestId = `${userId}-models-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.listModelsWaiters.delete(requestId);
+        reject(new Error("Listing models timed out — check your worker machine"));
+      }, timeoutMs);
+
+      this.listModelsWaiters.set(requestId, { resolve, reject, timer });
+      worker.socket.emit("worker:list-models", { requestId });
+    });
+  }
+
   shutdown(): void {
     for (const w of this.folderPickWaiters.values()) {
       clearTimeout(w.timer);
       w.reject(new Error("Server shutting down"));
     }
     this.folderPickWaiters.clear();
+    for (const w of this.listModelsWaiters.values()) {
+      clearTimeout(w.timer);
+      w.reject(new Error("Server shutting down"));
+    }
+    this.listModelsWaiters.clear();
     this.workers.clear();
     this.roomToWorker.clear();
     this.eventListeners.clear();

@@ -153,8 +153,26 @@ app.post("/api/models", async (req, res) => {
   try {
     const authMode = parseAuthMode(req.body?.authMode);
     if (authMode === "cli") {
-      const models = await listCliModels();
-      res.json({ models });
+      // Hosted API has no `cursor` binary — ask the user's CLI worker.
+      if (req.user && workerRelay.hasOnlineWorker(req.user.id)) {
+        const models = await workerRelay.requestListModels(req.user.id);
+        res.json({ models });
+        return;
+      }
+      try {
+        const models = await listCliModels();
+        res.json({ models });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Failed to list models";
+        if (!req.user) {
+          throw new Error("Sign in required to list local models");
+        }
+        throw new Error(
+          msg.includes("steer start")
+            ? msg
+            : `${msg} Run \`steer start\` on your machine so models can be listed.`,
+        );
+      }
       return;
     }
     const apiKey = resolveRequestKey(
