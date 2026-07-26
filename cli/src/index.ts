@@ -4,7 +4,7 @@ import chalk from "chalk";
 import ora from "ora";
 import { createInterface } from "readline";
 import { loginWithPairingCode, logout } from "./auth.js";
-import { loadConfig } from "./config.js";
+import { DEFAULT_SERVER_URL, loadConfig } from "./config.js";
 import { ensureCursorAuth } from "./cursorAuth.js";
 import { startWorker } from "./worker.js";
 
@@ -35,11 +35,14 @@ program
           "\n  1. Sign in on the web app\n  2. Open /cli-pair and generate a code\n  3. Enter that code below\n",
         ),
       );
-      const serverUrl = await prompt("Server URL: ");
+      const serverUrlRaw = await prompt(
+        `Server URL [${DEFAULT_SERVER_URL}]: `,
+      );
+      const serverUrl = serverUrlRaw || DEFAULT_SERVER_URL;
       const code = await prompt("Pairing code: ");
 
-      if (!serverUrl || !code) {
-        console.error(chalk.red("Server URL and pairing code are required."));
+      if (!code) {
+        console.error(chalk.red("Pairing code is required."));
         process.exit(1);
       }
 

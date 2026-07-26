@@ -8,6 +8,12 @@ export interface Config {
   email: string;
 }
 
+/** Production API (override with STEER_SERVER_URL for local/dev). */
+export const DEFAULT_SERVER_URL = (
+  process.env.STEER_SERVER_URL ||
+  "https://cursor-multiplayer-agent.onrender.com"
+).replace(/\/+$/, "");
+
 const CONFIG_DIR_NAME = "steer";
 const LEGACY_CONFIG_DIR_NAME = "shared-agent";
 const CONFIG_FILE = "config.json";
