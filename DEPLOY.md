@@ -9,7 +9,7 @@ This project defaults to **SQLite** when `DATABASE_URL` is unset — good for on
 1. Push this repo to GitHub.
 2. [Render Dashboard](https://dashboard.render.com) → **New** → **Blueprint** → select the repo (`render.yaml`).
    Or create a **Web Service** (Node) manually:
-   - Build: `corepack enable && pnpm install --frozen-lockfile && pnpm exec tsc --outDir dist`
+   - Build: `npx --yes pnpm@9 install --frozen-lockfile --prod=false && npx --yes pnpm@9 exec tsc --outDir dist`
    - Start: `node dist/server/index.js`
    - Health check: `/api/auth/status`
    - **Disk**: mount `/var/data` (1 GB+) so SQLite survives deploys

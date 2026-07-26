@@ -1,5 +1,6 @@
 import Database from "better-sqlite3";
-import { resolve } from "path";
+import { mkdirSync } from "fs";
+import { dirname, resolve } from "path";
 import type {
   AgentRuntime,
   AuthMode,
@@ -7,13 +8,28 @@ import type {
   SteerLogEntry,
 } from "../../shared/events.js";
 
-/** Override with SQLITE_PATH / DB_PATH for persistent disks (e.g. Render). */
-const DB_PATH = resolve(
-  process.env.SQLITE_PATH ||
-    process.env.DB_PATH ||
-    resolve(import.meta.dirname, "../../data.db"),
-);
+function resolveDbPath(): string {
+  const configured =
+    process.env.SQLITE_PATH?.trim() || process.env.DB_PATH?.trim();
+  const preferred = configured
+    ? resolve(configured)
+    : resolve(import.meta.dirname, "../../data.db");
 
+  try {
+    mkdirSync(dirname(preferred), { recursive: true });
+    return preferred;
+  } catch (err) {
+    // e.g. /var/data without a Render disk → fall back to project-local path
+    const fallback = resolve(import.meta.dirname, "../../data/steer.db");
+    console.warn(
+      `[db] Cannot create ${dirname(preferred)} (${err instanceof Error ? err.message : err}); using ${fallback}`,
+    );
+    mkdirSync(dirname(fallback), { recursive: true });
+    return fallback;
+  }
+}
+
+const DB_PATH = resolveDbPath();
 console.log(`[db] SQLite at ${DB_PATH}`);
 const db = new Database(DB_PATH);
 

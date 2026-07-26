@@ -14,7 +14,9 @@ services:
     plan: starter
     region: oregon
     rootDir: .
-    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm exec tsc --outDir dist
+    # Render sets NODE_ENV=production (skips devDeps). Force full install for tsc + @types.
+    # /usr is read-only — use npx (no global install).
+    buildCommand: npx --yes pnpm@9 install --frozen-lockfile --prod=false && npx --yes pnpm@9 exec tsc --outDir dist
     startCommand: node dist/server/index.js
     healthCheckPath: /api/auth/status
     disk:
