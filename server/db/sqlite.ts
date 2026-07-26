@@ -103,6 +103,14 @@ db.exec(`
     last_seen_at INTEGER NOT NULL
   );
 
+  CREATE TABLE IF NOT EXISTS pairing_codes (
+    code TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    used INTEGER NOT NULL DEFAULT 0
+  );
+
   CREATE INDEX IF NOT EXISTS idx_steer_room_ts ON steer_messages(room_id, ts);
   CREATE INDEX IF NOT EXISTS idx_messages_room_ts ON messages(room_id, ts);
 `);
@@ -189,6 +197,13 @@ const stmts = {
     INSERT INTO users (id, email, name, password_hash, created_at)
     VALUES (?, ?, ?, ?, ?)
   `),
+  upsertUser: db.prepare(`
+    INSERT INTO users (id, email, name, password_hash, created_at)
+    VALUES (?, ?, ?, '', ?)
+    ON CONFLICT(id) DO UPDATE SET
+      email = excluded.email,
+      name = excluded.name
+  `),
   getUserByEmail: db.prepare(`SELECT * FROM users WHERE email = ?`),
   getUserById: db.prepare(`SELECT * FROM users WHERE id = ?`),
   insertSession: db.prepare(`
@@ -199,6 +214,14 @@ const stmts = {
   deleteSession: db.prepare(`DELETE FROM sessions WHERE token = ?`),
   deleteExpiredSessions: db.prepare(
     `DELETE FROM sessions WHERE expires_at < ?`,
+  ),
+  insertPairingCode: db.prepare(`
+    INSERT INTO pairing_codes (code, user_id, created_at, expires_at, used)
+    VALUES (?, ?, ?, ?, 0)
+  `),
+  getPairingCode: db.prepare(`SELECT * FROM pairing_codes WHERE code = ?`),
+  usePairingCode: db.prepare(
+    `UPDATE pairing_codes SET used = 1 WHERE code = ?`,
   ),
   addRoomMember: db.prepare(`
     INSERT INTO room_members (room_id, user_id, role) VALUES (?, ?, ?)
@@ -454,11 +477,57 @@ export function createUser(
   id: string,
   email: string,
   name: string,
-  passwordHash: string,
+  passwordHash: string = "",
 ): { id: string; email: string; name: string; created_at: number } {
   const now = Date.now();
   stmts.insertUser.run(id, email, name, passwordHash, now);
   return { id, email, name, created_at: now };
+}
+
+/** Upsert a Clerk-backed user (id = Clerk user id). */
+export function upsertUser(
+  id: string,
+  email: string,
+  name: string,
+): { id: string; email: string; name: string; created_at: number } {
+  const now = Date.now();
+  stmts.upsertUser.run(id, email, name, now);
+  const row = stmts.getUserById.get(id) as
+    | { id: string; email: string; name: string; created_at: number }
+    | undefined;
+  return row ?? { id, email, name, created_at: now };
+}
+
+export function createPairingCode(
+  code: string,
+  userId: string,
+  expiresAt: number,
+): void {
+  stmts.insertPairingCode.run(code, userId, Date.now(), expiresAt);
+}
+
+export function getPairingCode(code: string):
+  | {
+      code: string;
+      user_id: string;
+      created_at: number;
+      expires_at: number;
+      used: number;
+    }
+  | undefined {
+  return stmts.getPairingCode.get(code) as
+    | {
+        code: string;
+        user_id: string;
+        created_at: number;
+        expires_at: number;
+        used: number;
+      }
+    | undefined;
+}
+
+export function usePairingCode(code: string): void {
+  stmts.usePairingCode.run(code);
 }
 
 export function getUserByEmail(

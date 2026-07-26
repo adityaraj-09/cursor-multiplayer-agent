@@ -2,102 +2,105 @@ import { Router, type Router as RouterType } from "express";
 import { nanoid } from "nanoid";
 import * as db from "./db.js";
 import {
-  hashPassword,
-  verifyPassword,
   generateToken,
   generateInviteCode,
+  generatePairingCode,
   sessionExpiresAt,
+  pairingExpiresAt,
+  hashSessionToken,
   requireAuth,
+  clerkConfigured,
 } from "./auth.js";
 
 const router: RouterType = Router();
 
-/** POST /api/auth/register — create account */
-router.post("/register", (req, res) => {
-  try {
-    const email = String(req.body?.email || "").trim().toLowerCase();
-    const name = String(req.body?.name || "").trim();
-    const password = String(req.body?.password || "");
-
-    if (!email || !name || !password) {
-      res.status(400).json({ error: "email, name, and password are required" });
-      return;
-    }
-    if (password.length < 6) {
-      res.status(400).json({ error: "Password must be at least 6 characters" });
-      return;
-    }
-
-    const existing = db.getUserByEmail(email);
-    if (existing) {
-      res.status(409).json({ error: "Email already registered" });
-      return;
-    }
-
-    const id = nanoid(12);
-    const passwordHash = hashPassword(password);
-    db.createUser(id, email, name, passwordHash);
-
-    const token = generateToken();
-    db.createSession(token, id, sessionExpiresAt());
-
-    res.status(201).json({
-      user: { id, email, name },
-      token,
-    });
-  } catch (err) {
-    res.status(500).json({
-      error: err instanceof Error ? err.message : "Registration failed",
-    });
-  }
+/** GET /api/auth/me — current user (Clerk JWT or CLI session) */
+router.get("/me", requireAuth, (req, res) => {
+  res.json({
+    user: req.user,
+    clerk: clerkConfigured(),
+  });
 });
 
-/** POST /api/auth/login — authenticate */
-router.post("/login", (req, res) => {
+/**
+ * POST /api/auth/pairing/create — authenticated user creates a short CLI code.
+ * Body: none. Returns { code, expiresAt }.
+ */
+router.post("/pairing/create", requireAuth, (req, res) => {
+  if (!req.user) {
+    res.status(401).json({ error: "Auth required" });
+    return;
+  }
+  const code = generatePairingCode();
+  const expiresAt = pairingExpiresAt();
+  db.createPairingCode(code, req.user.id, expiresAt);
+  res.json({ code, expiresAt });
+});
+
+/**
+ * POST /api/auth/pairing/claim — CLI exchanges pairing code for a long-lived token.
+ * Body: { code }
+ */
+router.post("/pairing/claim", (req, res) => {
   try {
-    const email = String(req.body?.email || "").trim().toLowerCase();
-    const password = String(req.body?.password || "");
-
-    if (!email || !password) {
-      res.status(400).json({ error: "email and password are required" });
+    const code = String(req.body?.code || "")
+      .trim()
+      .toUpperCase()
+      .replace(/\s+/g, "");
+    if (!code) {
+      res.status(400).json({ error: "code is required" });
       return;
     }
 
-    const user = db.getUserByEmail(email);
-    if (!user || !verifyPassword(password, user.password_hash)) {
-      res.status(401).json({ error: "Invalid email or password" });
+    const row = db.getPairingCode(code);
+    if (!row) {
+      res.status(404).json({ error: "Invalid pairing code" });
       return;
     }
+    if (row.used) {
+      res.status(410).json({ error: "Pairing code already used" });
+      return;
+    }
+    if (row.expires_at < Date.now()) {
+      res.status(410).json({ error: "Pairing code expired" });
+      return;
+    }
+
+    const user = db.getUserById(row.user_id);
+    if (!user) {
+      res.status(404).json({ error: "User not found" });
+      return;
+    }
+
+    db.usePairingCode(code);
 
     const token = generateToken();
-    db.createSession(token, user.id, sessionExpiresAt());
+    db.createSession(hashSessionToken(token), user.id, sessionExpiresAt());
 
     res.json({
-      user: { id: user.id, email: user.email, name: user.name },
       token,
+      user: { id: user.id, email: user.email, name: user.name },
     });
   } catch (err) {
     res.status(500).json({
-      error: err instanceof Error ? err.message : "Login failed",
+      error: err instanceof Error ? err.message : "Pairing failed",
     });
   }
 });
 
-/** POST /api/auth/logout — invalidate token */
+/** POST /api/auth/logout — invalidate CLI session token */
 router.post("/logout", requireAuth, (req, res) => {
   const header = req.headers.authorization;
   if (header?.startsWith("Bearer ")) {
-    db.deleteSession(header.slice(7).trim());
+    const token = header.slice(7).trim();
+    if (token.split(".").length !== 3) {
+      db.deleteSession(hashSessionToken(token));
+    }
   }
   res.json({ ok: true });
 });
 
-/** GET /api/auth/me — current user */
-router.get("/me", requireAuth, (req, res) => {
-  res.json({ user: req.user });
-});
-
-/** POST /api/auth/worker-token — get a token for CLI worker */
+/** POST /api/auth/worker-token — mint a CLI/worker session (Clerk-authenticated) */
 router.post("/worker-token", requireAuth, (req, res) => {
   if (!req.user) {
     res.status(401).json({ error: "Auth required" });
@@ -109,12 +112,12 @@ router.post("/worker-token", requireAuth, (req, res) => {
   db.registerWorker(workerId, req.user.id, workerName);
 
   const token = generateToken();
-  db.createSession(token, req.user.id, sessionExpiresAt());
+  db.createSession(hashSessionToken(token), req.user.id, sessionExpiresAt());
 
   res.json({ workerId, token });
 });
 
-/** POST /api/rooms/:id/invite — create invite link */
+/** POST /api/auth/:id/invite — create invite link */
 router.post("/:id/invite", requireAuth, (req, res) => {
   if (!req.user) {
     res.status(401).json({ error: "Auth required" });
@@ -134,7 +137,7 @@ router.post("/:id/invite", requireAuth, (req, res) => {
   res.json({ code, roomId });
 });
 
-/** POST /api/invite/:code/join — join room via invite */
+/** POST /api/auth/invite/:code/join — join room via invite */
 router.post("/invite/:code/join", requireAuth, (req, res) => {
   if (!req.user) {
     res.status(401).json({ error: "Auth required" });
@@ -157,7 +160,7 @@ router.post("/invite/:code/join", requireAuth, (req, res) => {
   res.json({ roomId: invite.room_id });
 });
 
-/** GET /api/rooms/my — rooms owned by or joined by current user */
+/** GET /api/auth/my — rooms for current user */
 router.get("/my", requireAuth, (req, res) => {
   if (!req.user) {
     res.status(401).json({ error: "Auth required" });

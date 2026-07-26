@@ -3,6 +3,7 @@ import { hostname } from "os";
 import { createHash } from "crypto";
 import chalk from "chalk";
 import { loadConfig } from "./config.js";
+import { pickFolder } from "./pickFolder.js";
 import {
   runAgent,
   abortAgent,
@@ -51,7 +52,10 @@ export function startWorker(repoPathOverride?: string): void {
 
   socket.on("connect", () => {
     console.log(chalk.green("✓ Connected to server"));
-    socket.emit("worker:ready", { workerId });
+    socket.emit("worker:ready", {
+      workerId,
+      machineName: hostname(),
+    });
   });
 
   socket.on("disconnect", (reason) => {
@@ -126,6 +130,33 @@ export function startWorker(repoPathOverride?: string): void {
     console.log(chalk.yellow("  ⚠ Abort requested"));
     abortAgent();
   });
+
+  socket.on(
+    "worker:pick-folder",
+    async (payload: { requestId: string }) => {
+      console.log(chalk.cyan("  📂 Opening folder picker…"));
+      try {
+        const path = await pickFolder();
+        if (path) {
+          console.log(chalk.green(`  ✓ Selected: ${path}`));
+        } else {
+          console.log(chalk.yellow("  Folder pick cancelled"));
+        }
+        socket.emit("worker:folder-picked", {
+          requestId: payload.requestId,
+          path,
+        });
+      } catch (err) {
+        const message = (err as Error).message;
+        console.error(chalk.red(`  ✗ Folder picker error: ${message}`));
+        socket.emit("worker:folder-picked", {
+          requestId: payload.requestId,
+          path: null,
+          error: message,
+        });
+      }
+    },
+  );
 
   process.on("SIGINT", () => {
     console.log(chalk.gray("\nShutting down worker…"));

@@ -8,7 +8,7 @@ import { WorkerRelay } from "./workerRelay.js";
 import { listModelsForKey, listReposForKey } from "./sdkAgent.js";
 import { listCliModels } from "./cliModels.js";
 import { encryptionConfigured } from "./keyCrypto.js";
-import { authMiddleware } from "./auth.js";
+import { authMiddleware, hashSessionToken, requireAuth } from "./auth.js";
 import authRoutes from "./authRoutes.js";
 import * as db from "./db.js";
 import {
@@ -34,13 +34,8 @@ function parseAuthMode(raw: unknown): AuthMode {
 const app = express();
 app.use(express.json({ limit: "1mb" }));
 
-// Auth middleware — attaches req.user when Bearer token is valid
-app.use(
-  authMiddleware(
-    (token) => db.getSession(token) as { user_id: string; expires_at: number } | undefined,
-    (id) => db.getUserById(id) as { id: string; email: string; name: string } | undefined,
-  ),
-);
+// Auth middleware — Clerk JWT or CLI session token → req.user
+app.use(authMiddleware());
 
 const httpServer = createServer(app);
 const io = new Server<ClientToServerEvents, ServerToClientEvents>(httpServer, {
@@ -49,9 +44,14 @@ const io = new Server<ClientToServerEvents, ServerToClientEvents>(httpServer, {
 });
 
 const workerRelay = new WorkerRelay(io as unknown as Server, (token) => {
-  const session = db.getSession(token) as
-    | { user_id: string; expires_at: number }
-    | undefined;
+  // CLI workers use hashed session tokens (not Clerk JWTs)
+  const session =
+    (db.getSession(hashSessionToken(token)) as
+      | { user_id: string; expires_at: number }
+      | undefined) ||
+    (db.getSession(token) as
+      | { user_id: string; expires_at: number }
+      | undefined);
   if (!session || session.expires_at < Date.now()) return null;
   return { userId: session.user_id, workerId: `w-${session.user_id}` };
 });
@@ -92,7 +92,7 @@ app.get("/api/auth/status", (_req, res) => {
 });
 
 /** Pick up / replace the shared server API key (encrypted in DB). */
-app.post("/api/auth/server-key", (req, res) => {
+app.post("/api/auth/server-key", requireAuth, (req, res) => {
   try {
     const apiKey = String(req.body?.apiKey || "").trim();
     const result = setServerApiKey(apiKey);
@@ -109,7 +109,7 @@ app.post("/api/auth/server-key", (req, res) => {
   }
 });
 
-app.delete("/api/auth/server-key", (_req, res) => {
+app.delete("/api/auth/server-key", requireAuth, (_req, res) => {
   clearServerApiKey();
   res.json({
     ok: true,
@@ -176,6 +176,29 @@ app.get("/api/workers", (req, res) => {
     return;
   }
   res.json({ workers: workerRelay.getOnlineWorkersForUser(req.user.id) });
+});
+
+/**
+ * POST /api/workers/pick-folder — ask the CLI worker to open a native folder picker.
+ * Requires auth + an online worker for this user.
+ */
+app.post("/api/workers/pick-folder", requireAuth, async (req, res) => {
+  if (!req.user) {
+    res.status(401).json({ error: "Authentication required" });
+    return;
+  }
+  try {
+    const path = await workerRelay.requestFolderPick(req.user.id);
+    if (!path) {
+      res.status(400).json({ error: "Folder selection cancelled" });
+      return;
+    }
+    res.json({ path });
+  } catch (err) {
+    res.status(400).json({
+      error: err instanceof Error ? err.message : "Failed to pick folder",
+    });
+  }
 });
 
 app.get("/api/rooms", (_req, res) => {

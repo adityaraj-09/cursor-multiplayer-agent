@@ -29,12 +29,16 @@ export const deleteSetting = backend.deleteSetting;
 
 // Auth
 export const createUser = backend.createUser;
+export const upsertUser = backend.upsertUser;
 export const getUserByEmail = backend.getUserByEmail;
 export const getUserById = backend.getUserById;
 export const createSession = backend.createSession;
 export const getSession = backend.getSession;
 export const deleteSession = backend.deleteSession;
 export const deleteExpiredSessions = backend.deleteExpiredSessions;
+export const createPairingCode = backend.createPairingCode;
+export const getPairingCode = backend.getPairingCode;
+export const usePairingCode = backend.usePairingCode;
 export const addRoomMember = backend.addRoomMember;
 export const getRoomMembers = backend.getRoomMembers;
 export const isRoomMember = backend.isRoomMember;

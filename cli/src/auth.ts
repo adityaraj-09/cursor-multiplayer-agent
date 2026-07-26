@@ -1,31 +1,32 @@
-import { loadConfig, saveConfig, clearConfig, type Config } from "./config.js";
+import { saveConfig, clearConfig, loadConfig, type Config } from "./config.js";
 
-export async function login(
+/** Pair CLI with a Clerk-authenticated web account via one-time code. */
+export async function loginWithPairingCode(
   serverUrl: string,
-  email: string,
-  password: string,
+  code: string,
 ): Promise<Config> {
-  const url = `${serverUrl.replace(/\/+$/, "")}/api/auth/login`;
-  const res = await fetch(url, {
+  const base = serverUrl.replace(/\/+$/, "");
+  const normalized = code.trim().toUpperCase().replace(/\s+/g, "");
+  const res = await fetch(`${base}/api/auth/pairing/claim`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email, password }),
+    body: JSON.stringify({ code: normalized }),
   });
 
   if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`Login failed (${res.status}): ${body}`);
+    const err = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(err.error || `Pairing failed (${res.status})`);
   }
 
-  const data = (await res.json()) as { token?: string };
-  if (!data.token) {
-    throw new Error("Server did not return a token");
-  }
+  const data = (await res.json()) as {
+    token: string;
+    user: { email: string };
+  };
 
   const config: Config = {
-    serverUrl: serverUrl.replace(/\/+$/, ""),
+    serverUrl: base,
     token: data.token,
-    email,
+    email: data.user.email,
   };
   saveConfig(config);
   return config;

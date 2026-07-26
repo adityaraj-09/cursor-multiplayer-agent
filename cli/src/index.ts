@@ -3,7 +3,7 @@ import { Command } from "commander";
 import chalk from "chalk";
 import ora from "ora";
 import { createInterface } from "readline";
-import { login, logout } from "./auth.js";
+import { loginWithPairingCode, logout } from "./auth.js";
 import { loadConfig } from "./config.js";
 import { ensureCursorAuth } from "./cursorAuth.js";
 import { startWorker } from "./worker.js";
@@ -20,33 +20,6 @@ function prompt(question: string): Promise<string> {
   });
 }
 
-function promptSecret(question: string): Promise<string> {
-  return new Promise((resolve) => {
-    process.stdout.write(question);
-    const stdin = process.stdin;
-    const wasRaw = stdin.isRaw;
-    if (stdin.isTTY) stdin.setRawMode(true);
-    let input = "";
-    const onData = (ch: Buffer) => {
-      const c = ch.toString();
-      if (c === "\n" || c === "\r") {
-        stdin.removeListener("data", onData);
-        if (stdin.isTTY) stdin.setRawMode(wasRaw ?? false);
-        process.stdout.write("\n");
-        resolve(input);
-      } else if (c === "\u0003") {
-        process.exit(1);
-      } else if (c === "\u007F" || c === "\b") {
-        input = input.slice(0, -1);
-      } else {
-        input += c;
-      }
-    };
-    stdin.resume();
-    stdin.on("data", onData);
-  });
-}
-
 program
   .name("steer")
   .description("CLI worker for Steer — run local Cursor agents")
@@ -54,22 +27,26 @@ program
 
 program
   .command("login")
-  .description("Log in to the Steer server")
+  .description("Pair CLI with your Steer account (Clerk via web pairing code)")
   .action(async () => {
     try {
+      console.log(
+        chalk.gray(
+          "\n  1. Sign in on the web app\n  2. Open /cli-pair and generate a code\n  3. Enter that code below\n",
+        ),
+      );
       const serverUrl = await prompt("Server URL: ");
-      const email = await prompt("Email: ");
-      const password = await promptSecret("Password: ");
+      const code = await prompt("Pairing code: ");
 
-      if (!serverUrl || !email || !password) {
-        console.error(chalk.red("All fields are required."));
+      if (!serverUrl || !code) {
+        console.error(chalk.red("Server URL and pairing code are required."));
         process.exit(1);
       }
 
-      const spinner = ora("Logging in…").start();
+      const spinner = ora("Pairing…").start();
       try {
-        const config = await login(serverUrl, email, password);
-        spinner.succeed(`Logged in as ${chalk.cyan(config.email)}`);
+        const config = await loginWithPairingCode(serverUrl, code);
+        spinner.succeed(`Paired as ${chalk.cyan(config.email)}`);
       } catch (err) {
         spinner.fail((err as Error).message);
         process.exit(1);

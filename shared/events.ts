@@ -126,6 +126,11 @@ export interface WorkerToServerEvents {
     path: string;
     patch: string;
   }) => void;
+  "worker:folder-picked": (data: {
+    requestId: string;
+    path: string | null;
+    error?: string;
+  }) => void;
 }
 
 export interface ServerToWorkerEvents {
@@ -137,6 +142,7 @@ export interface ServerToWorkerEvents {
     sessionId?: string | null;
   }) => void;
   "worker:abort": (data: { roomId: string }) => void;
+  "worker:pick-folder": (data: { requestId: string }) => void;
   "worker:error": (message: string) => void;
 }
 

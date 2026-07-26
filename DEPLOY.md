@@ -17,7 +17,9 @@ The app will be available at `http://localhost:3001` (web) and `http://localhost
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `DATABASE_URL` | prod | `postgres://user:pass@host:5432/db` — omit for SQLite (dev only) |
-| `AUTH_SECRET` | prod | Random string for session tokens. Generate with `openssl rand -hex 32` |
+| `AUTH_SECRET` | prod | Random string for CLI session tokens. Generate with `openssl rand -hex 32` |
+| `CLERK_SECRET_KEY` | yes | From Clerk dashboard |
+| `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | yes | From Clerk dashboard |
 | `KEY_ENCRYPTION_SECRET` | if BYOK | 64-char hex for encrypting stored API keys. `openssl rand -hex 32` |
 | `CURSOR_API_KEY` | if Cloud | Shared server Cursor API key for Cloud runtime |
 | `NEXT_PUBLIC_SOCKET_URL` | prod | Public URL where the API is reachable, e.g. `https://api.example.com` |
@@ -82,7 +84,8 @@ Users who want Local runtime install the CLI:
 
 ```bash
 npm i -g @oblivihon/steer
-steer login     # pairs with their web account
+# Sign in on the web → open /cli-pair → generate code
+steer login     # enter server URL + pairing code
 steer start     # worker stays running, connects to hosted API
 ```
 

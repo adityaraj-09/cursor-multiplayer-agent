@@ -37,6 +37,14 @@ export class WorkerRelay {
   private roomToWorker = new Map<string, string>();
   private eventListeners = new Map<string, WorkerEventCallback>();
   private diffListeners = new Map<string, WorkerDiffCallback>();
+  private folderPickWaiters = new Map<
+    string,
+    {
+      resolve: (path: string | null) => void;
+      reject: (err: Error) => void;
+      timer: ReturnType<typeof setTimeout>;
+    }
+  >();
 
   constructor(
     private io: SocketIOServer,
@@ -95,6 +103,18 @@ export class WorkerRelay {
         if (cb) cb(data.roomId, data.msgId, data.toolName, data.path, data.patch);
       });
 
+      socket.on("worker:folder-picked", (data) => {
+        const waiter = this.folderPickWaiters.get(data.requestId);
+        if (!waiter) return;
+        clearTimeout(waiter.timer);
+        this.folderPickWaiters.delete(data.requestId);
+        if (data.error) {
+          waiter.reject(new Error(data.error));
+        } else {
+          waiter.resolve(data.path);
+        }
+      });
+
       socket.on("disconnect", () => {
         for (const [id, w] of this.workers) {
           if (w.socketId === socket.id) {
@@ -110,10 +130,18 @@ export class WorkerRelay {
     });
   }
 
-  /** Find a free worker for a user. */
+  /** Find a free (not agent-busy) worker for a user. */
   findWorkerForUser(userId: string): WorkerConnection | null {
     for (const w of this.workers.values()) {
       if (w.userId === userId && !w.busy) return w;
+    }
+    return null;
+  }
+
+  /** Any online worker for a user (including busy). */
+  findAnyWorkerForUser(userId: string): WorkerConnection | null {
+    for (const w of this.workers.values()) {
+      if (w.userId === userId) return w;
     }
     return null;
   }
@@ -202,7 +230,39 @@ export class WorkerRelay {
     return false;
   }
 
+  /**
+   * Ask the user's CLI worker to open a native folder picker.
+   * Resolves with absolute path, or null if cancelled.
+   */
+  requestFolderPick(userId: string, timeoutMs = 120_000): Promise<string | null> {
+    const worker = this.findAnyWorkerForUser(userId);
+    if (!worker) {
+      return Promise.reject(
+        new Error(
+          "No online Steer worker. Run `steer start` on your machine first.",
+        ),
+      );
+    }
+
+    const requestId = `${userId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.folderPickWaiters.delete(requestId);
+        reject(new Error("Folder picker timed out — check your worker machine"));
+      }, timeoutMs);
+
+      this.folderPickWaiters.set(requestId, { resolve, reject, timer });
+      worker.socket.emit("worker:pick-folder", { requestId });
+    });
+  }
+
   shutdown(): void {
+    for (const w of this.folderPickWaiters.values()) {
+      clearTimeout(w.timer);
+      w.reject(new Error("Server shutting down"));
+    }
+    this.folderPickWaiters.clear();
     this.workers.clear();
     this.roomToWorker.clear();
     this.eventListeners.clear();

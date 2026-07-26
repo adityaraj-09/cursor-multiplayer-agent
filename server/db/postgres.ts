@@ -97,6 +97,14 @@ async function initSchema() {
       status TEXT NOT NULL DEFAULT 'offline',
       last_seen_at BIGINT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS pairing_codes (
+      code TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      created_at BIGINT NOT NULL,
+      expires_at BIGINT NOT NULL,
+      used INTEGER NOT NULL DEFAULT 0
+    );
   `);
 
   await pool.query(`
@@ -413,7 +421,7 @@ export function createUser(
   id: string,
   email: string,
   name: string,
-  passwordHash: string,
+  passwordHash: string = "",
 ): { id: string; email: string; name: string; created_at: number } {
   const now = Date.now();
   syncQuery(
@@ -421,6 +429,62 @@ export function createUser(
     [id, email, name, passwordHash, now],
   );
   return { id, email, name, created_at: now };
+}
+
+export function upsertUser(
+  id: string,
+  email: string,
+  name: string,
+): { id: string; email: string; name: string; created_at: number } {
+  const now = Date.now();
+  syncQuery(
+    `INSERT INTO users (id, email, name, password_hash, created_at) VALUES ($1,$2,$3,'',$4)
+     ON CONFLICT(id) DO UPDATE SET email = excluded.email, name = excluded.name`,
+    [id, email, name, now],
+  );
+  return getUserById(id) ?? { id, email, name, created_at: now };
+}
+
+export function createPairingCode(
+  code: string,
+  userId: string,
+  expiresAt: number,
+): void {
+  syncQuery(
+    `INSERT INTO pairing_codes (code, user_id, created_at, expires_at, used) VALUES ($1,$2,$3,$4,0)`,
+    [code, userId, Date.now(), expiresAt],
+  );
+}
+
+export function getPairingCode(code: string):
+  | {
+      code: string;
+      user_id: string;
+      created_at: number;
+      expires_at: number;
+      used: number;
+    }
+  | undefined {
+  const rows = syncQuery<{
+    code: string;
+    user_id: string;
+    created_at: string;
+    expires_at: string;
+    used: number;
+  }>(`SELECT * FROM pairing_codes WHERE code = $1`, [code]);
+  if (!rows.length) return undefined;
+  const r = rows[0];
+  return {
+    code: r.code,
+    user_id: r.user_id,
+    created_at: num(r.created_at)!,
+    expires_at: num(r.expires_at)!,
+    used: Number(r.used),
+  };
+}
+
+export function usePairingCode(code: string): void {
+  syncQuery(`UPDATE pairing_codes SET used = 1 WHERE code = $1`, [code]);
 }
 
 export function getUserByEmail(

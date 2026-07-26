@@ -40,6 +40,12 @@ export default function Dashboard() {
           <div className="flex items-center gap-3">
             {!authLoading && user ? (
               <>
+                <Link
+                  href="/cli-pair"
+                  className="h-7 px-2.5 rounded-md text-[12px] text-[#a0a0a0] hover:text-[#e4e4e4] border border-[#2b2b2b] hover:border-[#3c3c3c] transition-colors flex items-center"
+                >
+                  Pair CLI
+                </Link>
                 <span className="text-[12px] text-[#6e6e6e]">{user.name}</span>
                 <button
                   onClick={() => void logout()}

@@ -173,9 +173,17 @@ export class RoomManager {
     const autoCreatePR = Boolean(req.autoCreatePR);
 
     if (runtime === "local") {
-      repoPath = resolve(req.repoPath?.trim() || DEFAULT_REPO_PATH);
-      if (!existsSync(repoPath)) {
+      const raw = req.repoPath?.trim() || DEFAULT_REPO_PATH;
+      // Absolute paths come from the CLI worker folder picker (exist on the
+      // worker machine, not necessarily on this server).
+      repoPath = raw.startsWith("/") || /^[A-Za-z]:[\\/]/.test(raw)
+        ? raw
+        : resolve(raw);
+      if (authMode !== "cli" && !existsSync(repoPath)) {
         throw new Error(`Repo path does not exist: ${repoPath}`);
+      }
+      if (authMode === "cli" && !repoPath) {
+        throw new Error("Select a repository folder");
       }
     } else {
       repoUrl = req.repoUrl?.trim() || "";

@@ -1,43 +1,12 @@
-import { createHash, randomBytes, timingSafeEqual } from "crypto";
+import { createHash, randomBytes } from "crypto";
 import { nanoid } from "nanoid";
+import { createClerkClient, verifyToken } from "@clerk/backend";
 import type { Request, Response, NextFunction } from "express";
-import { AUTH_SECRET } from "./config.js";
+import * as db from "./db.js";
 
 const TOKEN_BYTES = 32;
-const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
-
-export function hashPassword(password: string): string {
-  const salt = randomBytes(16).toString("hex");
-  const hash = createHash("sha256")
-    .update(salt + password)
-    .digest("hex");
-  return `${salt}:${hash}`;
-}
-
-export function verifyPassword(password: string, stored: string): boolean {
-  const [salt, hash] = stored.split(":");
-  if (!salt || !hash) return false;
-  const candidate = createHash("sha256")
-    .update(salt + password)
-    .digest("hex");
-  try {
-    return timingSafeEqual(Buffer.from(hash, "hex"), Buffer.from(candidate, "hex"));
-  } catch {
-    return false;
-  }
-}
-
-export function generateToken(): string {
-  return randomBytes(TOKEN_BYTES).toString("hex");
-}
-
-export function generateInviteCode(): string {
-  return nanoid(12);
-}
-
-export function sessionExpiresAt(): number {
-  return Date.now() + SESSION_TTL_MS;
-}
+const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days (CLI worker tokens)
+const PAIRING_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
 export interface AuthUser {
   id: string;
@@ -54,14 +23,94 @@ declare global {
   }
 }
 
+function clerkSecret(): string | undefined {
+  return process.env.CLERK_SECRET_KEY?.trim() || undefined;
+}
+
+export function clerkConfigured(): boolean {
+  return Boolean(clerkSecret());
+}
+
+function looksLikeJwt(token: string): boolean {
+  return token.split(".").length === 3;
+}
+
+export function generateToken(): string {
+  return randomBytes(TOKEN_BYTES).toString("hex");
+}
+
+export function generateInviteCode(): string {
+  return nanoid(12);
+}
+
+export function generatePairingCode(): string {
+  // Short, human-typable: XXXX-XXXX
+  const raw = randomBytes(4).toString("hex").toUpperCase();
+  return `${raw.slice(0, 4)}-${raw.slice(4)}`;
+}
+
+export function sessionExpiresAt(): number {
+  return Date.now() + SESSION_TTL_MS;
+}
+
+export function pairingExpiresAt(): number {
+  return Date.now() + PAIRING_TTL_MS;
+}
+
+async function resolveClerkUser(token: string): Promise<AuthUser | null> {
+  const secretKey = clerkSecret();
+  if (!secretKey) return null;
+
+try {
+    const payload = await verifyToken(token, { secretKey });
+    const clerkId = String(payload.sub || "");
+    if (!clerkId) return null;
+
+    // Prefer existing local row (avoids a Clerk API call on every request)
+    const existing = db.getUserById(clerkId);
+    if (existing) {
+      return {
+        id: existing.id,
+        email: existing.email,
+        name: existing.name,
+      };
+    }
+
+    const clerk = createClerkClient({ secretKey });
+    const clerkUser = await clerk.users.getUser(clerkId);
+    const email =
+      clerkUser.primaryEmailAddress?.emailAddress ||
+      clerkUser.emailAddresses[0]?.emailAddress ||
+      `${clerkId}@clerk.local`;
+    const name =
+      [clerkUser.firstName, clerkUser.lastName].filter(Boolean).join(" ") ||
+      clerkUser.username ||
+      email.split("@")[0] ||
+      "User";
+
+    const user = db.upsertUser(clerkId, email.toLowerCase(), name);
+    return { id: user.id, email: user.email, name: user.name };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn("[auth] Clerk token verify failed:", msg);
+    return null;
+  }
+}
+
+function resolveSessionUser(token: string): AuthUser | null {
+  const session =
+    db.getSession(hashSessionToken(token)) || db.getSession(token);
+  if (!session || session.expires_at < Date.now()) return null;
+  const user = db.getUserById(session.user_id);
+  if (!user) return null;
+  return { id: user.id, email: user.email, name: user.name };
+}
+
 /**
- * Middleware: extracts Bearer token, looks up session + user.
- * Attaches req.user if valid. Does NOT reject — downstream can check req.user.
+ * Attaches req.user from Clerk JWT or CLI session token.
+ * Does NOT reject — use requireAuth for protected routes.
  */
-export function authMiddleware(
-  getSession: (token: string) => { user_id: string; expires_at: number } | undefined,
-  getUserById: (id: string) => { id: string; email: string; name: string } | undefined,
-) {
+export function authMiddleware() {
   return (req: Request, _res: Response, next: NextFunction): void => {
     const header = req.headers.authorization;
     if (!header?.startsWith("Bearer ")) {
@@ -73,21 +122,29 @@ export function authMiddleware(
       next();
       return;
     }
-    const session = getSession(token);
-    if (!session || session.expires_at < Date.now()) {
+
+    void (async () => {
+      try {
+        if (looksLikeJwt(token)) {
+          const user = await resolveClerkUser(token);
+          if (user) req.user = user;
+        } else {
+          const user = resolveSessionUser(token);
+          if (user) req.user = user;
+        }
+      } catch (err) {
+        console.warn("[auth] token resolve failed:", err);
+      }
       next();
-      return;
-    }
-    const user = getUserById(session.user_id);
-    if (user) {
-      req.user = { id: user.id, email: user.email, name: user.name };
-    }
-    next();
+    })();
   };
 }
 
-/** Middleware: rejects if not authenticated. Use after authMiddleware. */
-export function requireAuth(req: Request, res: Response, next: NextFunction): void {
+export function requireAuth(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): void {
   if (!req.user) {
     res.status(401).json({ error: "Authentication required" });
     return;
@@ -95,12 +152,7 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
   next();
 }
 
-/** Sign a simple HMAC for worker tokens (not JWT, just token lookup). */
-export function signWorkerToken(workerId: string, userId: string): string {
-  const payload = `${workerId}:${userId}:${Date.now()}`;
-  const sig = createHash("sha256")
-    .update(AUTH_SECRET + payload)
-    .digest("hex")
-    .slice(0, 16);
-  return `${payload}:${sig}`;
+/** Hash session tokens at rest (store hash, look up by hash). */
+export function hashSessionToken(token: string): string {
+  return createHash("sha256").update(token).digest("hex");
 }

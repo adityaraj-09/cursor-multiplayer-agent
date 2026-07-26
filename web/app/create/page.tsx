@@ -7,7 +7,9 @@ import {
   createRoom,
   fetchAuthStatus,
   fetchModels,
+  fetchOnlineWorkers,
   fetchRepositories,
+  pickLocalFolder,
   setServerKey,
 } from "../../lib/api";
 import type {
@@ -47,6 +49,8 @@ export default function CreateSession() {
   const [savingServerKey, setSavingServerKey] = useState(false);
   const [error, setError] = useState("");
   const [creating, setCreating] = useState(false);
+  const [pickingFolder, setPickingFolder] = useState(false);
+  const [workerOnline, setWorkerOnline] = useState(false);
 
   const refreshAuth = () =>
     fetchAuthStatus()
@@ -61,6 +65,38 @@ export default function CreateSession() {
   useEffect(() => {
     void refreshAuth();
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const check = () => {
+      fetchOnlineWorkers()
+        .then((workers) => {
+          if (!cancelled) setWorkerOnline(workers.length > 0);
+        })
+        .catch(() => {
+          if (!cancelled) setWorkerOnline(false);
+        });
+    };
+    check();
+    const interval = setInterval(check, 4000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, []);
+
+  const handlePickFolder = async () => {
+    setPickingFolder(true);
+    setError("");
+    try {
+      const path = await pickLocalFolder();
+      setRepoPath(path);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to pick folder");
+    } finally {
+      setPickingFolder(false);
+    }
+  };
 
   const selectRuntime = (r: AgentRuntime) => {
     setRuntime(r);
@@ -164,6 +200,10 @@ export default function CreateSession() {
     }
     if (runtime === "cloud" && !repoUrl.trim()) {
       setError("Choose or paste a GitHub repo URL");
+      return;
+    }
+    if (runtime === "local" && !repoPath.trim()) {
+      setError("Select a local repository folder");
       return;
     }
 
@@ -348,15 +388,31 @@ export default function CreateSession() {
           {runtime === "local" ? (
             <div>
               <label className="block text-[12px] text-[#a0a0a0] mb-1.5">
-                Repository path
+                Repository folder
               </label>
-              <input
-                type="text"
-                value={repoPath}
-                onChange={(e) => setRepoPath(e.target.value)}
-                placeholder="./demo-repo"
-                className={`${inputClass} font-mono`}
-              />
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={repoPath}
+                  onChange={(e) => setRepoPath(e.target.value)}
+                  placeholder="Select a folder on your machine…"
+                  readOnly
+                  className={`${inputClass} font-mono flex-1 cursor-default`}
+                />
+                <button
+                  type="button"
+                  onClick={() => void handlePickFolder()}
+                  disabled={pickingFolder || !workerOnline}
+                  className="h-10 px-3 rounded-md bg-[#252525] border border-[#2b2b2b] text-[13px] text-[#e4e4e4] hover:border-[#3c3c3c] disabled:opacity-40 shrink-0"
+                >
+                  {pickingFolder ? "Opening…" : "Browse…"}
+                </button>
+              </div>
+              <p className="text-[11px] text-[#6e6e6e] mt-1.5">
+                {workerOnline
+                  ? "Opens a folder picker on the machine running `steer start`."
+                  : "Start your CLI worker first (`steer start`), then browse."}
+              </p>
             </div>
           ) : (
             <>
