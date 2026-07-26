@@ -39,6 +39,7 @@ export const deleteExpiredSessions = backend.deleteExpiredSessions;
 export const createPairingCode = backend.createPairingCode;
 export const getPairingCode = backend.getPairingCode;
 export const usePairingCode = backend.usePairingCode;
+export const setRoomOwner = backend.setRoomOwner;
 export const addRoomMember = backend.addRoomMember;
 export const getRoomMembers = backend.getRoomMembers;
 export const isRoomMember = backend.isRoomMember;

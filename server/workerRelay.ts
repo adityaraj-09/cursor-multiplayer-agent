@@ -159,6 +159,14 @@ export class WorkerRelay {
     return null;
   }
 
+  /** First free worker (legacy rooms with no owner_id). */
+  findFirstFreeWorker(): WorkerConnection | null {
+    for (const w of this.workers.values()) {
+      if (!w.busy) return w;
+    }
+    return null;
+  }
+
   /** Any online worker for a user (including busy). */
   findAnyWorkerForUser(userId: string): WorkerConnection | null {
     for (const w of this.workers.values()) {

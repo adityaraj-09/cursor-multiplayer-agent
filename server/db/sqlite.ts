@@ -166,9 +166,10 @@ const stmts = {
     INSERT INTO rooms (
       id, name, repo_path, agent_command, created_at, last_active_at, status,
       runtime, auth_mode, model_id, repo_url, starting_ref, cursor_agent_id,
-      pr_url, auto_create_pr, key_ciphertext, key_hint
-    ) VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      pr_url, auto_create_pr, key_ciphertext, key_hint, owner_id
+    ) VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `),
+  updateRoomOwner: db.prepare(`UPDATE rooms SET owner_id = ? WHERE id = ?`),
   listRooms: db.prepare(`SELECT * FROM rooms ORDER BY last_active_at DESC`),
   getRoom: db.prepare(`SELECT * FROM rooms WHERE id = ?`),
   updateActivity: db.prepare(
@@ -318,6 +319,7 @@ export interface CreateRoomInput {
   autoCreatePR?: boolean;
   keyCiphertext?: string | null;
   keyHint?: string | null;
+  ownerId?: string | null;
 }
 
 function rowToMessage(r: {
@@ -365,8 +367,13 @@ export function createRoom(input: CreateRoomInput): RoomRow {
     input.autoCreatePR ? 1 : 0,
     input.keyCiphertext ?? null,
     input.keyHint ?? null,
+    input.ownerId ?? null,
   );
   return stmts.getRoom.get(input.id) as RoomRow;
+}
+
+export function setRoomOwner(roomId: string, ownerId: string): void {
+  stmts.updateRoomOwner.run(ownerId, roomId);
 }
 
 export function listRooms(): RoomRow[] {

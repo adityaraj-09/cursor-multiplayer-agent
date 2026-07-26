@@ -58,6 +58,7 @@ export interface CreateRoomRequest {
   startingRef?: string;
   autoCreatePR?: boolean;
   apiKey?: string;
+  ownerId?: string;
 }
 
 type AgentBackend = AgentRunner | SdkAgentSession;
@@ -216,6 +217,11 @@ export class RoomManager {
       agent = sdk;
     }
 
+    const ownerId = req.ownerId?.trim() || null;
+    if (authMode === "cli" && !ownerId) {
+      throw new Error("Sign in required to create a local CLI session");
+    }
+
     const row = db.createRoom({
       id,
       name,
@@ -230,7 +236,16 @@ export class RoomManager {
       autoCreatePR,
       keyCiphertext,
       keyHint,
+      ownerId,
     });
+
+    if (ownerId) {
+      try {
+        db.addRoomMember(id, ownerId, "owner");
+      } catch {
+        // ignore duplicate membership
+      }
+    }
 
     this.initRoomState(row, agent);
     console.log(
@@ -419,10 +434,21 @@ export class RoomManager {
     if (room.row.auth_mode !== "cli") return false;
     if (room.row.runtime !== "local") return false;
 
-    const ownerId = room.row.owner_id ?? undefined;
-    if (!ownerId) return false;
+    let ownerId = room.row.owner_id ?? undefined;
+    let worker = ownerId
+      ? this.workerRelay.findWorkerForUser(ownerId)
+      : null;
 
-    const worker = this.workerRelay.findWorkerForUser(ownerId);
+    // Legacy rooms created before owner tracking — attach first free worker.
+    if (!worker && !ownerId) {
+      worker = this.workerRelay.findFirstFreeWorker();
+      if (worker) {
+        ownerId = worker.userId;
+        db.setRoomOwner(room.id, ownerId);
+        room.row.owner_id = ownerId;
+      }
+    }
+
     if (!worker) return false;
 
     this.io.to(room.id).emit("agent-status", "running");
@@ -595,6 +621,29 @@ export class RoomManager {
   private async runAgent(room: RoomState, prompt: string): Promise<void> {
     // Try dispatching to a connected CLI worker first (production local rooms)
     if (this.tryDispatchToWorker(room, prompt)) return;
+
+    // CLI rooms whose repo isn't on this host must use the worker — don't
+    // spawn `cursor` here (ENOENT on Render / split deploy).
+    if (
+      room.row.auth_mode === "cli" &&
+      (!room.row.repo_path || !existsSync(room.row.repo_path))
+    ) {
+      const msg = room.row.owner_id
+        ? "No online Steer worker for this account. Run `steer start` on your machine."
+        : "No online Steer worker. Run `steer start`, or recreate the session while signed in.";
+      const errMsg: ChatMessage = {
+        id: nanoid(12),
+        roomId: room.id,
+        role: "assistant",
+        content: msg,
+        status: "error",
+        ts: Date.now(),
+      };
+      db.insertMessage(errMsg);
+      this.io.to(room.id).emit("chat-message", errMsg);
+      this.io.to(room.id).emit("agent-status", "error", msg);
+      return;
+    }
 
     this.io.to(room.id).emit("agent-status", "running");
 

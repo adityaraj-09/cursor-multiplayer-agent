@@ -262,7 +262,7 @@ app.get("/api/rooms/:id", (req, res) => {
   res.json(room);
 });
 
-app.post("/api/rooms", async (req, res) => {
+app.post("/api/rooms", requireAuth, async (req, res) => {
   try {
     const runtime = req.body?.runtime === "cloud" ? "cloud" : "local";
     const authMode =
@@ -279,6 +279,7 @@ app.post("/api/rooms", async (req, res) => {
       startingRef: req.body?.startingRef,
       autoCreatePR: Boolean(req.body?.autoCreatePR),
       apiKey: req.body?.apiKey,
+      ownerId: req.user!.id,
     });
     res.status(201).json(room);
   } catch (err) {
