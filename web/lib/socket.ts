@@ -1,0 +1,46 @@
+import { io, Socket } from "socket.io-client";
+import type {
+  ServerToClientEvents,
+  ClientToServerEvents,
+} from "../../shared/events";
+
+export type AppSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
+
+// Next.js rewrites do not proxy WebSocket upgrades — connect to Express directly.
+const SOCKET_URL =
+  process.env.NEXT_PUBLIC_SOCKET_URL || "http://localhost:3000";
+
+let socketInstance: AppSocket | null = null;
+let currentKey: string | null = null;
+
+export function getSocket(roomId: string, name: string): AppSocket {
+  const key = `${roomId}:${name}`;
+
+  if (socketInstance && currentKey === key && socketInstance.connected) {
+    return socketInstance;
+  }
+
+  if (socketInstance) {
+    socketInstance.disconnect();
+    socketInstance = null;
+  }
+
+  currentKey = key;
+  socketInstance = io(SOCKET_URL, {
+    query: { roomId, name },
+    transports: ["websocket"],
+    path: "/socket.io/",
+    reconnection: true,
+    reconnectionAttempts: 10,
+  });
+
+  return socketInstance;
+}
+
+export function disconnectSocket(): void {
+  if (socketInstance) {
+    socketInstance.disconnect();
+    socketInstance = null;
+    currentKey = null;
+  }
+}
