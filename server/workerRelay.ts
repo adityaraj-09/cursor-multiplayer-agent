@@ -39,6 +39,10 @@ export class WorkerRelay {
   private roomToWorker = new Map<string, string>();
   private eventListeners = new Map<string, WorkerEventCallback>();
   private diffListeners = new Map<string, WorkerDiffCallback>();
+  private roomLostListeners = new Set<(roomIds: string[]) => void>();
+  private roomDisconnectSoftListeners = new Set<(roomIds: string[]) => void>();
+  private roomGraceTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private static readonly DISCONNECT_GRACE_MS = 5 * 60_000;
   private folderPickWaiters = new Map<
     string,
     {
@@ -100,15 +104,39 @@ export class WorkerRelay {
           workerId: info.workerId || workerId,
           userId,
           machineName: info.machineName || "unknown",
-          busy: false,
+          busy: Boolean(info.busy),
         };
         this.workers.set(conn.workerId, conn);
+        (socket as unknown as Record<string, unknown>)._workerId = conn.workerId;
         console.log(
           `[WorkerRelay] Worker "${conn.machineName}" (${conn.workerId}) connected for user ${userId}`,
         );
+
+        // Re-bind rooms that were mid-run when this worker dropped (agent kept going).
+        if (info.activeRoomId) {
+          this.roomToWorker.set(info.activeRoomId, conn.workerId);
+          conn.busy = true;
+          this.clearRoomGrace(info.activeRoomId);
+          console.log(
+            `[WorkerRelay] Resumed room ${info.activeRoomId} on reconnected worker`,
+          );
+        }
       });
 
       socket.on("worker:agent-event", (data) => {
+        this.noteRoomActivity(data.roomId);
+        // Re-bind room→worker if events arrive after a reconnect mid-run
+        const wId = (socket as unknown as Record<string, unknown>)._workerId as
+          | string
+          | undefined;
+        if (wId && this.workers.has(wId)) {
+          this.roomToWorker.set(data.roomId, wId);
+          const w = this.workers.get(wId);
+          if (w) w.busy = data.event?.kind !== "done";
+          if (data.event?.kind === "done" || data.event?.kind === "error") {
+            // keep busy until done handled by room manager release
+          }
+        }
         const cb = this.eventListeners.get(data.roomId);
         if (cb) cb(data.roomId, data.event);
       });
@@ -143,18 +171,106 @@ export class WorkerRelay {
       });
 
       socket.on("disconnect", () => {
+        let removedWorkerId: string | null = null;
+        let removedUserId: string | null = null;
         for (const [id, w] of this.workers) {
           if (w.socketId === socket.id) {
             console.log(`[WorkerRelay] Worker "${w.machineName}" disconnected`);
+            removedWorkerId = id;
+            removedUserId = w.userId;
             this.workers.delete(id);
-            for (const [roomId, wId] of this.roomToWorker) {
-              if (wId === id) this.roomToWorker.delete(roomId);
-            }
             break;
+          }
+        }
+
+        const affectedRooms: string[] = [];
+        if (removedWorkerId) {
+          for (const [roomId, wId] of [...this.roomToWorker.entries()]) {
+            if (wId === removedWorkerId) {
+              affectedRooms.push(roomId);
+              // Keep mapping cleared until reconnect; agent may still be running
+              // on the worker machine and will resume via worker:ready.
+              this.roomToWorker.delete(roomId);
+              this.scheduleRoomGrace(roomId);
+            }
+          }
+        }
+
+        // Fail in-flight folder/model requests for this user
+        if (removedUserId) {
+          for (const [reqId, waiter] of [...this.folderPickWaiters.entries()]) {
+            if (reqId.startsWith(removedUserId)) {
+              clearTimeout(waiter.timer);
+              this.folderPickWaiters.delete(reqId);
+              waiter.reject(new Error("Worker disconnected"));
+            }
+          }
+          for (const [reqId, waiter] of [...this.listModelsWaiters.entries()]) {
+            if (reqId.startsWith(removedUserId)) {
+              clearTimeout(waiter.timer);
+              this.listModelsWaiters.delete(reqId);
+              waiter.reject(new Error("Worker disconnected"));
+            }
+          }
+        }
+
+        // Soft notify only — agent may keep running; hard cleanup after grace.
+        if (affectedRooms.length > 0) {
+          for (const cb of this.roomDisconnectSoftListeners) {
+            try {
+              cb(affectedRooms);
+            } catch (err) {
+              console.error("[WorkerRelay] soft disconnect listener error:", err);
+            }
           }
         }
       });
     });
+  }
+
+  /** Soft: worker socket dropped (agent may still be running locally). */
+  onRoomsDisconnected(cb: (roomIds: string[]) => void): () => void {
+    this.roomDisconnectSoftListeners.add(cb);
+    return () => this.roomDisconnectSoftListeners.delete(cb);
+  }
+
+  /** Hard: grace period expired without reconnect / completion. */
+  onRoomsLost(cb: (roomIds: string[]) => void): () => void {
+    this.roomLostListeners.add(cb);
+    return () => this.roomLostListeners.delete(cb);
+  }
+
+  clearRoomListeners(roomId: string): void {
+    this.eventListeners.delete(roomId);
+    this.diffListeners.delete(roomId);
+  }
+
+  private scheduleRoomGrace(roomId: string): void {
+    this.clearRoomGrace(roomId);
+    const timer = setTimeout(() => {
+      this.roomGraceTimers.delete(roomId);
+      for (const cb of this.roomLostListeners) {
+        try {
+          cb([roomId]);
+        } catch (err) {
+          console.error("[WorkerRelay] roomLost (grace) listener error:", err);
+        }
+      }
+    }, WorkerRelay.DISCONNECT_GRACE_MS);
+    this.roomGraceTimers.set(roomId, timer);
+  }
+
+  private clearRoomGrace(roomId: string): void {
+    const t = this.roomGraceTimers.get(roomId);
+    if (t) {
+      clearTimeout(t);
+      this.roomGraceTimers.delete(roomId);
+    }
+  }
+
+  /** Cancel disconnect grace when the room gets agent activity again. */
+  noteRoomActivity(roomId: string): void {
+    this.clearRoomGrace(roomId);
   }
 
   /** Find a free (not agent-busy) worker for a user. */
@@ -355,6 +471,10 @@ export class WorkerRelay {
   }
 
   shutdown(): void {
+    for (const t of this.roomGraceTimers.values()) clearTimeout(t);
+    this.roomGraceTimers.clear();
+    this.roomLostListeners.clear();
+    this.roomDisconnectSoftListeners.clear();
     for (const w of this.folderPickWaiters.values()) {
       clearTimeout(w.timer);
       w.reject(new Error("Server shutting down"));

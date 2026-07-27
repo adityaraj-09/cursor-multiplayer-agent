@@ -24,6 +24,8 @@ interface AbortPayload {
   roomId: string;
 }
 
+type QueuedEmit = { event: string; payload: unknown };
+
 function generateWorkerId(email: string): string {
   const raw = `${hostname()}-${email}`;
   return createHash("sha256").update(raw).digest("hex").slice(0, 16);
@@ -42,6 +44,12 @@ export function startWorker(repoPathOverride?: string): void {
   console.log(chalk.blue("Connecting to"), serverUrl);
   console.log(chalk.gray(`Worker ID: ${workerId}`));
 
+  let activeRoomId: string | null = null;
+  let runSeq = 0;
+  /** Events produced while offline — flushed on reconnect (agent keeps running). */
+  const offlineQueue: QueuedEmit[] = [];
+  const MAX_QUEUE = 500;
+
   const socket: Socket = io(`${serverUrl}/worker`, {
     auth: { token: config.token },
     reconnection: true,
@@ -51,16 +59,58 @@ export function startWorker(repoPathOverride?: string): void {
     transports: ["websocket", "polling"],
   });
 
-  socket.on("connect", () => {
-    console.log(chalk.green("✓ Connected to server"));
+  const emitOrQueue = (event: string, payload: unknown): void => {
+    if (socket.connected) {
+      socket.emit(event, payload);
+      return;
+    }
+    if (offlineQueue.length >= MAX_QUEUE) offlineQueue.shift();
+    offlineQueue.push({ event, payload });
+  };
+
+  const flushQueue = (): void => {
+    if (!offlineQueue.length) return;
+    console.log(
+      chalk.gray(`  Flushing ${offlineQueue.length} buffered event(s)…`),
+    );
+    const batch = offlineQueue.splice(0, offlineQueue.length);
+    for (const item of batch) {
+      socket.emit(item.event, item.payload);
+    }
+  };
+
+  const announceReady = () => {
     socket.emit("worker:ready", {
       workerId,
       machineName: hostname(),
+      activeRoomId,
+      busy: Boolean(activeRoomId),
     });
+  };
+
+  socket.on("connect", () => {
+    console.log(chalk.green("✓ Connected to server"));
+    if (activeRoomId) {
+      console.log(
+        chalk.cyan(
+          `  Agent still running for room ${activeRoomId} — resuming stream`,
+        ),
+      );
+    }
+    announceReady();
+    flushQueue();
   });
 
   socket.on("disconnect", (reason) => {
     console.log(chalk.yellow(`Disconnected: ${reason}`));
+    if (activeRoomId) {
+      console.log(
+        chalk.yellow(
+          `  Agent keeps running locally for room ${activeRoomId} (will sync on reconnect)`,
+        ),
+      );
+    }
+    // Do NOT abortAgent() — Cursor should finish even if the socket drops.
   });
 
   socket.on("connect_error", (err) => {
@@ -71,16 +121,48 @@ export function startWorker(repoPathOverride?: string): void {
     const { roomId, prompt, repoPath: payloadRepoPath, modelId } = payload;
     const repoPath = repoPathOverride || payloadRepoPath;
 
+    if (activeRoomId) {
+      console.log(
+        chalk.yellow(
+          `  Rejecting new prompt — already running for room ${activeRoomId}`,
+        ),
+      );
+      emitOrQueue("worker:agent-event", {
+        roomId,
+        event: {
+          kind: "error",
+          message: "Worker is already running another prompt",
+        } satisfies AgentStreamEvent,
+      });
+      emitOrQueue("worker:agent-event", {
+        roomId,
+        event: { kind: "done", result: "" } satisfies AgentStreamEvent,
+      });
+      return;
+    }
+
+    const thisRun = ++runSeq;
+    activeRoomId = roomId;
+
     console.log(chalk.cyan(`\n━━━ Running prompt in room ${roomId} ━━━`));
     console.log(chalk.gray(`Repo: ${repoPath}`));
     console.log(chalk.gray(`Model: ${modelId}`));
-    console.log(chalk.gray(`Prompt: ${prompt.slice(0, 100)}${prompt.length > 100 ? "…" : ""}`));
+    console.log(
+      chalk.gray(
+        `Prompt: ${prompt.slice(0, 100)}${prompt.length > 100 ? "…" : ""}`,
+      ),
+    );
 
     const editedPaths = new Set<string>();
     let lastMsgId = "";
+    let emittedTerminal = false;
 
     const onEvent = (event: AgentStreamEvent) => {
-      socket.emit("worker:agent-event", { roomId, event });
+      if (thisRun !== runSeq) return;
+      if (event.kind === "done" || event.kind === "error") {
+        emittedTerminal = true;
+      }
+      emitOrQueue("worker:agent-event", { roomId, event });
 
       if (event.kind === "tool_start") {
         console.log(chalk.yellow(`  ▸ ${event.name} ${event.detail}`));
@@ -99,13 +181,29 @@ export function startWorker(repoPathOverride?: string): void {
       }
     };
 
+    const finishRun = (terminal?: AgentStreamEvent) => {
+      if (thisRun !== runSeq) return;
+      if (terminal && !emittedTerminal) {
+        emitOrQueue("worker:agent-event", { roomId, event: terminal });
+        emittedTerminal = true;
+      } else if (!emittedTerminal) {
+        emitOrQueue("worker:agent-event", {
+          roomId,
+          event: { kind: "done", result: "" } satisfies AgentStreamEvent,
+        });
+        emittedTerminal = true;
+      }
+      if (activeRoomId === roomId) activeRoomId = null;
+    };
+
     runAgent(repoPath, prompt, modelId, onEvent)
       .then(async () => {
+        if (thisRun !== runSeq) return;
         for (const filePath of editedPaths) {
           try {
             const patch = await getFileDiff(repoPath, filePath);
             if (patch) {
-              socket.emit("worker:file-diff", {
+              emitOrQueue("worker:file-diff", {
                 roomId,
                 msgId: lastMsgId,
                 toolName: "edit",
@@ -117,12 +215,16 @@ export function startWorker(repoPathOverride?: string): void {
             // diff failures are non-fatal
           }
         }
+        finishRun({ kind: "done", result: "" });
       })
       .catch((err) => {
-        console.error(chalk.red(`Agent error: ${(err as Error).message}`));
-        socket.emit("worker:agent-event", {
+        if (thisRun !== runSeq) return;
+        const message = (err as Error).message || "Agent error";
+        console.error(chalk.red(`Agent error: ${message}`));
+        finishRun({ kind: "error", message });
+        emitOrQueue("worker:agent-event", {
           roomId,
-          event: { kind: "error", message: (err as Error).message } as AgentStreamEvent,
+          event: { kind: "done", result: "" } satisfies AgentStreamEvent,
         });
       });
   });
@@ -143,14 +245,14 @@ export function startWorker(repoPathOverride?: string): void {
         } else {
           console.log(chalk.yellow("  Folder pick cancelled"));
         }
-        socket.emit("worker:folder-picked", {
+        emitOrQueue("worker:folder-picked", {
           requestId: payload.requestId,
           path,
         });
       } catch (err) {
         const message = (err as Error).message;
         console.error(chalk.red(`  ✗ Folder picker error: ${message}`));
-        socket.emit("worker:folder-picked", {
+        emitOrQueue("worker:folder-picked", {
           requestId: payload.requestId,
           path: null,
           error: message,
@@ -166,14 +268,14 @@ export function startWorker(repoPathOverride?: string): void {
       try {
         const models = await listLocalModels();
         console.log(chalk.green(`  ✓ ${models.length} models`));
-        socket.emit("worker:models-listed", {
+        emitOrQueue("worker:models-listed", {
           requestId: payload.requestId,
           models,
         });
       } catch (err) {
         const message = (err as Error).message;
         console.error(chalk.red(`  ✗ List models error: ${message}`));
-        socket.emit("worker:models-listed", {
+        emitOrQueue("worker:models-listed", {
           requestId: payload.requestId,
           error: message,
         });

@@ -77,6 +77,10 @@ interface RoomState {
   toolMsgIds: Map<string, string>;
   toolPaths: Map<string, string>;
   cloudMeta: CloudMeta;
+  /** True while a CLI worker is running a prompt for this room. */
+  workerRunActive: boolean;
+  /** Unsubscribe hooks for the active worker run. */
+  workerRunCleanups: (() => void)[];
 }
 
 function normalizeAuthMode(
@@ -122,6 +126,12 @@ export class RoomManager {
     private workerRelay?: WorkerRelay,
   ) {
     this.restoreRooms();
+    this.workerRelay?.onRoomsDisconnected((roomIds) => {
+      for (const roomId of roomIds) this.handleWorkerSoftDisconnect(roomId);
+    });
+    this.workerRelay?.onRoomsLost((roomIds) => {
+      for (const roomId of roomIds) this.handleWorkerLost(roomId);
+    });
   }
 
   private restoreRooms(): void {
@@ -325,6 +335,8 @@ export class RoomManager {
         prUrl: row.pr_url || undefined,
         autoCreatePR: Boolean(row.auto_create_pr),
       },
+      workerRunActive: false,
+      workerRunCleanups: [],
     });
   }
 
@@ -358,7 +370,10 @@ export class RoomManager {
       socket.emit("cloud-meta", room.cloudMeta);
     }
 
-    socket.emit("agent-status", room.agent.isBusy() ? "running" : "idle");
+    socket.emit(
+      "agent-status",
+      room.workerRunActive || room.agent.isBusy() ? "running" : "idle",
+    );
     this.broadcastPresence(room);
     db.updateRoomActivity(roomId);
     console.log(`${name} joined room ${roomId} (${socket.id})`);
@@ -511,6 +526,11 @@ export class RoomManager {
 
     if (!worker) return false;
 
+    // Clear any leftover subscriptions from a previous interrupted run
+    for (const c of room.workerRunCleanups) c();
+    room.workerRunCleanups = [];
+    room.workerRunActive = true;
+
     this.io.to(room.id).emit("agent-status", "running");
 
     let assistantId: string | null = null;
@@ -518,8 +538,26 @@ export class RoomManager {
     let seenFullText = "";
     let bubbleBaseLen = 0;
     let afterTools = false;
+    let finished = false;
     room.toolMsgIds.clear();
     room.toolPaths.clear();
+
+    const finishWorkerRun = (
+      status: "idle" | "error" = "idle",
+      detail?: string,
+    ) => {
+      if (finished) return;
+      finished = true;
+      room.workerRunActive = false;
+      closeAssistant(status === "error" ? "error" : "done");
+      if (status === "error" && detail) {
+        this.io.to(room.id).emit("agent-status", "error", detail);
+      }
+      this.io.to(room.id).emit("agent-status", "idle");
+      this.workerRelay?.releaseWorker(room.id);
+      for (const c of room.workerRunCleanups) c();
+      room.workerRunCleanups = [];
+    };
 
     const closeAssistant = (status: ChatMessage["status"] = "done") => {
       if (!assistantId) return;
@@ -633,15 +671,11 @@ export class RoomManager {
         }
         case "error":
           emitAssistantFromWorker(event.message || "Unknown error", "error");
-          this.io.to(room.id).emit("agent-status", "error", event.message);
+          finishWorkerRun("error", event.message || "Agent error");
           break;
         case "done":
           emitAssistantFromWorker(event.result || "", "done");
-          closeAssistant("done");
-          this.io.to(room.id).emit("agent-status", "idle");
-          this.workerRelay?.releaseWorker(room.id);
-          unsubEvent();
-          unsubDiff();
+          finishWorkerRun("idle");
           break;
       }
     });
@@ -660,6 +694,8 @@ export class RoomManager {
       });
     });
 
+    room.workerRunCleanups.push(unsubEvent, unsubDiff);
+
     const dispatched = this.workerRelay.dispatchToWorker(
       room.id,
       worker.workerId,
@@ -670,12 +706,63 @@ export class RoomManager {
     );
 
     if (!dispatched) {
-      unsubEvent();
-      unsubDiff();
+      finishWorkerRun("error", "Failed to reach Steer worker");
       return false;
     }
 
     return true;
+  }
+
+  /**
+   * Brief socket drop — keep the run active; agent may still be working on the CLI.
+   */
+  private handleWorkerSoftDisconnect(roomId: string): void {
+    const room = this.rooms.get(roomId);
+    if (!room || !room.workerRunActive) return;
+
+    const msg =
+      "Worker connection lost — agent is still running on your machine and will sync when `steer` reconnects.";
+    const note: ChatMessage = {
+      id: nanoid(12),
+      roomId: room.id,
+      role: "assistant",
+      content: msg,
+      status: "done",
+      ts: Date.now(),
+    };
+    db.insertMessage(note);
+    this.io.to(room.id).emit("chat-message", note);
+    // Stay "running" so the UI reflects an in-flight agent.
+    this.io.to(room.id).emit("agent-status", "running");
+  }
+
+  /** Grace period expired with no reconnect — unblock the room. */
+  private handleWorkerLost(roomId: string): void {
+    const room = this.rooms.get(roomId);
+    if (!room) return;
+    if (!room.workerRunActive && room.workerRunCleanups.length === 0) return;
+
+    console.warn(`[RoomManager] Worker lost for room ${roomId} — clearing run`);
+    room.workerRunActive = false;
+    for (const c of room.workerRunCleanups) c();
+    room.workerRunCleanups = [];
+    this.workerRelay?.releaseWorker(roomId);
+    this.workerRelay?.clearRoomListeners(roomId);
+
+    const msg =
+      "Worker did not reconnect in time. If the agent finished locally, send a new message to continue.";
+    const errMsg: ChatMessage = {
+      id: nanoid(12),
+      roomId: room.id,
+      role: "assistant",
+      content: msg,
+      status: "error",
+      ts: Date.now(),
+    };
+    db.insertMessage(errMsg);
+    this.io.to(room.id).emit("chat-message", errMsg);
+    this.io.to(room.id).emit("agent-status", "error", msg);
+    this.io.to(room.id).emit("agent-status", "idle");
   }
 
   private async runAgent(room: RoomState, prompt: string): Promise<void> {

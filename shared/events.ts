@@ -119,6 +119,8 @@ export interface WorkerToServerEvents {
   "worker:ready": (info: {
     workerId: string;
     machineName: string;
+    activeRoomId?: string | null;
+    busy?: boolean;
   }) => void;
   "worker:agent-event": (data: {
     roomId: string;
