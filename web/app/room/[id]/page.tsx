@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { useSocket } from "../../../hooks/useSocket";
@@ -10,6 +10,11 @@ import {
   fetchRoomModels,
   updateRoomModel,
 } from "../../../lib/api";
+import {
+  FALLBACK_MODELS,
+  getCachedModels,
+  setCachedModels,
+} from "../../../lib/modelsCache";
 import ChatPanel from "../../../components/ChatPanel";
 import SidePanel from "../../../components/SidePanel";
 import PresenceBar from "../../../components/PresenceBar";
@@ -22,22 +27,33 @@ export default function RoomPage() {
   const roomId = params.id as string;
   const router = useRouter();
   const { user, loading: authLoading } = useAuth();
+  const userId = user?.id;
+  const userNameHint = user?.name;
 
   const [roomInfo, setRoomInfo] = useState<RoomInfo | null>(null);
-  const [userName, setUserName] = useState<string | null>(null);
-  const [nameInput, setNameInput] = useState("");
+  const [userName, setUserName] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
+    return localStorage.getItem("agent-session-name");
+  });
+  const [nameInput, setNameInput] = useState(
+    () =>
+      (typeof window !== "undefined" &&
+        localStorage.getItem("agent-session-name")) ||
+      "",
+  );
   const [roomError, setRoomError] = useState("");
   const [loadingRoom, setLoadingRoom] = useState(true);
-
-  useEffect(() => {
-    const saved = localStorage.getItem("agent-session-name");
-    if (saved) setNameInput(saved);
-  }, []);
+  const joinedRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (authLoading) return;
-    if (!user) {
+    if (!userId) {
       router.replace(`/login?redirect=/room/${roomId}`);
+      return;
+    }
+
+    if (joinedRef.current === roomId) {
+      setLoadingRoom(false);
       return;
     }
 
@@ -47,10 +63,18 @@ export default function RoomPage() {
     fetchOrJoinRoom(roomId)
       .then((info) => {
         if (cancelled) return;
+        joinedRef.current = roomId;
         setRoomInfo(info);
-        if (!nameInput.trim() && user.name) {
-          setNameInput(user.name);
-        }
+        setUserName((prev) => {
+          if (prev) return prev;
+          const preferred =
+            localStorage.getItem("agent-session-name") ||
+            userNameHint ||
+            "Guest";
+          localStorage.setItem("agent-session-name", preferred);
+          setNameInput(preferred);
+          return preferred;
+        });
       })
       .catch(() => {
         if (!cancelled) setRoomError("Room not found or you can’t join it");
@@ -62,16 +86,15 @@ export default function RoomPage() {
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [roomId, user, authLoading, router]);
+  }, [roomId, userId, authLoading, router, userNameHint]);
 
   const handleJoin = () => {
-    const name = nameInput.trim() || user?.name || "Guest";
+    const name = nameInput.trim() || userNameHint || "Guest";
     localStorage.setItem("agent-session-name", name);
     setUserName(name);
   };
 
-  if (authLoading || (user && loadingRoom && !roomError)) {
+  if (authLoading || (userId && loadingRoom && !roomInfo && !roomError)) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-[#141414]">
         <p className="text-[#6e6e6e] text-[13px]">Loading session…</p>
@@ -79,7 +102,7 @@ export default function RoomPage() {
     );
   }
 
-  if (!user) {
+  if (!userId) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-[#141414]">
         <p className="text-[#6e6e6e] text-[13px]">Redirecting to sign in…</p>
@@ -181,8 +204,11 @@ function LiveRoom({
   const runtime = roomInfo?.runtime || "local";
   const authMode = roomInfo?.authMode || "cli";
   const modelId = liveModelId || roomInfo?.modelId || "auto";
+  const cacheKey = `room:${roomId}`;
 
-  const [models, setModels] = useState<ModelInfo[]>([]);
+  const [models, setModels] = useState<ModelInfo[]>(
+    () => getCachedModels(cacheKey) || FALLBACK_MODELS,
+  );
   const [modelError, setModelError] = useState("");
   const [savingModel, setSavingModel] = useState(false);
   const [dismissedRequest, setDismissedRequest] = useState(false);
@@ -190,12 +216,20 @@ function LiveRoom({
 
   useEffect(() => {
     let cancelled = false;
+    const cached = getCachedModels(cacheKey);
+    if (cached?.length) setModels(cached);
+
     fetchRoomModels(roomId)
       .then((list) => {
-        if (!cancelled) setModels(list);
+        if (cancelled || !list.length) return;
+        setCachedModels(cacheKey, list);
+        setModels(list);
+        setModelError("");
       })
       .catch((err) => {
-        if (!cancelled) {
+        if (cancelled) return;
+        // Keep cached / fallback models — don't block chatting
+        if (!getCachedModels(cacheKey)?.length) {
           setModelError(
             err instanceof Error ? err.message : "Failed to load models",
           );
@@ -204,7 +238,7 @@ function LiveRoom({
     return () => {
       cancelled = true;
     };
-  }, [roomId]);
+  }, [roomId, cacheKey]);
 
   const handleModelChange = useCallback(
     async (next: string) => {
@@ -339,9 +373,7 @@ function LiveRoom({
           models={models}
           modelId={modelId}
           onModelChange={(id) => void handleModelChange(id)}
-          modelDisabled={
-            savingModel || agentStatus === "running" || models.length === 0
-          }
+          modelDisabled={savingModel || agentStatus === "running"}
           placeholder={
             agentStatus === "running"
               ? "Agent is working…"

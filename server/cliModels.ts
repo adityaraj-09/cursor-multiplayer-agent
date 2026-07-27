@@ -8,7 +8,7 @@ const ANSI_RE = /\x1b\[[0-9;]*[a-zA-Z]/g;
 const MODEL_LINE_RE = /^([a-zA-Z0-9][a-zA-Z0-9._-]*)\s+[-–—]\s+(.+)$/;
 
 let cache: { at: number; models: ModelInfo[] } | null = null;
-const CACHE_MS = 60_000;
+const CACHE_MS = 15 * 60_000;
 
 function stripAnsi(text: string): string {
   return text.replace(ANSI_RE, "").replace(/\r/g, "");

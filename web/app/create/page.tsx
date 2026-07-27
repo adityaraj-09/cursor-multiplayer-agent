@@ -6,7 +6,6 @@ import Link from "next/link";
 import {
   createRoom,
   fetchAuthStatus,
-  fetchModels,
   fetchOnlineWorkers,
   fetchRepositories,
   pickLocalFolder,
@@ -15,7 +14,6 @@ import {
 import type {
   AgentRuntime,
   AuthMode,
-  ModelInfo,
   RepoInfo,
 } from "../../../shared/events";
 
@@ -36,8 +34,6 @@ export default function CreateSession() {
   const [repoUrl, setRepoUrl] = useState("");
   const [startingRef, setStartingRef] = useState("main");
   const [autoCreatePR, setAutoCreatePR] = useState(true);
-  const [modelId, setModelId] = useState("");
-  const [models, setModels] = useState<ModelInfo[]>([]);
   const [repos, setRepos] = useState<RepoInfo[]>([]);
   const [serverKeyConfigured, setServerKeyConfigured] = useState(false);
   const [serverKeyHint, setServerKeyHint] = useState<string | null>(null);
@@ -45,7 +41,6 @@ export default function CreateSession() {
     "env" | "stored" | "none"
   >("none");
   const [byokAvailable, setByokAvailable] = useState(false);
-  const [loadingCatalog, setLoadingCatalog] = useState(false);
   const [savingServerKey, setSavingServerKey] = useState(false);
   const [error, setError] = useState("");
   const [creating, setCreating] = useState(false);
@@ -100,8 +95,6 @@ export default function CreateSession() {
 
   const selectRuntime = (r: AgentRuntime) => {
     setRuntime(r);
-    setModelId("");
-    setModels([]);
     setRepos([]);
     if (r === "local") setAuthMode("cli");
     else if (authMode === "cli") setAuthMode("server");
@@ -128,66 +121,51 @@ export default function CreateSession() {
     }
   };
 
+  // Only cloud needs a repo catalog — models default to "auto" (change in-room).
   useEffect(() => {
     let cancelled = false;
-    const load = async () => {
-      if (authMode === "server" && !serverKeyConfigured) {
-        setModels([]);
-        setRepos([]);
-        return;
-      }
-      if (authMode === "byok" && !apiKey.trim()) {
-        setModels([]);
-        setRepos([]);
-        return;
-      }
-      setLoadingCatalog(true);
-      setError("");
-      try {
-        const opts = {
-          authMode,
-          apiKey: authMode === "byok" ? apiKey.trim() : undefined,
-        };
-        const [m, r] = await Promise.all([
-          fetchModels(opts),
-          runtime === "cloud" ? fetchRepositories(opts) : Promise.resolve([]),
-        ]);
-        if (cancelled) return;
-        setModels(m);
-        setRepos(r);
-        if (!modelId && m.length > 0) {
-          const preferred =
-            m.find((x) => x.id === "auto") ||
-            m.find((x) => x.id === "composer-2.5") ||
-            m[0];
-          setModelId(preferred.id);
-        }
-      } catch (err) {
-        if (!cancelled) {
-          setModels([]);
-          setRepos([]);
-          setError(err instanceof Error ? err.message : "Failed to load models");
-        }
-      } finally {
-        if (!cancelled) setLoadingCatalog(false);
-      }
-    };
-    const t = setTimeout(load, authMode === "byok" ? 400 : 0);
+    if (runtime !== "cloud") {
+      setRepos([]);
+      return;
+    }
+    if (authMode === "server" && !serverKeyConfigured) {
+      setRepos([]);
+      return;
+    }
+    if (authMode === "byok" && !apiKey.trim()) {
+      setRepos([]);
+      return;
+    }
+
+    setLoadingRepos(true);
+    const t = setTimeout(() => {
+      fetchRepositories({
+        authMode,
+        apiKey: authMode === "byok" ? apiKey.trim() : undefined,
+      })
+        .then((r) => {
+          if (!cancelled) setRepos(r);
+        })
+        .catch((err) => {
+          if (!cancelled) {
+            setRepos([]);
+            setError(
+              err instanceof Error ? err.message : "Failed to load repositories",
+            );
+          }
+        });
+    }, authMode === "byok" ? 400 : 0);
+
     return () => {
       cancelled = true;
       clearTimeout(t);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authMode, apiKey, runtime, serverKeyConfigured]);
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     if (!name.trim()) {
       setError("Session name is required");
-      return;
-    }
-    if (!modelId) {
-      setError("Select a model");
       return;
     }
     if (authMode === "byok" && !apiKey.trim()) {
@@ -215,7 +193,7 @@ export default function CreateSession() {
         name: name.trim(),
         runtime,
         authMode,
-        modelId,
+        modelId: "auto",
         repoPath: runtime === "local" ? repoPath.trim() || undefined : undefined,
         repoUrl: runtime === "cloud" ? repoUrl.trim() : undefined,
         startingRef:
@@ -309,7 +287,6 @@ export default function CreateSession() {
                   disabled={mode === "byok" && !byokAvailable}
                   onClick={() => {
                     setAuthMode(mode);
-                    setModelId("");
                   }}
                   className={`h-9 px-3 rounded-md text-[13px] border transition-colors disabled:opacity-40 ${
                     authMode === mode
@@ -467,34 +444,6 @@ export default function CreateSession() {
               </div>
             </>
           )}
-
-          <div>
-            <label className="block text-[12px] text-[#a0a0a0] mb-1.5">
-              Model {loadingCatalog ? "· loading…" : ""}
-            </label>
-            <select
-              value={modelId}
-              onChange={(e) => setModelId(e.target.value)}
-              disabled={models.length === 0}
-              className={inputClass}
-            >
-              {models.length === 0 ? (
-                <option value="">
-                  {authMode === "byok" && !apiKey.trim()
-                    ? "Enter API key to load models"
-                    : authMode === "server" && !serverKeyConfigured
-                      ? "Configure server key to load models"
-                      : "No models available"}
-                </option>
-              ) : (
-                models.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.displayName}
-                  </option>
-                ))
-              )}
-            </select>
-          </div>
 
           {error && (
             <div className="px-3 py-2.5 rounded-md bg-[rgba(240,112,112,0.1)] border border-[rgba(240,112,112,0.25)] text-[#f07070] text-[13px]">

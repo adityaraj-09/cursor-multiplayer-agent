@@ -58,11 +58,11 @@ export default function SteerInput({
         <select
           value={modelId}
           onChange={(e) => onModelChange?.(e.target.value)}
-          disabled={modelDisabled || modelOptions.length === 0}
+          disabled={modelDisabled}
           className="min-w-0 max-w-[min(100%,280px)] h-7 px-2 rounded-md bg-[#252525] border border-[#2b2b2b] text-[12px] text-[#e4e4e4] outline-none focus:border-[#4d9fff] disabled:opacity-40"
         >
           {modelOptions.length === 0 ? (
-            <option value="">Loading models…</option>
+            <option value="auto">Auto</option>
           ) : (
             modelOptions.map((m) => (
               <option key={m.id} value={m.id}>

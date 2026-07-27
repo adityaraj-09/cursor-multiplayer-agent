@@ -5,6 +5,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   type ReactNode,
 } from "react";
 import {
@@ -45,38 +46,46 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
   }, [getToken, isSignedIn]);
 
-  const user: UserInfo | null =
-    isLoaded && isSignedIn && clerkUser
-      ? {
-          id: clerkUser.id,
-          email:
-            clerkUser.primaryEmailAddress?.emailAddress ||
-            clerkUser.emailAddresses[0]?.emailAddress ||
-            "",
-          name:
-            clerkUser.fullName ||
-            clerkUser.firstName ||
-            clerkUser.username ||
-            "User",
-        }
-      : null;
+  const user = useMemo<UserInfo | null>(() => {
+    if (!isLoaded || !isSignedIn || !clerkUser) return null;
+    return {
+      id: clerkUser.id,
+      email:
+        clerkUser.primaryEmailAddress?.emailAddress ||
+        clerkUser.emailAddresses[0]?.emailAddress ||
+        "",
+      name:
+        clerkUser.fullName ||
+        clerkUser.firstName ||
+        clerkUser.username ||
+        "User",
+    };
+  }, [
+    isLoaded,
+    isSignedIn,
+    clerkUser?.id,
+    clerkUser?.primaryEmailAddress?.emailAddress,
+    clerkUser?.emailAddresses?.[0]?.emailAddress,
+    clerkUser?.fullName,
+    clerkUser?.firstName,
+    clerkUser?.username,
+  ]);
 
   const logout = useCallback(async () => {
     await signOut({ redirectUrl: "/" });
   }, [signOut]);
 
-  return (
-    <Ctx.Provider
-      value={{
-        user,
-        token: null,
-        loading: !isLoaded,
-        logout,
-      }}
-    >
-      {children}
-    </Ctx.Provider>
+  const value = useMemo(
+    () => ({
+      user,
+      token: null as string | null,
+      loading: !isLoaded,
+      logout,
+    }),
+    [user, isLoaded, logout],
   );
+
+  return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 
 export function useAuth() {

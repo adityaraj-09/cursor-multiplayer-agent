@@ -30,6 +30,9 @@ interface UseSocketReturn {
 
 export function useSocket(roomId: string, name: string): UseSocketReturn {
   const { getToken, isSignedIn } = useClerkAuth();
+  const getTokenRef = useRef(getToken);
+  getTokenRef.current = getToken;
+
   const [socket, setSocket] = useState<AppSocket | null>(null);
   const [connected, setConnected] = useState(false);
   const [participants, setParticipants] = useState<Participant[]>([]);
@@ -51,6 +54,7 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
 
     let cancelled = false;
     let attached: AppSocket | null = null;
+    let gotHistory = false;
 
     const onConnect = () => {
       if (!attached) return;
@@ -59,7 +63,13 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
     };
     const onDisconnect = () => setConnected(false);
     const onPresence = (p: Participant[]) => setParticipants(p);
-    const onChatHistory = (history: ChatMessage[]) => setMessages(history);
+    const onChatHistory = (history: ChatMessage[]) => {
+      // Only replace from server history once per connection lifecycle —
+      // avoids wiping in-flight UI on spurious reconnects if history is empty.
+      if (gotHistory && history.length === 0) return;
+      gotHistory = true;
+      setMessages(history);
+    };
     const onChatMessage = (msg: ChatMessage) => {
       setMessages((prev) => {
         const idx = prev.findIndex((m) => m.id === msg.id);
@@ -96,7 +106,7 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
     };
 
     void (async () => {
-      const token = await getToken();
+      const token = await getTokenRef.current();
       if (cancelled || !token) return;
 
       const s = getSocket(roomId, name, token);
@@ -140,15 +150,23 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
       socketRef.current = null;
       setSocket(null);
       setConnected(false);
+      // Keep messages across effect re-runs for same room; clear only via
+      // room/name change by resetting when deps change (below state is
+      // component-local and remounts LiveRoom only when name/room changes).
       setParticipants([]);
-      setMessages([]);
       setLastDiff("");
       setCloudMeta(null);
-      setModelId(null);
       setMySocketId(null);
       setAgentStatus("idle");
     };
-  }, [roomId, name, isSignedIn, getToken]);
+  }, [roomId, name, isSignedIn]);
+
+  // Clear chat when switching rooms (not on token refreshes).
+  useEffect(() => {
+    setMessages([]);
+    setModelId(null);
+    setPendingRequest(null);
+  }, [roomId]);
 
   const sendSteer = useCallback((text: string) => {
     socketRef.current?.emit("steer-message", text);
