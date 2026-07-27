@@ -141,6 +141,33 @@ export async function fetchRoom(id: string): Promise<RoomInfo> {
   return res.json();
 }
 
+/** Join a room via shared /room/:id link (signed-in users). */
+export async function joinRoom(id: string): Promise<RoomInfo> {
+  const res = await fetch(`${API_BASE}/rooms/${id}/join`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(await authHeaders()),
+    },
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Failed to join room");
+  }
+  return res.json();
+}
+
+/**
+ * Load room; if not a member yet, join via the shared link then reload.
+ */
+export async function fetchOrJoinRoom(id: string): Promise<RoomInfo> {
+  try {
+    return await fetchRoom(id);
+  } catch {
+    return joinRoom(id);
+  }
+}
+
 export async function fetchAuthStatus(): Promise<{
   serverKeyConfigured: boolean;
   serverKeySource: "env" | "stored" | "none";

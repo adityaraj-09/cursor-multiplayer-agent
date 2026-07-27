@@ -130,6 +130,15 @@ router.post("/:id/invite", requireAuth, (req, res) => {
     return;
   }
 
+  // Require owner/member to mint invites
+  if (
+    room.owner_id !== req.user.id &&
+    !db.isRoomMember(roomId, req.user.id)
+  ) {
+    res.status(403).json({ error: "Not allowed to invite to this room" });
+    return;
+  }
+
   const maxUses = req.body?.maxUses ?? null;
   const code = generateInviteCode();
   db.createInviteLink(code, roomId, req.user.id, maxUses);

@@ -107,6 +107,24 @@ function resolveSessionUser(token: string): AuthUser | null {
 }
 
 /**
+ * Resolve a Bearer token (Clerk JWT or CLI session) to a user.
+ * Used by HTTP middleware and Socket.IO auth.
+ */
+export async function resolveAuthToken(
+  token: string | undefined | null,
+): Promise<AuthUser | null> {
+  if (!token?.trim()) return null;
+  const t = token.trim();
+  try {
+    if (looksLikeJwt(t)) return await resolveClerkUser(t);
+    return resolveSessionUser(t);
+  } catch (err) {
+    console.warn("[auth] token resolve failed:", err);
+    return null;
+  }
+}
+
+/**
  * Attaches req.user from Clerk JWT or CLI session token.
  * Does NOT reject — use requireAuth for protected routes.
  */
@@ -124,17 +142,8 @@ export function authMiddleware() {
     }
 
     void (async () => {
-      try {
-        if (looksLikeJwt(token)) {
-          const user = await resolveClerkUser(token);
-          if (user) req.user = user;
-        } else {
-          const user = resolveSessionUser(token);
-          if (user) req.user = user;
-        }
-      } catch (err) {
-        console.warn("[auth] token resolve failed:", err);
-      }
+      const user = await resolveAuthToken(token);
+      if (user) req.user = user;
       next();
     })();
   };

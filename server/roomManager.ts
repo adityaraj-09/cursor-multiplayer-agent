@@ -968,6 +968,21 @@ export class RoomManager {
     return db.isRoomMember(roomId, userId);
   }
 
+  /**
+   * Anyone with the room link can join once signed in (capability URL).
+   * Adds membership if missing; room IDs are unguessable nanoids.
+   */
+  joinAsMember(roomId: string, userId: string): RoomInfo {
+    const row = db.getRoom(roomId);
+    if (!row || row.status !== "active") {
+      throw new Error("Room not found");
+    }
+    if (row.owner_id !== userId && !db.isRoomMember(roomId, userId)) {
+      db.addRoomMember(roomId, userId, "member");
+    }
+    return this.toRoomInfo(row, this.rooms.get(roomId)?.participants.size || 0);
+  }
+
   getRoomInfo(id: string): RoomInfo | null {
     const row = db.getRoom(id);
     if (!row) return null;

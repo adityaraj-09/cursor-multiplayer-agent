@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
+import { useAuth as useClerkAuth } from "@clerk/nextjs";
 import { getSocket, disconnectSocket, type AppSocket } from "../lib/socket";
 import type {
   AgentRunStatus,
@@ -28,6 +29,7 @@ interface UseSocketReturn {
 }
 
 export function useSocket(roomId: string, name: string): UseSocketReturn {
+  const { getToken, isSignedIn } = useClerkAuth();
   const [socket, setSocket] = useState<AppSocket | null>(null);
   const [connected, setConnected] = useState(false);
   const [participants, setParticipants] = useState<Participant[]>([]);
@@ -45,17 +47,16 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
     participants.some((p) => p.socketId === mySocketId && p.isDriver);
 
   useEffect(() => {
-    if (!roomId || !name) return;
+    if (!roomId || !name || !isSignedIn) return;
 
-    const s = getSocket(roomId, name);
-    socketRef.current = s;
-    setSocket(s);
+    let cancelled = false;
+    let attached: AppSocket | null = null;
 
     const onConnect = () => {
+      if (!attached) return;
       setConnected(true);
-      setMySocketId(s.id ?? null);
+      setMySocketId(attached.id ?? null);
     };
-
     const onDisconnect = () => setConnected(false);
     const onPresence = (p: Participant[]) => setParticipants(p);
     const onChatHistory = (history: ChatMessage[]) => setMessages(history);
@@ -94,34 +95,47 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
       console.warn("Server error:", message);
     };
 
-    if (s.connected) onConnect();
+    void (async () => {
+      const token = await getToken();
+      if (cancelled || !token) return;
 
-    s.on("connect", onConnect);
-    s.on("disconnect", onDisconnect);
-    s.on("presence", onPresence);
-    s.on("chat-history", onChatHistory);
-    s.on("chat-message", onChatMessage);
-    s.on("chat-delta", onChatDelta);
-    s.on("agent-status", onAgentStatus);
-    s.on("drive-requested", onDriveRequested);
-    s.on("diff-update", onDiffUpdate);
-    s.on("cloud-meta", onCloudMeta);
-    s.on("model-updated", onModelUpdated);
-    s.on("error", onError);
+      const s = getSocket(roomId, name, token);
+      attached = s;
+      socketRef.current = s;
+      setSocket(s);
+
+      if (s.connected) onConnect();
+
+      s.on("connect", onConnect);
+      s.on("disconnect", onDisconnect);
+      s.on("presence", onPresence);
+      s.on("chat-history", onChatHistory);
+      s.on("chat-message", onChatMessage);
+      s.on("chat-delta", onChatDelta);
+      s.on("agent-status", onAgentStatus);
+      s.on("drive-requested", onDriveRequested);
+      s.on("diff-update", onDiffUpdate);
+      s.on("cloud-meta", onCloudMeta);
+      s.on("model-updated", onModelUpdated);
+      s.on("error", onError);
+    })();
 
     return () => {
-      s.off("connect", onConnect);
-      s.off("disconnect", onDisconnect);
-      s.off("presence", onPresence);
-      s.off("chat-history", onChatHistory);
-      s.off("chat-message", onChatMessage);
-      s.off("chat-delta", onChatDelta);
-      s.off("agent-status", onAgentStatus);
-      s.off("drive-requested", onDriveRequested);
-      s.off("diff-update", onDiffUpdate);
-      s.off("cloud-meta", onCloudMeta);
-      s.off("model-updated", onModelUpdated);
-      s.off("error", onError);
+      cancelled = true;
+      if (attached) {
+        attached.off("connect", onConnect);
+        attached.off("disconnect", onDisconnect);
+        attached.off("presence", onPresence);
+        attached.off("chat-history", onChatHistory);
+        attached.off("chat-message", onChatMessage);
+        attached.off("chat-delta", onChatDelta);
+        attached.off("agent-status", onAgentStatus);
+        attached.off("drive-requested", onDriveRequested);
+        attached.off("diff-update", onDiffUpdate);
+        attached.off("cloud-meta", onCloudMeta);
+        attached.off("model-updated", onModelUpdated);
+        attached.off("error", onError);
+      }
       disconnectSocket();
       socketRef.current = null;
       setSocket(null);
@@ -134,7 +148,7 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
       setMySocketId(null);
       setAgentStatus("idle");
     };
-  }, [roomId, name]);
+  }, [roomId, name, isSignedIn, getToken]);
 
   const sendSteer = useCallback((text: string) => {
     socketRef.current?.emit("steer-message", text);

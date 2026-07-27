@@ -1,11 +1,12 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { useSocket } from "../../../hooks/useSocket";
+import { useAuth } from "../../../components/AuthProvider";
 import {
-  fetchRoom,
+  fetchOrJoinRoom,
   fetchRoomModels,
   updateRoomModel,
 } from "../../../lib/api";
@@ -19,27 +20,72 @@ import type { ModelInfo, RoomInfo } from "../../../../shared/events";
 export default function RoomPage() {
   const params = useParams();
   const roomId = params.id as string;
+  const router = useRouter();
+  const { user, loading: authLoading } = useAuth();
 
   const [roomInfo, setRoomInfo] = useState<RoomInfo | null>(null);
   const [userName, setUserName] = useState<string | null>(null);
   const [nameInput, setNameInput] = useState("");
   const [roomError, setRoomError] = useState("");
+  const [loadingRoom, setLoadingRoom] = useState(true);
 
   useEffect(() => {
     const saved = localStorage.getItem("agent-session-name");
     if (saved) setNameInput(saved);
+  }, []);
 
-    fetchRoom(roomId)
-      .then(setRoomInfo)
-      .catch(() => setRoomError("Room not found"));
-  }, [roomId]);
+  useEffect(() => {
+    if (authLoading) return;
+    if (!user) {
+      router.replace(`/login?redirect=/room/${roomId}`);
+      return;
+    }
+
+    let cancelled = false;
+    setLoadingRoom(true);
+    setRoomError("");
+    fetchOrJoinRoom(roomId)
+      .then((info) => {
+        if (cancelled) return;
+        setRoomInfo(info);
+        if (!nameInput.trim() && user.name) {
+          setNameInput(user.name);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setRoomError("Room not found or you can’t join it");
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingRoom(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [roomId, user, authLoading, router]);
 
   const handleJoin = () => {
-    const name = nameInput.trim();
-    if (!name) return;
+    const name = nameInput.trim() || user?.name || "Guest";
     localStorage.setItem("agent-session-name", name);
     setUserName(name);
   };
+
+  if (authLoading || (user && loadingRoom && !roomError)) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#141414]">
+        <p className="text-[#6e6e6e] text-[13px]">Loading session…</p>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#141414]">
+        <p className="text-[#6e6e6e] text-[13px]">Redirecting to sign in…</p>
+      </div>
+    );
+  }
 
   if (roomError) {
     return (
@@ -140,6 +186,7 @@ function LiveRoom({
   const [modelError, setModelError] = useState("");
   const [savingModel, setSavingModel] = useState(false);
   const [dismissedRequest, setDismissedRequest] = useState(false);
+  const [shareLabel, setShareLabel] = useState("Share");
 
   useEffect(() => {
     let cancelled = false;
@@ -186,6 +233,17 @@ function LiveRoom({
     setDismissedRequest(false);
   }, [participants, pendingRequest, grantDrive]);
 
+  const handleShare = useCallback(async () => {
+    const url = `${window.location.origin}/room/${roomId}`;
+    try {
+      await navigator.clipboard.writeText(url);
+      setShareLabel("Copied");
+      setTimeout(() => setShareLabel("Share"), 1500);
+    } catch {
+      window.prompt("Copy this link:", url);
+    }
+  }, [roomId]);
+
   const activePendingRequest =
     pendingRequest && !dismissedRequest ? pendingRequest : null;
 
@@ -229,6 +287,13 @@ function LiveRoom({
         </div>
 
         <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => void handleShare()}
+            className="h-7 px-2.5 rounded-md text-[12px] text-[#a0a0a0] hover:text-[#e4e4e4] border border-[#2b2b2b] hover:border-[#3c3c3c] transition-colors"
+          >
+            {shareLabel}
+          </button>
           <PresenceBar participants={participants} mySocketId={mySocketId} />
           <div className="w-px h-4 bg-[#2b2b2b]" />
           <span className="text-[11px] text-[#6e6e6e] hidden sm:inline">

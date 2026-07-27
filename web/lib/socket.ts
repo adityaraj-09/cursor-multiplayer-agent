@@ -14,8 +14,12 @@ const SOCKET_URL =
 let socketInstance: AppSocket | null = null;
 let currentKey: string | null = null;
 
-export function getSocket(roomId: string, name: string): AppSocket {
-  const key = `${roomId}:${name}`;
+export function getSocket(
+  roomId: string,
+  name: string,
+  token?: string | null,
+): AppSocket {
+  const key = `${roomId}:${name}:${token ? "auth" : "anon"}`;
 
   if (socketInstance && currentKey === key && socketInstance.connected) {
     return socketInstance;
@@ -29,6 +33,7 @@ export function getSocket(roomId: string, name: string): AppSocket {
   currentKey = key;
   socketInstance = io(SOCKET_URL, {
     query: { roomId, name },
+    auth: token ? { token } : {},
     transports: ["websocket"],
     path: "/socket.io/",
     reconnection: true,

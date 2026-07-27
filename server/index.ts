@@ -9,7 +9,7 @@ import { WorkerRelay } from "./workerRelay.js";
 import { listModelsForKey, listReposForKey } from "./sdkAgent.js";
 import { listCliModels } from "./cliModels.js";
 import { encryptionConfigured } from "./keyCrypto.js";
-import { authMiddleware, hashSessionToken, requireAuth } from "./auth.js";
+import { authMiddleware, hashSessionToken, requireAuth, resolveAuthToken } from "./auth.js";
 import authRoutes from "./authRoutes.js";
 import * as db from "./db.js";
 import {
@@ -273,6 +273,20 @@ app.get("/api/rooms/:id", requireAuth, (req, res) => {
   res.json(room);
 });
 
+/**
+ * POST /api/rooms/:id/join — signed-in user becomes a member via shared link.
+ */
+app.post("/api/rooms/:id/join", requireAuth, (req, res) => {
+  try {
+    const room = roomManager.joinAsMember(routeParam(req.params.id), req.user!.id);
+    res.json(room);
+  } catch (err) {
+    res.status(404).json({
+      error: err instanceof Error ? err.message : "Room not found",
+    });
+  }
+});
+
 app.post("/api/rooms", requireAuth, async (req, res) => {
   try {
     const runtime = req.body?.runtime === "cloud" ? "cloud" : "local";
@@ -337,10 +351,35 @@ app.post("/api/rooms/:id/stop", (req, res) => {
   res.json({ ok: true });
 });
 
+io.use((socket, next) => {
+  const token =
+    (socket.handshake.auth?.token as string | undefined) ||
+    (typeof socket.handshake.headers.authorization === "string" &&
+    socket.handshake.headers.authorization.startsWith("Bearer ")
+      ? socket.handshake.headers.authorization.slice(7)
+      : undefined);
+
+  void resolveAuthToken(token).then((user) => {
+    if (!user) {
+      next(new Error("Authentication required"));
+      return;
+    }
+    (socket.data as { userId?: string }).userId = user.id;
+    next();
+  });
+});
+
 io.on("connection", (socket) => {
   const roomId = socket.handshake.query.roomId as string;
   if (!roomId) {
     socket.emit("error", "Missing roomId");
+    socket.disconnect();
+    return;
+  }
+
+  const userId = (socket.data as { userId?: string }).userId;
+  if (!userId || !roomManager.userCanAccessRoom(roomId, userId)) {
+    socket.emit("error", "Not a member of this room");
     socket.disconnect();
     return;
   }
