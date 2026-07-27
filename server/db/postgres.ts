@@ -105,6 +105,12 @@ async function initSchema() {
       expires_at BIGINT NOT NULL,
       used INTEGER NOT NULL DEFAULT 0
     );
+
+    CREATE TABLE IF NOT EXISTS model_cache (
+      cache_key TEXT PRIMARY KEY,
+      models_json TEXT NOT NULL,
+      updated_at BIGINT NOT NULL
+    );
   `);
 
   await pool.query(`
@@ -580,6 +586,45 @@ export function isRoomMember(roomId: string, userId: string): boolean {
     [roomId, userId],
   );
   return rows.length > 0;
+}
+
+export function removeRoomMember(roomId: string, userId: string): void {
+  syncQuery(`DELETE FROM room_members WHERE room_id = $1 AND user_id = $2`, [
+    roomId,
+    userId,
+  ]);
+}
+
+export function getModelCache(
+  cacheKey: string,
+): { models: import("../../shared/events.js").ModelInfo[]; updatedAt: number } | null {
+  const rows = syncQuery<{ models_json: string; updated_at: string | number }>(
+    `SELECT models_json, updated_at FROM model_cache WHERE cache_key = $1`,
+    [cacheKey],
+  );
+  const row = rows[0];
+  if (!row) return null;
+  try {
+    const models = JSON.parse(row.models_json) as import("../../shared/events.js").ModelInfo[];
+    if (!Array.isArray(models) || models.length === 0) return null;
+    return { models, updatedAt: Number(row.updated_at) };
+  } catch {
+    return null;
+  }
+}
+
+export function setModelCache(
+  cacheKey: string,
+  models: import("../../shared/events.js").ModelInfo[],
+): void {
+  if (!models.length) return;
+  syncQuery(
+    `INSERT INTO model_cache (cache_key, models_json, updated_at) VALUES ($1,$2,$3)
+     ON CONFLICT(cache_key) DO UPDATE SET
+       models_json = excluded.models_json,
+       updated_at = excluded.updated_at`,
+    [cacheKey, JSON.stringify(models), Date.now()],
+  );
 }
 
 export function createInviteLink(

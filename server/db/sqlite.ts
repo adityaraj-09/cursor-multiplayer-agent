@@ -133,6 +133,12 @@ db.exec(`
     used INTEGER NOT NULL DEFAULT 0
   );
 
+  CREATE TABLE IF NOT EXISTS model_cache (
+    cache_key TEXT PRIMARY KEY,
+    models_json TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+
   CREATE INDEX IF NOT EXISTS idx_steer_room_ts ON steer_messages(room_id, ts);
   CREATE INDEX IF NOT EXISTS idx_messages_room_ts ON messages(room_id, ts);
 `);
@@ -159,6 +165,18 @@ for (const sql of migrations) {
   } catch {
     // column already exists
   }
+}
+
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS model_cache (
+      cache_key TEXT PRIMARY KEY,
+      models_json TEXT NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+  `);
+} catch {
+  // ignore
 }
 
 const stmts = {
@@ -250,12 +268,24 @@ const stmts = {
     INSERT INTO room_members (room_id, user_id, role) VALUES (?, ?, ?)
     ON CONFLICT(room_id, user_id) DO UPDATE SET role = excluded.role
   `),
+  removeRoomMember: db.prepare(
+    `DELETE FROM room_members WHERE room_id = ? AND user_id = ?`,
+  ),
   getRoomMembers: db.prepare(
     `SELECT user_id, role FROM room_members WHERE room_id = ?`,
   ),
   isRoomMember: db.prepare(
     `SELECT 1 FROM room_members WHERE room_id = ? AND user_id = ?`,
   ),
+  getModelCache: db.prepare(
+    `SELECT models_json, updated_at FROM model_cache WHERE cache_key = ?`,
+  ),
+  setModelCache: db.prepare(`
+    INSERT INTO model_cache (cache_key, models_json, updated_at) VALUES (?, ?, ?)
+    ON CONFLICT(cache_key) DO UPDATE SET
+      models_json = excluded.models_json,
+      updated_at = excluded.updated_at
+  `),
   insertInviteLink: db.prepare(`
     INSERT INTO invite_links (code, room_id, created_by, created_at, max_uses, use_count)
     VALUES (?, ?, ?, ?, ?, 0)
@@ -618,6 +648,34 @@ export function getRoomMembers(
 
 export function isRoomMember(roomId: string, userId: string): boolean {
   return stmts.isRoomMember.get(roomId, userId) !== undefined;
+}
+
+export function removeRoomMember(roomId: string, userId: string): void {
+  stmts.removeRoomMember.run(roomId, userId);
+}
+
+export function getModelCache(
+  cacheKey: string,
+): { models: import("../../shared/events.js").ModelInfo[]; updatedAt: number } | null {
+  const row = stmts.getModelCache.get(cacheKey) as
+    | { models_json: string; updated_at: number }
+    | undefined;
+  if (!row) return null;
+  try {
+    const models = JSON.parse(row.models_json) as import("../../shared/events.js").ModelInfo[];
+    if (!Array.isArray(models) || models.length === 0) return null;
+    return { models, updatedAt: row.updated_at };
+  } catch {
+    return null;
+  }
+}
+
+export function setModelCache(
+  cacheKey: string,
+  models: import("../../shared/events.js").ModelInfo[],
+): void {
+  if (!models.length) return;
+  stmts.setModelCache.run(cacheKey, JSON.stringify(models), Date.now());
 }
 
 export function createInviteLink(

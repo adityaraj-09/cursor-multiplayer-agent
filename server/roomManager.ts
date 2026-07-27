@@ -46,6 +46,7 @@ const MAX_NAME_LENGTH = 30;
 interface ParticipantInfo {
   name: string;
   color: string;
+  userId: string;
 }
 
 export interface CreateRoomRequest {
@@ -327,7 +328,7 @@ export class RoomManager {
     });
   }
 
-  joinRoom(roomId: string, socket: Socket): boolean {
+  joinRoom(roomId: string, socket: Socket, userId: string): boolean {
     const room = this.rooms.get(roomId);
     if (!room) return false;
 
@@ -336,11 +337,15 @@ export class RoomManager {
     const color = AVATAR_COLORS[room.colorIndex % AVATAR_COLORS.length];
     room.colorIndex++;
 
-    room.participants.set(socket.id, { name, color });
+    room.participants.set(socket.id, { name, color, userId });
     this.socketRooms.set(socket.id, roomId);
+    (socket.data as { userId?: string }).userId = userId;
     socket.join(roomId);
 
-    if (!room.driverSocketId) room.driverSocketId = socket.id;
+    // Owner always starts as / reclaim driver when joining
+    if (room.row.owner_id === userId || !room.driverSocketId) {
+      room.driverSocketId = socket.id;
+    }
 
     socket.emit("chat-history", db.getMessages(roomId, 500));
 
@@ -397,6 +402,61 @@ export class RoomManager {
 
     this.broadcastPresence(room);
     console.log(`${p?.name || "Unknown"} left room ${roomId}`);
+  }
+
+  /** Member leaves the room permanently (revokes membership). Owner cannot leave this way. */
+  handleLeaveRoom(socket: Socket): void {
+    const room = this.getRoomForSocket(socket.id);
+    if (!room) return;
+    const p = room.participants.get(socket.id);
+    const userId = p?.userId;
+    if (!userId) return;
+
+    if (room.row.owner_id === userId) {
+      socket.emit("error", "Host cannot leave — stop the session instead");
+      return;
+    }
+
+    db.removeRoomMember(room.id, userId);
+    socket.emit("kicked", "You left the session");
+    this.leaveRoom(socket);
+    socket.disconnect(true);
+  }
+
+  /** Host removes a member by userId — kicks all their sockets and revokes access. */
+  handleRemoveMember(socket: Socket, targetUserIdRaw: string): void {
+    const room = this.getRoomForSocket(socket.id);
+    if (!room) return;
+    const actor = room.participants.get(socket.id);
+    if (!actor?.userId || room.row.owner_id !== actor.userId) {
+      socket.emit("error", "Only the host can remove members");
+      return;
+    }
+
+    const targetUserId = String(targetUserIdRaw || "").trim();
+    if (!targetUserId) return;
+    if (targetUserId === actor.userId || targetUserId === room.row.owner_id) {
+      socket.emit("error", "Cannot remove the host");
+      return;
+    }
+
+    db.removeRoomMember(room.id, targetUserId);
+
+    for (const [sid, p] of [...room.participants.entries()]) {
+      if (p.userId !== targetUserId) continue;
+      const targetSocket = this.io.sockets.sockets.get(sid);
+      if (targetSocket) {
+        targetSocket.emit("kicked", "Removed by the host");
+        this.leaveRoom(targetSocket);
+        targetSocket.disconnect(true);
+      }
+    }
+    this.broadcastPresence(room);
+  }
+
+  isRoomOwner(roomId: string, userId: string): boolean {
+    const row = db.getRoom(roomId);
+    return Boolean(row && row.owner_id === userId);
   }
 
   handleSteerMessage(socket: Socket, text: string): void {
@@ -910,7 +970,11 @@ export class RoomManager {
   handleGrantDrive(socket: Socket, toSocketId: string): void {
     const room = this.getRoomForSocket(socket.id);
     if (!room) return;
-    if (socket.id !== room.driverSocketId) return;
+    const actor = room.participants.get(socket.id);
+    const isOwner = Boolean(
+      actor?.userId && room.row.owner_id === actor.userId,
+    );
+    if (!isOwner && socket.id !== room.driverSocketId) return;
     if (!room.participants.has(toSocketId)) return;
 
     room.driverSocketId = toSocketId;
@@ -994,20 +1058,32 @@ export class RoomManager {
     if (!row) throw new Error("Room not found");
     if (row.auth_mode === "cli") {
       const ownerId = row.owner_id;
+      const cacheKey = ownerId ? `cli:${ownerId}` : `room:${id}`;
+      const cached = db.getModelCache(cacheKey);
+      if (cached && Date.now() - cached.updatedAt < 15 * 60_000) {
+        return cached.models;
+      }
+
       if (ownerId && this.workerRelay?.hasOnlineWorker(ownerId)) {
         try {
-          return await this.workerRelay.requestListModels(ownerId);
+          const models = await this.workerRelay.requestListModels(ownerId);
+          if (models.length) db.setModelCache(cacheKey, models);
+          return models;
         } catch (err) {
           console.warn(
             `[listModels] worker failed for room ${id}:`,
             err instanceof Error ? err.message : err,
           );
+          if (cached?.models.length) return cached.models;
           return [{ id: "auto", displayName: "Auto" }];
         }
       }
       try {
-        return await listCliModels();
+        const models = await listCliModels();
+        if (models.length) db.setModelCache(cacheKey, models);
+        return models;
       } catch {
+        if (cached?.models.length) return cached.models;
         return [{ id: "auto", displayName: "Auto" }];
       }
     }
@@ -1015,13 +1091,17 @@ export class RoomManager {
     return listModelsForKey(apiKey);
   }
 
-  setModel(id: string, modelIdRaw: string): RoomInfo {
+  setModel(id: string, modelIdRaw: string, actorUserId?: string): RoomInfo {
     const modelId = modelIdRaw.trim();
     if (!modelId) throw new Error("modelId is required");
 
     const room = this.rooms.get(id);
     const row = db.getRoom(id);
     if (!row || row.status !== "active") throw new Error("Room not found");
+
+    if (actorUserId && row.owner_id && row.owner_id !== actorUserId) {
+      throw new Error("Only the host can change the model");
+    }
 
     if (room?.agent.isBusy()) {
       throw new Error("Wait for the agent to finish before changing model");
@@ -1038,7 +1118,12 @@ export class RoomManager {
     return this.toRoomInfo(row, room?.participants.size || 0);
   }
 
-  stopRoom(id: string): void {
+  stopRoom(id: string, actorUserId?: string): void {
+    const row = db.getRoom(id);
+    if (!row) return;
+    if (actorUserId && row.owner_id && row.owner_id !== actorUserId) {
+      throw new Error("Only the host can stop the session");
+    }
     const room = this.rooms.get(id);
     if (room) {
       for (const unsub of room.cleanups) unsub();
@@ -1069,6 +1154,8 @@ export class RoomManager {
         socketId,
         name: p.name,
         color: p.color,
+        userId: p.userId,
+        isOwner: Boolean(room.row.owner_id && p.userId === room.row.owner_id),
         isDriver: socketId === room.driverSocketId,
       });
     }
@@ -1092,6 +1179,7 @@ export class RoomManager {
       prUrl: row.pr_url || undefined,
       autoCreatePR: Boolean(row.auto_create_pr),
       keyHint: row.key_hint || undefined,
+      ownerId: row.owner_id || undefined,
     };
   }
 }

@@ -137,7 +137,6 @@ export default function CreateSession() {
       return;
     }
 
-    setLoadingRepos(true);
     const t = setTimeout(() => {
       fetchRepositories({
         authMode,

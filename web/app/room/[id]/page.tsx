@@ -199,11 +199,17 @@ function LiveRoom({
     requestDrive,
     releaseDrive,
     grantDrive,
+    leaveRoom,
+    removeMember,
   } = useSocket(roomId, userName);
 
+  const { user } = useAuth();
   const runtime = roomInfo?.runtime || "local";
   const authMode = roomInfo?.authMode || "cli";
   const modelId = liveModelId || roomInfo?.modelId || "auto";
+  const amHost = Boolean(
+    user?.id && roomInfo?.ownerId && user.id === roomInfo.ownerId,
+  );
   const cacheKey = `room:${roomId}`;
 
   const [models, setModels] = useState<ModelInfo[]>(
@@ -328,13 +334,33 @@ function LiveRoom({
           >
             {shareLabel}
           </button>
-          <PresenceBar participants={participants} mySocketId={mySocketId} />
+          {!amHost && (
+            <button
+              type="button"
+              onClick={() => {
+                if (window.confirm("Leave this session?")) leaveRoom();
+              }}
+              className="h-7 px-2.5 rounded-md text-[12px] text-[#a0a0a0] hover:text-[#f07070] border border-[#2b2b2b] hover:border-[#3c3c3c] transition-colors"
+            >
+              Leave
+            </button>
+          )}
+          <PresenceBar
+            participants={participants}
+            mySocketId={mySocketId}
+            amHost={amHost}
+            onRemoveMember={(uid) => {
+              if (window.confirm("Remove this member from the session?")) {
+                removeMember(uid);
+              }
+            }}
+          />
           <div className="w-px h-4 bg-[#2b2b2b]" />
           <span className="text-[11px] text-[#6e6e6e] hidden sm:inline">
-            {amDriver ? "Host" : "Joined"}
+            {amHost ? "Host" : amDriver ? "Driving" : "Joined"}
           </span>
           <DriverControls
-            amDriver={amDriver}
+            amDriver={amDriver || amHost}
             pendingRequest={activePendingRequest}
             onRequestDrive={requestDrive}
             onReleaseDrive={releaseDrive}
@@ -373,7 +399,9 @@ function LiveRoom({
           models={models}
           modelId={modelId}
           onModelChange={(id) => void handleModelChange(id)}
-          modelDisabled={savingModel || agentStatus === "running"}
+          modelDisabled={
+            !amHost || savingModel || agentStatus === "running"
+          }
           placeholder={
             agentStatus === "running"
               ? "Agent is working…"

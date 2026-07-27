@@ -339,7 +339,11 @@ app.patch("/api/rooms/:id/model", requireAuth, (req, res) => {
     return;
   }
   try {
-    const room = roomManager.setModel(id, String(req.body?.modelId || ""));
+    const room = roomManager.setModel(
+      id,
+      String(req.body?.modelId || ""),
+      req.user!.id,
+    );
     res.json(room);
   } catch (err) {
     res.status(400).json({
@@ -354,12 +358,53 @@ app.post("/api/rooms/:id/stop", requireAuth, (req, res) => {
     res.status(404).json({ error: "Room not found" });
     return;
   }
-  const room = roomManager.getRoomInfo(id);
-  if (!room) {
+  try {
+    roomManager.stopRoom(id, req.user!.id);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(400).json({
+      error: err instanceof Error ? err.message : "Failed to stop room",
+    });
+  }
+});
+
+/**
+ * POST /api/rooms/:id/leave — member leaves (host cannot).
+ */
+app.post("/api/rooms/:id/leave", requireAuth, (req, res) => {
+  const id = routeParam(req.params.id);
+  if (roomManager.isRoomOwner(id, req.user!.id)) {
+    res.status(400).json({ error: "Host cannot leave — stop the session instead" });
+    return;
+  }
+  if (!roomManager.userCanAccessRoom(id, req.user!.id)) {
     res.status(404).json({ error: "Room not found" });
     return;
   }
-  roomManager.stopRoom(id);
+  db.removeRoomMember(id, req.user!.id);
+  res.json({ ok: true });
+});
+
+/**
+ * POST /api/rooms/:id/members/remove — host removes a member.
+ * Body: { userId }
+ */
+app.post("/api/rooms/:id/members/remove", requireAuth, (req, res) => {
+  const id = routeParam(req.params.id);
+  if (!roomManager.isRoomOwner(id, req.user!.id)) {
+    res.status(403).json({ error: "Only the host can remove members" });
+    return;
+  }
+  const targetUserId = String(req.body?.userId || "").trim();
+  if (!targetUserId) {
+    res.status(400).json({ error: "userId is required" });
+    return;
+  }
+  if (targetUserId === req.user!.id) {
+    res.status(400).json({ error: "Cannot remove yourself" });
+    return;
+  }
+  db.removeRoomMember(id, targetUserId);
   res.json({ ok: true });
 });
 
@@ -396,7 +441,7 @@ io.on("connection", (socket) => {
     return;
   }
 
-  const joined = roomManager.joinRoom(roomId, socket);
+  const joined = roomManager.joinRoom(roomId, socket, userId);
   if (!joined) {
     socket.emit("error", "Room not found or not active");
     socket.disconnect();
@@ -411,6 +456,10 @@ io.on("connection", (socket) => {
     roomManager.handleGrantDrive(socket, toId),
   );
   socket.on("release-drive", () => roomManager.handleReleaseDrive(socket));
+  socket.on("leave-room", () => roomManager.handleLeaveRoom(socket));
+  socket.on("remove-member", (targetUserId) =>
+    roomManager.handleRemoveMember(socket, targetUserId),
+  );
   socket.on("disconnect", () => roomManager.leaveRoom(socket));
 });
 

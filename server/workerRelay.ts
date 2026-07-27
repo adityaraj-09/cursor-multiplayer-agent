@@ -5,6 +5,7 @@ import type {
   AgentStreamEventPayload,
   ModelInfo,
 } from "../shared/events.js";
+import * as db from "./db.js";
 
 interface WorkerConnection {
   socketId: string;
@@ -297,6 +298,16 @@ export class WorkerRelay {
    * Results are cached per user for 15 minutes.
    */
   requestListModels(userId: string, timeoutMs = 60_000): Promise<ModelInfo[]> {
+    const cacheKey = `cli:${userId}`;
+    const dbCached = db.getModelCache(cacheKey);
+    if (dbCached && Date.now() - dbCached.updatedAt < WorkerRelay.MODELS_CACHE_MS) {
+      this.modelsCache.set(userId, {
+        at: dbCached.updatedAt,
+        models: dbCached.models,
+      });
+      return Promise.resolve(dbCached.models);
+    }
+
     const cached = this.modelsCache.get(userId);
     if (
       cached &&
@@ -308,6 +319,7 @@ export class WorkerRelay {
 
     const worker = this.findAnyWorkerForUser(userId);
     if (!worker) {
+      if (dbCached?.models.length) return Promise.resolve(dbCached.models);
       if (cached?.models.length) return Promise.resolve(cached.models);
       return Promise.reject(
         new Error(
@@ -321,7 +333,8 @@ export class WorkerRelay {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.listModelsWaiters.delete(requestId);
-        if (cached?.models.length) resolve(cached.models);
+        if (dbCached?.models.length) resolve(dbCached.models);
+        else if (cached?.models.length) resolve(cached.models);
         else
           reject(new Error("Listing models timed out — check your worker machine"));
       }, timeoutMs);
@@ -330,6 +343,7 @@ export class WorkerRelay {
         resolve: (models) => {
           if (models.length > 0) {
             this.modelsCache.set(userId, { at: Date.now(), models });
+            db.setModelCache(cacheKey, models);
           }
           resolve(models);
         },

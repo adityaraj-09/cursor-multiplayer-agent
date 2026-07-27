@@ -3,6 +3,8 @@ export interface Participant {
   name: string;
   color: string;
   isDriver: boolean;
+  userId?: string;
+  isOwner?: boolean;
 }
 
 export interface SteerLogEntry {
@@ -99,6 +101,7 @@ export interface ServerToClientEvents {
   "drive-requested": (requesterName: string) => void;
   "drive-granted": () => void;
   "drive-released": () => void;
+  kicked: (reason: string) => void;
   error: (message: string) => void;
 }
 
@@ -107,6 +110,8 @@ export interface ClientToServerEvents {
   "request-drive": () => void;
   "release-drive": () => void;
   "grant-drive": (toSocketId: string) => void;
+  "leave-room": () => void;
+  "remove-member": (userId: string) => void;
 }
 
 /** Worker ↔ Server events (Socket.IO /worker namespace) */

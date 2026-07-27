@@ -26,6 +26,8 @@ interface UseSocketReturn {
   requestDrive: () => void;
   releaseDrive: () => void;
   grantDrive: (toSocketId: string) => void;
+  leaveRoom: () => void;
+  removeMember: (userId: string) => void;
 }
 
 export function useSocket(roomId: string, name: string): UseSocketReturn {
@@ -104,6 +106,10 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
     const onError = (message: string) => {
       console.warn("Server error:", message);
     };
+    const onKicked = (reason: string) => {
+      console.warn("Kicked:", reason);
+      window.location.href = `/?notice=${encodeURIComponent(reason || "Left session")}`;
+    };
 
     void (async () => {
       const token = await getTokenRef.current();
@@ -128,6 +134,7 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
       s.on("cloud-meta", onCloudMeta);
       s.on("model-updated", onModelUpdated);
       s.on("error", onError);
+      s.on("kicked", onKicked);
     })();
 
     return () => {
@@ -145,6 +152,7 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
         attached.off("cloud-meta", onCloudMeta);
         attached.off("model-updated", onModelUpdated);
         attached.off("error", onError);
+        attached.off("kicked", onKicked);
       }
       disconnectSocket();
       socketRef.current = null;
@@ -185,6 +193,14 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
     setPendingRequest(null);
   }, []);
 
+  const leaveRoom = useCallback(() => {
+    socketRef.current?.emit("leave-room");
+  }, []);
+
+  const removeMember = useCallback((userId: string) => {
+    socketRef.current?.emit("remove-member", userId);
+  }, []);
+
   return {
     socket,
     connected,
@@ -201,5 +217,7 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
     requestDrive,
     releaseDrive,
     grantDrive,
+    leaveRoom,
+    removeMember,
   };
 }
