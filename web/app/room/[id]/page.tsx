@@ -205,7 +205,6 @@ function LiveRoom({
 
   const { user } = useAuth();
   const runtime = roomInfo?.runtime || "local";
-  const authMode = roomInfo?.authMode || "cli";
   const modelId = liveModelId || roomInfo?.modelId || "auto";
   const amHost = Boolean(
     user?.id && roomInfo?.ownerId && user.id === roomInfo.ownerId,
@@ -219,6 +218,7 @@ function LiveRoom({
   const [savingModel, setSavingModel] = useState(false);
   const [dismissedRequest, setDismissedRequest] = useState(false);
   const [shareLabel, setShareLabel] = useState("Share");
+  const [changesOpen, setChangesOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -287,20 +287,28 @@ function LiveRoom({
   const activePendingRequest =
     pendingRequest && !dismissedRequest ? pendingRequest : null;
 
+  const fileCount = lastDiff
+    ? (lastDiff.match(/^diff --git /gm) || []).length
+    : 0;
+
   return (
-    <div className="h-screen flex flex-col bg-[#141414]">
-      <header className="flex items-center justify-between px-3 h-10 border-b border-[#2b2b2b] bg-[#1a1a1a] shrink-0">
-        <div className="flex items-center gap-2.5 min-w-0">
+    <div className="h-[100dvh] flex flex-col bg-[#141414] overflow-hidden">
+      <header className="flex items-center justify-between gap-2 px-2 sm:px-3 h-11 sm:h-10 border-b border-[#2b2b2b] bg-[#1a1a1a] shrink-0 pt-[env(safe-area-inset-top)]">
+        <div className="flex items-center gap-1.5 sm:gap-2.5 min-w-0 flex-1">
           <Link
             href="/"
             className="flex items-center gap-2 shrink-0 hover:opacity-80 transition-opacity"
+            aria-label="Steer home"
           >
             <div className="w-5 h-5 rounded-[4px] bg-[#e4e4e4] flex items-center justify-center">
               <span className="text-[#141414] text-[9px] font-semibold">S</span>
             </div>
+            <span className="hidden sm:inline text-[12px] text-[#a0a0a0]">
+              Steer
+            </span>
           </Link>
-          <span className="text-[#2b2b2b]">/</span>
-          <span className="text-[13px] text-[#e4e4e4] truncate">
+          <span className="text-[#2b2b2b] hidden sm:inline">/</span>
+          <span className="text-[13px] text-[#e4e4e4] truncate min-w-0">
             {roomInfo?.name || roomId}
           </span>
           <span
@@ -309,28 +317,25 @@ function LiveRoom({
             }`}
             title={connected ? "Connected" : "Disconnected"}
           />
-          <span className="hidden md:inline text-[11px] text-[#6e6e6e] px-1.5 py-0.5 rounded bg-[#252525] border border-[#2b2b2b]">
-            {runtime === "cloud" ? "Cloud" : "Local"}
-          </span>
-          <span className="hidden lg:inline text-[11px] text-[#6e6e6e] px-1.5 py-0.5 rounded bg-[#252525] border border-[#2b2b2b]">
-            {authMode === "cli"
-              ? "Local login"
-              : authMode === "byok"
-                ? "BYOK"
-                : "Server key"}
-          </span>
           {agentStatus === "running" && (
-            <span className="text-[11px] text-[#4d9fff] hidden sm:inline">
+            <span className="text-[11px] text-[#4d9fff] hidden xs:inline sm:inline">
               Running
             </span>
           )}
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+          <button
+            type="button"
+            onClick={() => setChangesOpen(true)}
+            className="lg:hidden h-7 px-2 rounded-md text-[11px] text-[#a0a0a0] hover:text-[#e4e4e4] border border-[#2b2b2b]"
+          >
+            Changes{fileCount > 0 ? ` · ${fileCount}` : ""}
+          </button>
           <button
             type="button"
             onClick={() => void handleShare()}
-            className="h-7 px-2.5 rounded-md text-[12px] text-[#a0a0a0] hover:text-[#e4e4e4] border border-[#2b2b2b] hover:border-[#3c3c3c] transition-colors"
+            className="h-7 px-2 sm:px-2.5 rounded-md text-[11px] sm:text-[12px] text-[#a0a0a0] hover:text-[#e4e4e4] border border-[#2b2b2b] hover:border-[#3c3c3c] transition-colors"
           >
             {shareLabel}
           </button>
@@ -340,7 +345,7 @@ function LiveRoom({
               onClick={() => {
                 if (window.confirm("Leave this session?")) leaveRoom();
               }}
-              className="h-7 px-2.5 rounded-md text-[12px] text-[#a0a0a0] hover:text-[#f07070] border border-[#2b2b2b] hover:border-[#3c3c3c] transition-colors"
+              className="hidden sm:inline-flex h-7 px-2.5 rounded-md text-[12px] text-[#a0a0a0] hover:text-[#f07070] border border-[#2b2b2b] hover:border-[#3c3c3c] transition-colors"
             >
               Leave
             </button>
@@ -355,8 +360,8 @@ function LiveRoom({
               }
             }}
           />
-          <div className="w-px h-4 bg-[#2b2b2b]" />
-          <span className="text-[11px] text-[#6e6e6e] hidden sm:inline">
+          <div className="hidden sm:block w-px h-4 bg-[#2b2b2b]" />
+          <span className="text-[11px] text-[#6e6e6e] hidden md:inline">
             {amHost ? "Host" : amDriver ? "Driving" : "Joined"}
           </span>
           <DriverControls
@@ -372,11 +377,6 @@ function LiveRoom({
 
       <main className="flex flex-1 min-h-0 min-w-0 overflow-hidden">
         <div className="flex-1 flex flex-col min-h-0 min-w-0 overflow-hidden">
-          <div className="flex items-center px-3 h-8 border-b border-[#2b2b2b] bg-[#1a1a1a] shrink-0">
-            <span className="text-[11px] text-[#6e6e6e] uppercase tracking-wide">
-              Conversation
-            </span>
-          </div>
           <ChatPanel messages={messages} agentStatus={agentStatus} />
         </div>
 
@@ -389,7 +389,19 @@ function LiveRoom({
         />
       </main>
 
-      <footer className="border-t border-[#2b2b2b] bg-[#1a1a1a] shrink-0">
+      {changesOpen && (
+        <SidePanel
+          socket={socket}
+          lastDiff={lastDiff}
+          runtime={runtime}
+          cloudMeta={cloudMeta}
+          prUrl={roomInfo?.prUrl}
+          mobile
+          onClose={() => setChangesOpen(false)}
+        />
+      )}
+
+      <footer className="border-t border-[#2b2b2b] bg-[#1a1a1a] shrink-0 pb-[env(safe-area-inset-bottom)]">
         {modelError && (
           <p className="px-3 pt-2 text-[11px] text-[#f07070]">{modelError}</p>
         )}

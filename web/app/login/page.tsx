@@ -1,7 +1,24 @@
 "use client";
 
+import { Suspense } from "react";
 import { SignIn } from "@clerk/nextjs";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
+import { steerClerkAppearance } from "../../lib/clerkAppearance";
+
+function LoginContent() {
+  const searchParams = useSearchParams();
+  const redirect = searchParams.get("redirect") || "/";
+
+  return (
+    <SignIn
+      routing="hash"
+      fallbackRedirectUrl={redirect}
+      signUpUrl="/login"
+      appearance={steerClerkAppearance}
+    />
+  );
+}
 
 export default function LoginPage() {
   return (
@@ -14,17 +31,13 @@ export default function LoginPage() {
           <span className="text-[18px] font-medium text-[#e4e4e4]">Steer</span>
         </div>
 
-        <SignIn
-          routing="hash"
-          fallbackRedirectUrl="/"
-          signUpUrl="/login"
-          appearance={{
-            elements: {
-              rootBox: "w-full",
-              card: "bg-[#1a1a1a] border border-[#2b2b2b] shadow-none",
-            },
-          }}
-        />
+        <Suspense
+          fallback={
+            <p className="text-[13px] text-[#6e6e6e]">Loading sign in…</p>
+          }
+        >
+          <LoginContent />
+        </Suspense>
 
         <Link
           href="/"

@@ -10,6 +10,9 @@ interface SidePanelProps {
   runtime: AgentRuntime;
   cloudMeta: CloudMeta | null;
   prUrl?: string;
+  /** Mobile bottom-sheet mode */
+  mobile?: boolean;
+  onClose?: () => void;
 }
 
 export default function SidePanel({
@@ -18,6 +21,8 @@ export default function SidePanel({
   runtime,
   cloudMeta,
   prUrl,
+  mobile = false,
+  onClose,
 }: SidePanelProps) {
   const fileCount = lastDiff
     ? (lastDiff.match(/^diff --git /gm) || []).length
@@ -26,12 +31,15 @@ export default function SidePanel({
   const meta = cloudMeta || {};
   const effectivePr = meta.prUrl || prUrl;
 
-  return (
-    <div className="w-[38%] min-w-[320px] max-w-[540px] border-l border-[#2b2b2b] flex flex-col min-h-0 h-full overflow-hidden bg-[#141414]">
-      <div className="flex items-center justify-between px-3 h-9 border-b border-[#2b2b2b] bg-[#1a1a1a] shrink-0">
-        <div className="flex items-center gap-2">
+  const body = (
+    <>
+      <div className="relative flex items-center justify-between px-3 h-10 border-b border-[#2b2b2b] bg-[#1a1a1a] shrink-0">
+        <div className="flex items-center gap-2 min-w-0">
+          {mobile && (
+            <div className="w-8 h-1 rounded-full bg-[#3c3c3c] absolute left-1/2 -translate-x-1/2 top-2" />
+          )}
           <span className="text-[12px] text-[#e4e4e4]">
-            {runtime === "cloud" ? "Cloud" : "Changes"}
+            {runtime === "cloud" ? "Cloud" : "File changes"}
           </span>
           {runtime === "local" && fileCount > 0 && (
             <span className="text-[11px] text-[#6e6e6e] tabular-nums">
@@ -39,6 +47,15 @@ export default function SidePanel({
             </span>
           )}
         </div>
+        {onClose && (
+          <button
+            type="button"
+            onClick={onClose}
+            className="h-7 px-2.5 rounded-md text-[12px] text-[#a0a0a0] hover:text-[#e4e4e4] border border-[#2b2b2b]"
+          >
+            Close
+          </button>
+        )}
       </div>
       <div className="flex-1 min-h-0 overflow-hidden relative">
         {runtime === "cloud" ? (
@@ -65,15 +82,33 @@ export default function SidePanel({
                 </p>
               )}
             </div>
-            <p className="text-[12px] text-[#4a4a4a] pt-2">
-              Cloud agents edit a Cursor VM clone. Live working-tree diffs are
-              only available for local rooms.
-            </p>
           </div>
         ) : (
           <DiffViewer socket={socket} initialPatch={lastDiff} hideHeader />
         )}
       </div>
+    </>
+  );
+
+  if (mobile) {
+    return (
+      <div className="fixed inset-0 z-40 flex flex-col justify-end bg-black/50">
+        <button
+          type="button"
+          className="flex-1 w-full cursor-default"
+          aria-label="Close changes"
+          onClick={onClose}
+        />
+        <div className="relative h-[75vh] max-h-[85dvh] rounded-t-xl border-t border-[#2b2b2b] bg-[#141414] flex flex-col overflow-hidden shadow-2xl pb-[env(safe-area-inset-bottom)]">
+          {body}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="hidden lg:flex w-[38%] min-w-[300px] max-w-[540px] border-l border-[#2b2b2b] flex-col min-h-0 h-full overflow-hidden bg-[#141414]">
+      {body}
     </div>
   );
 }

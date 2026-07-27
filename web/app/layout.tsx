@@ -1,11 +1,18 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { ClerkProvider } from "@clerk/nextjs";
 import { AuthProvider } from "../components/AuthProvider";
 import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Steer",
-  description: "Multiplayer Cursor Agent sessions",
+  description: "Multiplayer Cursor Agent sessions — Steer",
+};
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 1,
+  viewportFit: "cover",
 };
 
 export default function RootLayout({

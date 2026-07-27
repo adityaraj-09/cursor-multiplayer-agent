@@ -30,6 +30,12 @@ export default function CliPairPage() {
   return (
     <div className="min-h-screen bg-[#141414] flex items-center justify-center px-4">
       <div className="w-full max-w-md border border-[#2b2b2b] rounded-lg bg-[#1a1a1a] p-6">
+        <div className="flex items-center gap-2.5 mb-4">
+          <div className="w-6 h-6 rounded-[5px] bg-[#e4e4e4] flex items-center justify-center">
+            <span className="text-[#141414] text-[11px] font-semibold">S</span>
+          </div>
+          <span className="text-[14px] font-medium text-[#e4e4e4]">Steer</span>
+        </div>
         <h1 className="text-[18px] font-medium text-[#e4e4e4] mb-1">
           Pair CLI
         </h1>

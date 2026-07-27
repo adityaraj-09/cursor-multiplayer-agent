@@ -9,7 +9,7 @@ interface InlineDiffProps {
 
 export default function InlineDiff({
   patch,
-  defaultOpen = true,
+  defaultOpen = false,
 }: InlineDiffProps) {
   const [open, setOpen] = useState(defaultOpen);
   const containerRef = useRef<HTMLDivElement>(null);

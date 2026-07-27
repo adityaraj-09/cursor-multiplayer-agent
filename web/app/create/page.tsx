@@ -208,7 +208,7 @@ export default function CreateSession() {
   };
 
   const inputClass =
-    "w-full h-10 px-3 bg-[#252525] border border-[#2b2b2b] rounded-md text-[13px] text-[#e4e4e4] placeholder:text-[#6e6e6e] outline-none focus:border-[#4d9fff] transition-colors";
+    "w-full h-10 px-3 bg-[#252525] border border-[#2b2b2b] rounded-md text-[16px] sm:text-[13px] text-[#e4e4e4] placeholder:text-[#6e6e6e] outline-none focus:border-[#4d9fff] transition-colors";
 
   const authOptions: AuthMode[] =
     runtime === "local" ? ["cli", "server", "byok"] : ["server", "byok"];
@@ -216,19 +216,25 @@ export default function CreateSession() {
   return (
     <div className="min-h-screen bg-[#141414]">
       <header className="border-b border-[#2b2b2b]">
-        <div className="max-w-xl mx-auto px-6 h-14 flex items-center gap-3">
+        <div className="max-w-xl mx-auto px-4 sm:px-6 h-14 flex items-center gap-3">
           <Link
             href="/"
-            className="text-[13px] text-[#6e6e6e] hover:text-[#e4e4e4] transition-colors"
+            className="flex items-center gap-2 shrink-0 hover:opacity-80 transition-opacity"
+            aria-label="Steer home"
           >
-            ← Sessions
+            <div className="w-5 h-5 rounded-[4px] bg-[#e4e4e4] flex items-center justify-center">
+              <span className="text-[#141414] text-[9px] font-semibold">S</span>
+            </div>
+            <span className="text-[13px] text-[#a0a0a0] hidden sm:inline">
+              Steer
+            </span>
           </Link>
           <span className="text-[#2b2b2b]">/</span>
           <span className="text-[13px] text-[#e4e4e4]">New session</span>
         </div>
       </header>
 
-      <main className="max-w-xl mx-auto px-6 py-10">
+      <main className="max-w-xl mx-auto px-4 sm:px-6 py-8 sm:py-10">
         <h1 className="text-[22px] font-medium tracking-tight mb-1">
           Create session
         </h1>
