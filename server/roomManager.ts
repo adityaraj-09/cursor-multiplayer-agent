@@ -995,9 +995,21 @@ export class RoomManager {
     if (row.auth_mode === "cli") {
       const ownerId = row.owner_id;
       if (ownerId && this.workerRelay?.hasOnlineWorker(ownerId)) {
-        return this.workerRelay.requestListModels(ownerId);
+        try {
+          return await this.workerRelay.requestListModels(ownerId);
+        } catch (err) {
+          console.warn(
+            `[listModels] worker failed for room ${id}:`,
+            err instanceof Error ? err.message : err,
+          );
+          return [{ id: "auto", displayName: "Auto" }];
+        }
       }
-      return listCliModels();
+      try {
+        return await listCliModels();
+      } catch {
+        return [{ id: "auto", displayName: "Auto" }];
+      }
     }
     const apiKey = resolveApiKey(row);
     return listModelsForKey(apiKey);

@@ -54,6 +54,11 @@ export class WorkerRelay {
       timer: ReturnType<typeof setTimeout>;
     }
   >();
+  private modelsCache = new Map<
+    string,
+    { at: number; models: ModelInfo[] }
+  >();
+  private static readonly MODELS_CACHE_MS = 15 * 60_000;
 
   constructor(
     private io: SocketIOServer,
@@ -289,10 +294,21 @@ export class WorkerRelay {
   /**
    * Ask the user's CLI worker to run `cursor agent --list-models` locally.
    * Required in production — the hosted API has no Cursor CLI.
+   * Results are cached per user for 15 minutes.
    */
   requestListModels(userId: string, timeoutMs = 60_000): Promise<ModelInfo[]> {
+    const cached = this.modelsCache.get(userId);
+    if (
+      cached &&
+      Date.now() - cached.at < WorkerRelay.MODELS_CACHE_MS &&
+      cached.models.length > 0
+    ) {
+      return Promise.resolve(cached.models);
+    }
+
     const worker = this.findAnyWorkerForUser(userId);
     if (!worker) {
+      if (cached?.models.length) return Promise.resolve(cached.models);
       return Promise.reject(
         new Error(
           "No online Steer worker. Run `steer start` on your machine first.",
@@ -305,10 +321,21 @@ export class WorkerRelay {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.listModelsWaiters.delete(requestId);
-        reject(new Error("Listing models timed out — check your worker machine"));
+        if (cached?.models.length) resolve(cached.models);
+        else
+          reject(new Error("Listing models timed out — check your worker machine"));
       }, timeoutMs);
 
-      this.listModelsWaiters.set(requestId, { resolve, reject, timer });
+      this.listModelsWaiters.set(requestId, {
+        resolve: (models) => {
+          if (models.length > 0) {
+            this.modelsCache.set(userId, { at: Date.now(), models });
+          }
+          resolve(models);
+        },
+        reject,
+        timer,
+      });
       worker.socket.emit("worker:list-models", { requestId });
     });
   }
@@ -324,6 +351,7 @@ export class WorkerRelay {
       w.reject(new Error("Server shutting down"));
     }
     this.listModelsWaiters.clear();
+    this.modelsCache.clear();
     this.workers.clear();
     this.roomToWorker.clear();
     this.eventListeners.clear();

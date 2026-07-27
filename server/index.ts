@@ -315,9 +315,15 @@ app.post("/api/rooms", requireAuth, async (req, res) => {
   }
 });
 
-app.get("/api/rooms/:id/models", async (req, res) => {
+app.get("/api/rooms/:id/models", requireAuth, async (req, res) => {
+  const id = routeParam(req.params.id);
+  if (!roomManager.userCanAccessRoom(id, req.user!.id)) {
+    res.status(404).json({ error: "Room not found" });
+    return;
+  }
   try {
-    const models = await roomManager.listModelsForRoom(routeParam(req.params.id));
+    const models = await roomManager.listModelsForRoom(id);
+    res.setHeader("Cache-Control", "private, max-age=60");
     res.json({ models });
   } catch (err) {
     res.status(400).json({
@@ -326,12 +332,14 @@ app.get("/api/rooms/:id/models", async (req, res) => {
   }
 });
 
-app.patch("/api/rooms/:id/model", (req, res) => {
+app.patch("/api/rooms/:id/model", requireAuth, (req, res) => {
+  const id = routeParam(req.params.id);
+  if (!roomManager.userCanAccessRoom(id, req.user!.id)) {
+    res.status(404).json({ error: "Room not found" });
+    return;
+  }
   try {
-    const room = roomManager.setModel(
-      routeParam(req.params.id),
-      String(req.body?.modelId || ""),
-    );
+    const room = roomManager.setModel(id, String(req.body?.modelId || ""));
     res.json(room);
   } catch (err) {
     res.status(400).json({
@@ -340,8 +348,12 @@ app.patch("/api/rooms/:id/model", (req, res) => {
   }
 });
 
-app.post("/api/rooms/:id/stop", (req, res) => {
+app.post("/api/rooms/:id/stop", requireAuth, (req, res) => {
   const id = routeParam(req.params.id);
+  if (!roomManager.userCanAccessRoom(id, req.user!.id)) {
+    res.status(404).json({ error: "Room not found" });
+    return;
+  }
   const room = roomManager.getRoomInfo(id);
   if (!room) {
     res.status(404).json({ error: "Room not found" });
