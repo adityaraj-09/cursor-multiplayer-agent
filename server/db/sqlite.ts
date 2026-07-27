@@ -184,8 +184,8 @@ const stmts = {
     INSERT INTO rooms (
       id, name, repo_path, agent_command, created_at, last_active_at, status,
       runtime, auth_mode, model_id, repo_url, starting_ref, cursor_agent_id,
-      pr_url, auto_create_pr, key_ciphertext, key_hint, owner_id
-    ) VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      cursor_session_id, pr_url, auto_create_pr, key_ciphertext, key_hint, owner_id
+    ) VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `),
   updateRoomOwner: db.prepare(`UPDATE rooms SET owner_id = ? WHERE id = ?`),
   listRooms: db.prepare(`SELECT * FROM rooms ORDER BY last_active_at DESC`),
@@ -345,6 +345,7 @@ export interface CreateRoomInput {
   repoUrl?: string | null;
   startingRef?: string | null;
   cursorAgentId?: string | null;
+  cursorSessionId?: string | null;
   prUrl?: string | null;
   autoCreatePR?: boolean;
   keyCiphertext?: string | null;
@@ -393,6 +394,7 @@ export function createRoom(input: CreateRoomInput): RoomRow {
     input.repoUrl ?? null,
     input.startingRef ?? null,
     input.cursorAgentId ?? null,
+    input.cursorSessionId ?? null,
     input.prUrl ?? null,
     input.autoCreatePR ? 1 : 0,
     input.keyCiphertext ?? null,

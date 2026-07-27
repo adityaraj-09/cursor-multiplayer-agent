@@ -12,12 +12,14 @@ import {
   getFileDiff,
   type AgentStreamEvent,
 } from "./agent.js";
+import { listChatSessions } from "./listSessions.js";
 
 interface RunPromptPayload {
   roomId: string;
   prompt: string;
   repoPath: string;
   modelId: string;
+  sessionId?: string | null;
 }
 
 interface AbortPayload {
@@ -118,7 +120,13 @@ export function startWorker(repoPathOverride?: string): void {
   });
 
   socket.on("worker:run-prompt", (payload: RunPromptPayload) => {
-    const { roomId, prompt, repoPath: payloadRepoPath, modelId } = payload;
+    const {
+      roomId,
+      prompt,
+      repoPath: payloadRepoPath,
+      modelId,
+      sessionId,
+    } = payload;
     const repoPath = repoPathOverride || payloadRepoPath;
 
     if (activeRoomId) {
@@ -196,7 +204,7 @@ export function startWorker(repoPathOverride?: string): void {
       if (activeRoomId === roomId) activeRoomId = null;
     };
 
-    runAgent(repoPath, prompt, modelId, onEvent)
+    runAgent(repoPath, prompt, modelId, onEvent, sessionId)
       .then(async () => {
         if (thisRun !== runSeq) return;
         for (const filePath of editedPaths) {
@@ -277,6 +285,29 @@ export function startWorker(repoPathOverride?: string): void {
         console.error(chalk.red(`  ✗ List models error: ${message}`));
         emitOrQueue("worker:models-listed", {
           requestId: payload.requestId,
+          error: message,
+        });
+      }
+    },
+  );
+
+  socket.on(
+    "worker:list-sessions",
+    (payload: { requestId: string; repoPath: string }) => {
+      console.log(chalk.cyan(`  Listing Cursor chats for ${payload.repoPath}…`));
+      try {
+        const sessions = listChatSessions(payload.repoPath);
+        console.log(chalk.green(`  ✓ ${sessions.length} chat(s)`));
+        emitOrQueue("worker:sessions-listed", {
+          requestId: payload.requestId,
+          sessions,
+        });
+      } catch (err) {
+        const message = (err as Error).message;
+        console.error(chalk.red(`  ✗ List sessions error: ${message}`));
+        emitOrQueue("worker:sessions-listed", {
+          requestId: payload.requestId,
+          sessions: [],
           error: message,
         });
       }

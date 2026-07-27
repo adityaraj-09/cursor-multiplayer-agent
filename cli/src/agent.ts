@@ -104,6 +104,7 @@ export function runAgent(
   prompt: string,
   modelId: string,
   onEvent: (event: AgentStreamEvent) => void,
+  sessionId?: string | null,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     const args = [
@@ -117,6 +118,9 @@ export function runAgent(
     ];
     if (modelId && modelId !== "auto") {
       args.push("--model", modelId);
+    }
+    if (sessionId) {
+      args.push("--resume", sessionId);
     }
     args.push(prompt);
 

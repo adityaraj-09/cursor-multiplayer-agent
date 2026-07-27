@@ -60,6 +60,8 @@ export interface CreateRoomRequest {
   autoCreatePR?: boolean;
   apiKey?: string;
   ownerId?: string;
+  /** Resume an existing Cursor CLI chat (--resume). */
+  cursorSessionId?: string;
 }
 
 type AgentBackend = AgentRunner | SdkAgentSession;
@@ -212,7 +214,8 @@ export class RoomManager {
     let agent: AgentBackend;
 
     if (authMode === "cli") {
-      agent = new AgentRunner(repoPath, null, modelId);
+      const resumeId = req.cursorSessionId?.trim() || null;
+      agent = new AgentRunner(repoPath, resumeId, modelId);
     } else {
       const sdk = new SdkAgentSession({
         runtime,
@@ -244,6 +247,7 @@ export class RoomManager {
       repoUrl,
       startingRef,
       cursorAgentId,
+      cursorSessionId: req.cursorSessionId?.trim() || null,
       autoCreatePR,
       keyCiphertext,
       keyHint,

@@ -4,6 +4,7 @@ import type {
   ServerToWorkerEvents,
   AgentStreamEventPayload,
   ModelInfo,
+  CursorChatSession,
 } from "../shared/events.js";
 import * as db from "./db.js";
 
@@ -55,6 +56,14 @@ export class WorkerRelay {
     string,
     {
       resolve: (models: ModelInfo[]) => void;
+      reject: (err: Error) => void;
+      timer: ReturnType<typeof setTimeout>;
+    }
+  >();
+  private listSessionsWaiters = new Map<
+    string,
+    {
+      resolve: (sessions: CursorChatSession[]) => void;
       reject: (err: Error) => void;
       timer: ReturnType<typeof setTimeout>;
     }
@@ -170,6 +179,18 @@ export class WorkerRelay {
         }
       });
 
+      socket.on("worker:sessions-listed", (data) => {
+        const waiter = this.listSessionsWaiters.get(data.requestId);
+        if (!waiter) return;
+        clearTimeout(waiter.timer);
+        this.listSessionsWaiters.delete(data.requestId);
+        if (data.error) {
+          waiter.reject(new Error(data.error));
+        } else {
+          waiter.resolve(data.sessions || []);
+        }
+      });
+
       socket.on("disconnect", () => {
         let removedWorkerId: string | null = null;
         let removedUserId: string | null = null;
@@ -209,6 +230,13 @@ export class WorkerRelay {
             if (reqId.startsWith(removedUserId)) {
               clearTimeout(waiter.timer);
               this.listModelsWaiters.delete(reqId);
+              waiter.reject(new Error("Worker disconnected"));
+            }
+          }
+          for (const [reqId, waiter] of [...this.listSessionsWaiters.entries()]) {
+            if (reqId.startsWith(removedUserId)) {
+              clearTimeout(waiter.timer);
+              this.listSessionsWaiters.delete(reqId);
               waiter.reject(new Error("Worker disconnected"));
             }
           }
@@ -470,6 +498,36 @@ export class WorkerRelay {
     });
   }
 
+  /**
+   * List Cursor CLI chat sessions for a repo path on the user's worker machine.
+   */
+  requestListSessions(
+    userId: string,
+    repoPath: string,
+    timeoutMs = 15_000,
+  ): Promise<CursorChatSession[]> {
+    const worker = this.findAnyWorkerForUser(userId);
+    if (!worker) {
+      return Promise.reject(
+        new Error(
+          "No online Steer worker. Run `steer start` on your machine first.",
+        ),
+      );
+    }
+
+    const requestId = `${userId}-sessions-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.listSessionsWaiters.delete(requestId);
+        reject(new Error("Listing chat sessions timed out"));
+      }, timeoutMs);
+
+      this.listSessionsWaiters.set(requestId, { resolve, reject, timer });
+      worker.socket.emit("worker:list-sessions", { requestId, repoPath });
+    });
+  }
+
   shutdown(): void {
     for (const t of this.roomGraceTimers.values()) clearTimeout(t);
     this.roomGraceTimers.clear();
@@ -485,6 +543,11 @@ export class WorkerRelay {
       w.reject(new Error("Server shutting down"));
     }
     this.listModelsWaiters.clear();
+    for (const w of this.listSessionsWaiters.values()) {
+      clearTimeout(w.timer);
+      w.reject(new Error("Server shutting down"));
+    }
+    this.listSessionsWaiters.clear();
     this.modelsCache.clear();
     this.workers.clear();
     this.roomToWorker.clear();

@@ -1,6 +1,7 @@
 import type {
   AuthMode,
   AgentRuntime,
+  CursorChatSession,
   ModelInfo,
   RepoInfo,
   RoomInfo,
@@ -123,6 +124,21 @@ export async function fetchOnlineWorkers(): Promise<
   if (!res.ok) return [];
   const data = await res.json();
   return data.workers || [];
+}
+
+export async function fetchCursorSessions(
+  repoPath: string,
+): Promise<CursorChatSession[]> {
+  const params = new URLSearchParams({ repoPath });
+  const res = await fetch(`${API_BASE}/cursor-sessions?${params}`, {
+    headers: await authHeaders(),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Failed to list chat sessions");
+  }
+  const data = await res.json();
+  return data.sessions ?? [];
 }
 
 export async function fetchRooms(): Promise<RoomInfo[]> {
@@ -255,6 +271,7 @@ export async function createRoom(data: {
   startingRef?: string;
   autoCreatePR?: boolean;
   apiKey?: string;
+  cursorSessionId?: string;
 }): Promise<RoomInfo> {
   const res = await fetch(`${API_BASE}/rooms`, {
     method: "POST",

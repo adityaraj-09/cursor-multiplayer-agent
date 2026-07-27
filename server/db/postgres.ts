@@ -185,6 +185,7 @@ export interface CreateRoomInput {
   repoUrl?: string | null;
   startingRef?: string | null;
   cursorAgentId?: string | null;
+  cursorSessionId?: string | null;
   prUrl?: string | null;
   autoCreatePR?: boolean;
   keyCiphertext?: string | null;
@@ -240,8 +241,8 @@ export function createRoom(input: CreateRoomInput): RoomRow {
     `INSERT INTO rooms (
       id, name, repo_path, agent_command, created_at, last_active_at, status,
       runtime, auth_mode, model_id, repo_url, starting_ref, cursor_agent_id,
-      pr_url, auto_create_pr, key_ciphertext, key_hint, owner_id
-    ) VALUES ($1,$2,$3,$4,$5,$6,'active',$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+      cursor_session_id, pr_url, auto_create_pr, key_ciphertext, key_hint, owner_id
+    ) VALUES ($1,$2,$3,$4,$5,$6,'active',$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
     RETURNING *`,
     [
       input.id,
@@ -256,6 +257,7 @@ export function createRoom(input: CreateRoomInput): RoomRow {
       input.repoUrl ?? null,
       input.startingRef ?? null,
       input.cursorAgentId ?? null,
+      input.cursorSessionId ?? null,
       input.prUrl ?? null,
       input.autoCreatePR ? 1 : 0,
       input.keyCiphertext ?? null,

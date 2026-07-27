@@ -81,6 +81,14 @@ export interface ModelInfo {
   description?: string;
 }
 
+/** Cursor CLI chat session stored under ~/.cursor/chats for a workspace. */
+export interface CursorChatSession {
+  id: string;
+  createdAt: number;
+  updatedAt: number;
+  hasConversation: boolean;
+}
+
 export interface RepoInfo {
   url: string;
 }
@@ -143,6 +151,11 @@ export interface WorkerToServerEvents {
     models?: Array<{ id: string; displayName: string }>;
     error?: string;
   }) => void;
+  "worker:sessions-listed": (data: {
+    requestId: string;
+    sessions?: CursorChatSession[];
+    error?: string;
+  }) => void;
 }
 
 export interface ServerToWorkerEvents {
@@ -156,6 +169,10 @@ export interface ServerToWorkerEvents {
   "worker:abort": (data: { roomId: string }) => void;
   "worker:pick-folder": (data: { requestId: string }) => void;
   "worker:list-models": (data: { requestId: string }) => void;
+  "worker:list-sessions": (data: {
+    requestId: string;
+    repoPath: string;
+  }) => void;
   "worker:error": (message: string) => void;
 }
 

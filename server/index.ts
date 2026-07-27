@@ -255,6 +255,28 @@ app.post("/api/workers/pick-folder", requireAuth, async (req, res) => {
   }
 });
 
+/** GET /api/cursor-sessions?repoPath= — Cursor CLI chats for a repo (via worker). */
+app.get("/api/cursor-sessions", requireAuth, async (req, res) => {
+  const repoPath =
+    typeof req.query.repoPath === "string" ? req.query.repoPath.trim() : "";
+  if (!repoPath) {
+    res.status(400).json({ error: "repoPath is required" });
+    return;
+  }
+  try {
+    const sessions = await workerRelay.requestListSessions(
+      req.user!.id,
+      repoPath,
+    );
+    res.json({ sessions });
+  } catch (err) {
+    res.status(400).json({
+      error:
+        err instanceof Error ? err.message : "Failed to list chat sessions",
+    });
+  }
+});
+
 app.get("/api/rooms", requireAuth, (req, res) => {
   res.json(roomManager.listRoomsForUser(req.user!.id));
 });
@@ -305,6 +327,10 @@ app.post("/api/rooms", requireAuth, async (req, res) => {
       autoCreatePR: Boolean(req.body?.autoCreatePR),
       apiKey: req.body?.apiKey,
       ownerId: req.user!.id,
+      cursorSessionId:
+        typeof req.body?.cursorSessionId === "string"
+          ? req.body.cursorSessionId
+          : undefined,
     });
     res.status(201).json(room);
   } catch (err) {
