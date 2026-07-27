@@ -327,10 +327,6 @@ app.post("/api/rooms", requireAuth, async (req, res) => {
       autoCreatePR: Boolean(req.body?.autoCreatePR),
       apiKey: req.body?.apiKey,
       ownerId: req.user!.id,
-      cursorSessionId:
-        typeof req.body?.cursorSessionId === "string"
-          ? req.body.cursorSessionId
-          : undefined,
     });
     res.status(201).json(room);
   } catch (err) {
@@ -374,6 +370,32 @@ app.patch("/api/rooms/:id/model", requireAuth, (req, res) => {
   } catch (err) {
     res.status(400).json({
       error: err instanceof Error ? err.message : "Failed to update model",
+    });
+  }
+});
+
+app.patch("/api/rooms/:id/cursor-session", requireAuth, (req, res) => {
+  const id = routeParam(req.params.id);
+  if (!roomManager.userCanAccessRoom(id, req.user!.id)) {
+    res.status(404).json({ error: "Room not found" });
+    return;
+  }
+  try {
+    const raw = req.body?.cursorSessionId;
+    const sessionId =
+      raw === null || raw === undefined || raw === ""
+        ? null
+        : String(raw);
+    const room = roomManager.setCursorSession(
+      id,
+      sessionId,
+      req.user!.id,
+    );
+    res.json(room);
+  } catch (err) {
+    res.status(400).json({
+      error:
+        err instanceof Error ? err.message : "Failed to update Cursor chat",
     });
   }
 });

@@ -6,7 +6,6 @@ import Link from "next/link";
 import {
   createRoom,
   fetchAuthStatus,
-  fetchCursorSessions,
   fetchOnlineWorkers,
   fetchRepositories,
   pickLocalFolder,
@@ -15,7 +14,6 @@ import {
 import type {
   AgentRuntime,
   AuthMode,
-  CursorChatSession,
   RepoInfo,
 } from "../../../shared/events";
 
@@ -48,10 +46,6 @@ export default function CreateSession() {
   const [creating, setCreating] = useState(false);
   const [pickingFolder, setPickingFolder] = useState(false);
   const [workerOnline, setWorkerOnline] = useState(false);
-  const [cursorSessions, setCursorSessions] = useState<CursorChatSession[]>([]);
-  const [cursorSessionId, setCursorSessionId] = useState("");
-  const [loadingSessions, setLoadingSessions] = useState(false);
-  const [sessionError, setSessionError] = useState("");
 
   const refreshAuth = () =>
     fetchAuthStatus()
@@ -167,43 +161,6 @@ export default function CreateSession() {
     };
   }, [authMode, apiKey, runtime, serverKeyConfigured]);
 
-  useEffect(() => {
-    let cancelled = false;
-    const isLocalCli = runtime === "local" && authMode === "cli";
-    if (!isLocalCli || !repoPath.trim() || !workerOnline) {
-      setCursorSessions([]);
-      setCursorSessionId("");
-      setSessionError("");
-      setLoadingSessions(false);
-      return;
-    }
-
-    setLoadingSessions(true);
-    setSessionError("");
-    fetchCursorSessions(repoPath.trim())
-      .then((sessions) => {
-        if (cancelled) return;
-        setCursorSessions(sessions);
-        // Default to latest Cursor chat for this repo
-        setCursorSessionId(sessions.length > 0 ? sessions[0].id : "");
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        setCursorSessions([]);
-        setCursorSessionId("");
-        setSessionError(
-          err instanceof Error ? err.message : "Failed to load chat sessions",
-        );
-      })
-      .finally(() => {
-        if (!cancelled) setLoadingSessions(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [runtime, authMode, repoPath, workerOnline]);
-
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     if (!name.trim()) {
@@ -242,10 +199,6 @@ export default function CreateSession() {
           runtime === "cloud" ? startingRef.trim() || "main" : undefined,
         autoCreatePR: runtime === "cloud" ? autoCreatePR : undefined,
         apiKey: authMode === "byok" ? apiKey.trim() : undefined,
-        cursorSessionId:
-          runtime === "local" && authMode === "cli" && cursorSessionId
-            ? cursorSessionId
-            : undefined,
       });
       router.push(`/room/${room.id}`);
     } catch (err: unknown) {
@@ -442,39 +395,6 @@ export default function CreateSession() {
                   ? "Opens a folder picker on the machine running `steer start`."
                   : "Start your CLI worker first (`steer start`), then browse."}
               </p>
-
-              {authMode === "cli" && repoPath.trim() && workerOnline && (
-                <div className="mt-4">
-                  <label className="block text-[12px] text-[#a0a0a0] mb-1.5">
-                    Cursor chat session
-                  </label>
-                  {loadingSessions ? (
-                    <p className="text-[12px] text-[#6e6e6e]">
-                      Loading chat sessions…
-                    </p>
-                  ) : sessionError ? (
-                    <p className="text-[12px] text-[#f07070]">{sessionError}</p>
-                  ) : (
-                    <select
-                      value={cursorSessionId}
-                      onChange={(e) => setCursorSessionId(e.target.value)}
-                      className={inputClass}
-                    >
-                      <option value="">New Cursor chat</option>
-                      {cursorSessions.map((s, index) => (
-                        <option key={s.id} value={s.id}>
-                          {formatCursorSessionLabel(s, index)}
-                        </option>
-                      ))}
-                    </select>
-                  )}
-                  <p className="text-[11px] text-[#6e6e6e] mt-1.5">
-                    {cursorSessions.length > 0
-                      ? "Latest chat is selected by default — resume where you left off in Cursor."
-                      : "No prior Cursor chats for this folder — a new chat starts on first message."}
-                  </p>
-                </div>
-              )}
             </div>
           ) : (
             <>
@@ -547,20 +467,4 @@ export default function CreateSession() {
       </main>
     </div>
   );
-}
-
-function formatCursorSessionLabel(
-  session: CursorChatSession,
-  index: number,
-): string {
-  const when = new Date(session.updatedAt).toLocaleString(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-  const shortId = session.id.slice(0, 8);
-  const prefix = index === 0 ? "Latest · " : "";
-  const empty = session.hasConversation ? "" : " · empty";
-  return `${prefix}${when} · ${shortId}${empty}`;
 }

@@ -8,6 +8,7 @@ import { useAuth } from "../../../components/AuthProvider";
 import {
   fetchOrJoinRoom,
   fetchRoomModels,
+  updateRoomCursorSession,
   updateRoomModel,
 } from "../../../lib/api";
 import {
@@ -19,6 +20,7 @@ import ChatPanel from "../../../components/ChatPanel";
 import SidePanel from "../../../components/SidePanel";
 import PresenceBar from "../../../components/PresenceBar";
 import SteerInput from "../../../components/SteerInput";
+import CursorSessionPicker from "../../../components/CursorSessionPicker";
 import DriverControls from "../../../components/DriverControls";
 import type { ModelInfo, RoomInfo } from "../../../../shared/events";
 
@@ -219,6 +221,22 @@ function LiveRoom({
   const [dismissedRequest, setDismissedRequest] = useState(false);
   const [shareLabel, setShareLabel] = useState("Share");
   const [changesOpen, setChangesOpen] = useState(false);
+  const [cursorSessionError, setCursorSessionError] = useState("");
+  const [savingCursorSession, setSavingCursorSession] = useState(false);
+
+  useEffect(() => {
+    if (!socket || !roomInfo) return;
+    const onCursorSession = (sessionId: string | null) => {
+      onRoomInfo({
+        ...roomInfo,
+        cursorSessionId: sessionId ?? undefined,
+      });
+    };
+    socket.on("cursor-session-updated", onCursorSession);
+    return () => {
+      socket.off("cursor-session-updated", onCursorSession);
+    };
+  }, [socket, roomInfo, onRoomInfo]);
 
   useEffect(() => {
     let cancelled = false;
@@ -263,6 +281,25 @@ function LiveRoom({
       }
     },
     [modelId, onRoomInfo, roomId],
+  );
+
+  const handleCursorSessionChange = useCallback(
+    async (next: string | null) => {
+      if (next === (roomInfo?.cursorSessionId || null)) return;
+      setSavingCursorSession(true);
+      setCursorSessionError("");
+      try {
+        const updated = await updateRoomCursorSession(roomId, next);
+        onRoomInfo(updated);
+      } catch (err) {
+        setCursorSessionError(
+          err instanceof Error ? err.message : "Failed to switch Cursor chat",
+        );
+      } finally {
+        setSavingCursorSession(false);
+      }
+    },
+    [roomInfo?.cursorSessionId, onRoomInfo, roomId],
   );
 
   const handleGrantDrive = useCallback(() => {
@@ -402,8 +439,27 @@ function LiveRoom({
       )}
 
       <footer className="border-t border-[#2b2b2b] bg-[#1a1a1a] shrink-0 pb-[env(safe-area-inset-bottom)]">
-        {modelError && (
-          <p className="px-3 pt-2 text-[11px] text-[#f07070]">{modelError}</p>
+        {(modelError || cursorSessionError) && (
+          <p className="px-3 pt-2 text-[11px] text-[#f07070]">
+            {modelError || cursorSessionError}
+          </p>
+        )}
+        {runtime === "local" && roomInfo?.authMode === "cli" && roomInfo.repoPath && (
+          <div className="px-2 sm:px-3 pt-2">
+            <CursorSessionPicker
+              roomId={roomId}
+              repoPath={roomInfo.repoPath}
+              cursorSessionId={roomInfo.cursorSessionId}
+              disabled={agentStatus === "running" || savingCursorSession}
+              canChange={amHost}
+              onSessionChange={(id) => void handleCursorSessionChange(id)}
+            />
+            <p className="text-[10px] text-[#6e6e6e] mt-1 px-0.5">
+              {roomInfo.cursorSessionId
+                ? "Next message resumes this Steer room’s Cursor chat."
+                : "First message starts a new Cursor chat; reopening this Steer session resumes it."}
+            </p>
+          </div>
         )}
         <SteerInput
           onSend={sendSteer}

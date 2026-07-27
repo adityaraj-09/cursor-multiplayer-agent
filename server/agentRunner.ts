@@ -113,6 +113,10 @@ export class AgentRunner {
     return this.sessionId;
   }
 
+  setSessionId(sessionId: string | null): void {
+    this.sessionId = sessionId?.trim() || null;
+  }
+
   setModel(modelId: string): void {
     this.modelId = modelId || "auto";
   }

@@ -271,7 +271,6 @@ export async function createRoom(data: {
   startingRef?: string;
   autoCreatePR?: boolean;
   apiKey?: string;
-  cursorSessionId?: string;
 }): Promise<RoomInfo> {
   const res = await fetch(`${API_BASE}/rooms`, {
     method: "POST",
@@ -323,6 +322,25 @@ export async function updateRoomModel(
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.error || "Failed to update model");
+  }
+  return res.json();
+}
+
+export async function updateRoomCursorSession(
+  roomId: string,
+  cursorSessionId: string | null,
+): Promise<RoomInfo> {
+  const res = await fetch(`${API_BASE}/rooms/${roomId}/cursor-session`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+      ...(await authHeaders()),
+    },
+    body: JSON.stringify({ cursorSessionId }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Failed to update Cursor chat");
   }
   return res.json();
 }

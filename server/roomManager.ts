@@ -60,8 +60,6 @@ export interface CreateRoomRequest {
   autoCreatePR?: boolean;
   apiKey?: string;
   ownerId?: string;
-  /** Resume an existing Cursor CLI chat (--resume). */
-  cursorSessionId?: string;
 }
 
 type AgentBackend = AgentRunner | SdkAgentSession;
@@ -214,8 +212,7 @@ export class RoomManager {
     let agent: AgentBackend;
 
     if (authMode === "cli") {
-      const resumeId = req.cursorSessionId?.trim() || null;
-      agent = new AgentRunner(repoPath, resumeId, modelId);
+      agent = new AgentRunner(repoPath, null, modelId);
     } else {
       const sdk = new SdkAgentSession({
         runtime,
@@ -247,7 +244,7 @@ export class RoomManager {
       repoUrl,
       startingRef,
       cursorAgentId,
-      cursorSessionId: req.cursorSessionId?.trim() || null,
+      cursorSessionId: null,
       autoCreatePR,
       keyCiphertext,
       keyHint,
@@ -625,8 +622,7 @@ export class RoomManager {
       switch (event.kind) {
         case "session":
           if (event.sessionId) {
-            db.setCursorSessionId(room.id, event.sessionId);
-            room.row.cursor_session_id = event.sessionId;
+            this.persistCursorSession(room, event.sessionId);
           }
           break;
         case "assistant_delta":
@@ -930,8 +926,7 @@ export class RoomManager {
       await room.agent.run(prompt, (event) => {
         switch (event.kind) {
           case "session":
-            db.setCursorSessionId(room.id, event.sessionId);
-            room.row.cursor_session_id = event.sessionId;
+            this.persistCursorSession(room, event.sessionId);
             break;
           case "assistant_delta":
           case "assistant_final":
@@ -1025,8 +1020,7 @@ export class RoomManager {
 
       const sessionId = room.agent.getSessionId();
       if (sessionId && sessionId !== room.row.cursor_session_id) {
-        db.setCursorSessionId(room.id, sessionId);
-        room.row.cursor_session_id = sessionId;
+        this.persistCursorSession(room, sessionId);
       }
 
       this.io.to(room.id).emit("agent-status", "idle");
@@ -1209,6 +1203,39 @@ export class RoomManager {
     return this.toRoomInfo(row, room?.participants.size || 0);
   }
 
+  setCursorSession(
+    id: string,
+    sessionIdRaw: string | null | undefined,
+    actorUserId?: string,
+  ): RoomInfo {
+    const room = this.rooms.get(id);
+    const row = db.getRoom(id);
+    if (!row || row.status !== "active") throw new Error("Room not found");
+
+    if (actorUserId && row.owner_id && row.owner_id !== actorUserId) {
+      throw new Error("Only the host can change the Cursor chat");
+    }
+
+    if (room?.agent.isBusy() || room?.workerRunActive) {
+      throw new Error("Wait for the agent to finish before switching chats");
+    }
+
+    const next = sessionIdRaw?.trim() || null;
+    if (room) {
+      this.persistCursorSession(room, next);
+      if (room.agent instanceof AgentRunner) {
+        room.agent.setSessionId(next);
+      }
+    } else {
+      if (next) db.setCursorSessionId(id, next);
+      else db.setCursorSessionId(id, "");
+      row.cursor_session_id = next;
+      this.io.to(id).emit("cursor-session-updated", next);
+    }
+
+    return this.toRoomInfo(row, room?.participants.size || 0);
+  }
+
   stopRoom(id: string, actorUserId?: string): void {
     const row = db.getRoom(id);
     if (!row) return;
@@ -1236,6 +1263,15 @@ export class RoomManager {
     const roomId = this.socketRooms.get(socketId);
     if (!roomId) return undefined;
     return this.rooms.get(roomId);
+  }
+
+  private persistCursorSession(room: RoomState, sessionId: string | null): void {
+    const next = sessionId?.trim() || null;
+    if (next === room.row.cursor_session_id) return;
+    if (next) db.setCursorSessionId(room.id, next);
+    else db.setCursorSessionId(room.id, "");
+    room.row.cursor_session_id = next;
+    this.io.to(room.id).emit("cursor-session-updated", next);
   }
 
   private broadcastPresence(room: RoomState): void {
@@ -1271,6 +1307,7 @@ export class RoomManager {
       autoCreatePR: Boolean(row.auto_create_pr),
       keyHint: row.key_hint || undefined,
       ownerId: row.owner_id || undefined,
+      cursorSessionId: row.cursor_session_id || undefined,
     };
   }
 }

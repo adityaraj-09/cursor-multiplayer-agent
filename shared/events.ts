@@ -60,6 +60,8 @@ export interface RoomInfo {
   keyHint?: string;
   ownerId?: string;
   inviteCode?: string;
+  /** Active Cursor CLI chat id for this Steer room (--resume). */
+  cursorSessionId?: string;
 }
 
 export interface UserInfo {
@@ -102,6 +104,7 @@ export interface ServerToClientEvents {
   "agent-status": (status: AgentRunStatus, detail?: string) => void;
   "cloud-meta": (meta: CloudMeta) => void;
   "model-updated": (modelId: string) => void;
+  "cursor-session-updated": (sessionId: string | null) => void;
   presence: (participants: Participant[]) => void;
   "diff-update": (patch: string) => void;
   "steer-log": (entry: SteerLogEntry) => void;
