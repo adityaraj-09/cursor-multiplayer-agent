@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import type { ModelInfo } from "../../shared/events";
-import { validateAgentScope } from "../../lib/api";
+import { validateAgentScope } from "../lib/api";
 
 interface AddAgentDialogProps {
   open: boolean;
