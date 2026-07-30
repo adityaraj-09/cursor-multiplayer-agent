@@ -428,6 +428,7 @@ export async function fetchRoomModels(roomId: string): Promise<ModelInfo[]> {
 export async function updateRoomModel(
   roomId: string,
   modelId: string,
+  agentId?: string,
 ): Promise<RoomInfo> {
   const res = await fetch(`${API_BASE}/rooms/${roomId}/model`, {
     method: "PATCH",
@@ -435,7 +436,7 @@ export async function updateRoomModel(
       "Content-Type": "application/json",
       ...(await authHeaders()),
     },
-    body: JSON.stringify({ modelId }),
+    body: JSON.stringify({ modelId, ...(agentId ? { agentId } : {}) }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));

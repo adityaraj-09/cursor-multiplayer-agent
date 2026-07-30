@@ -2182,13 +2182,20 @@ export class RoomManager {
         agent.row.model_id = modelId;
         agent.backend.setModel(modelId);
       }
+
+      const defaultAgent = this.getDefaultAgent(room);
+      if (resolvedAgentId === defaultAgent.row.id) {
+        db.setModelId(id, modelId);
+        row.model_id = modelId;
+        room.row.model_id = modelId;
+      }
+    } else if (!agentId) {
+      db.setModelId(id, modelId);
+      row.model_id = modelId;
+      if (room) room.row.model_id = modelId;
     }
 
-    // Keep room-level model_id for compat
-    db.setModelId(id, modelId);
-    row.model_id = modelId;
     if (room) {
-      room.row.model_id = modelId;
       this.io.to(id).emit("model-updated", modelId, resolvedAgentId);
       this.broadcastAgents(room);
     }

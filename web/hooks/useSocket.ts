@@ -226,7 +226,15 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
       setLastDiff(patch);
     };
     const onCloudMeta = (meta: CloudMeta) => setCloudMeta(meta);
-    const onModelUpdated = (id: string) => setModelId(id);
+    const onModelUpdated = (id: string, agentId?: string) => {
+      if (agentId) {
+        setAgents((prev) =>
+          prev.map((a) => (a.id === agentId ? { ...a, modelId: id } : a)),
+        );
+      } else {
+        setModelId(id);
+      }
+    };
     const onError = (message: string) => {
       console.warn("Server error:", message);
     };
