@@ -126,6 +126,39 @@ export class SdkAgentSession {
     return this.processing || this.queue.length > 0;
   }
 
+  /** Stop queued + in-flight work (best-effort for SDK runs). */
+  abort(): void {
+    const pending = this.queue.splice(0);
+    for (const item of pending) {
+      try {
+        item.onEvent({ kind: "error", message: "Aborted" });
+      } catch {
+        // ignore listener errors
+      }
+      item.resolve();
+    }
+    this.processing = false;
+
+    const agent = this.agent;
+    this.agent = null;
+    if (!agent) return;
+    void Promise.resolve()
+      .then(async () => {
+        try {
+          await agent[Symbol.asyncDispose]();
+        } catch {
+          try {
+            agent.close();
+          } catch {
+            // ignore
+          }
+        }
+      })
+      .catch(() => {
+        // ignore dispose failures on abort
+      });
+  }
+
   async ensureStarted(): Promise<string> {
     if (this.agent) return this.agent.agentId;
 

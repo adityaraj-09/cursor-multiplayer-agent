@@ -18,6 +18,10 @@
   --font-mono: "JetBrains Mono", "SF Mono", "Cascadia Code", Menlo, monospace;
 }
 
+html {
+  color-scheme: dark;
+}
+
 html,
 body {
   height: 100%;
@@ -26,6 +30,37 @@ body {
   font-family: var(--font-ui);
   -webkit-font-smoothing: antialiased;
   overflow-x: hidden;
+}
+
+/* Clerk SignIn / UserProfile — force light text on our dark chrome */
+.cl-rootBox,
+.cl-card,
+.cl-cardBox,
+.cl-main,
+.cl-headerTitle,
+.cl-formHeaderTitle,
+.cl-socialButtonsBlockButton,
+.cl-socialButtonsBlockButtonText,
+.cl-formFieldInput,
+.cl-identityPreviewText,
+.cl-footerActionLink,
+.cl-userPreviewMainIdentifier,
+.cl-alternativeMethodsBlockButton {
+  color: #e4e4e4 !important;
+}
+
+.cl-headerSubtitle,
+.cl-formHeaderSubtitle,
+.cl-formFieldLabel,
+.cl-footerActionText,
+.cl-dividerText,
+.cl-formFieldHintText,
+.cl-userPreviewSecondaryIdentifier {
+  color: #a0a0a0 !important;
+}
+
+.cl-formFieldInput::placeholder {
+  color: #6e6e6e !important;
 }
 
 * {

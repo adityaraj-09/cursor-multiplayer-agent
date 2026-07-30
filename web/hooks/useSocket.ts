@@ -18,7 +18,7 @@ interface UseSocketReturn {
   mySocketId: string | null;
   messages: ChatMessage[];
   agentStatus: AgentRunStatus;
-  pendingRequest: string | null;
+  pendingRequest: { socketId: string; name: string } | null;
   lastDiff: string;
   cloudMeta: CloudMeta | null;
   modelId: string | null;
@@ -28,6 +28,7 @@ interface UseSocketReturn {
   grantDrive: (toSocketId: string) => void;
   leaveRoom: () => void;
   removeMember: (userId: string) => void;
+  dismissDriveRequest: () => void;
 }
 
 export function useSocket(roomId: string, name: string): UseSocketReturn {
@@ -41,7 +42,10 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
   const [mySocketId, setMySocketId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [agentStatus, setAgentStatus] = useState<AgentRunStatus>("idle");
-  const [pendingRequest, setPendingRequest] = useState<string | null>(null);
+  const [pendingRequest, setPendingRequest] = useState<{
+    socketId: string;
+    name: string;
+  } | null>(null);
   const [lastDiff, setLastDiff] = useState("");
   const [cloudMeta, setCloudMeta] = useState<CloudMeta | null>(null);
   const [modelId, setModelId] = useState<string | null>(null);
@@ -97,8 +101,9 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
       );
     };
     const onAgentStatus = (status: AgentRunStatus) => setAgentStatus(status);
-    const onDriveRequested = (requesterName: string) => {
-      setPendingRequest(requesterName);
+    const onDriveRequested = (payload: { socketId: string; name: string }) => {
+      // Always surface a new request — dismissing one must not block later ones.
+      setPendingRequest(payload);
     };
     const onDiffUpdate = (patch: string) => setLastDiff(patch);
     const onCloudMeta = (meta: CloudMeta) => setCloudMeta(meta);
@@ -193,6 +198,10 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
     setPendingRequest(null);
   }, []);
 
+  const dismissDriveRequest = useCallback(() => {
+    setPendingRequest(null);
+  }, []);
+
   const leaveRoom = useCallback(() => {
     socketRef.current?.emit("leave-room");
   }, []);
@@ -217,6 +226,7 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
     requestDrive,
     releaseDrive,
     grantDrive,
+    dismissDriveRequest,
     leaveRoom,
     removeMember,
   };

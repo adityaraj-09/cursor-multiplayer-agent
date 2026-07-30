@@ -109,7 +109,7 @@ export interface ServerToClientEvents {
   "diff-update": (patch: string) => void;
   "steer-log": (entry: SteerLogEntry) => void;
   "steer-history": (entries: SteerLogEntry[]) => void;
-  "drive-requested": (requesterName: string) => void;
+  "drive-requested": (payload: { socketId: string; name: string }) => void;
   "drive-granted": () => void;
   "drive-released": () => void;
   kicked: (reason: string) => void;
@@ -139,7 +139,8 @@ export interface WorkerToServerEvents {
   }) => void;
   "worker:file-diff": (data: {
     roomId: string;
-    msgId: string;
+    /** Tool call id — server maps to the chat tool message via toolMsgIds */
+    callId: string;
     toolName: string;
     path: string;
     patch: string;

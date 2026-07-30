@@ -12,6 +12,20 @@ export default function Dashboard() {
   const { user, loading: authLoading } = useAuth();
   const [rooms, setRooms] = useState<RoomInfo[]>([]);
   const [loading, setLoading] = useState(true);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const raw = params.get("notice");
+    if (!raw) return;
+    setNotice(raw);
+    params.delete("notice");
+    const next = params.toString();
+    const path = next
+      ? `${window.location.pathname}?${next}`
+      : window.location.pathname;
+    window.history.replaceState({}, "", path);
+  }, []);
 
   useEffect(() => {
     if (authLoading) return;
@@ -95,6 +109,22 @@ export default function Dashboard() {
       </header>
 
       <main className="max-w-5xl mx-auto px-4 sm:px-6 py-8 sm:py-10">
+        {notice && (
+          <div className="mb-5 flex items-start gap-3 rounded-md border border-[#2b2b2b] bg-[#1a1a1a] px-3.5 py-3">
+            <p className="flex-1 text-[13px] text-[#e4e4e4] leading-5">
+              {notice}
+            </p>
+            <button
+              type="button"
+              onClick={() => setNotice(null)}
+              className="shrink-0 text-[12px] text-[#6e6e6e] hover:text-[#e4e4e4] transition-colors"
+              aria-label="Dismiss notice"
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
+
         <div className="mb-6 sm:mb-8">
           <h1 className="text-[22px] font-medium text-[#e4e4e4] tracking-tight">
             Sessions

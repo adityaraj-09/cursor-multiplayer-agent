@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { ClerkProvider } from "@clerk/nextjs";
 import { AuthProvider } from "../components/AuthProvider";
+import { steerClerkAppearance } from "../lib/clerkAppearance";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -21,8 +22,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <ClerkProvider>
-      <html lang="en" className="dark">
+    <ClerkProvider appearance={steerClerkAppearance}>
+      <html lang="en" className="dark" style={{ colorScheme: "dark" }}>
         <head>
           <link rel="preconnect" href="https://fonts.googleapis.com" />
           <link

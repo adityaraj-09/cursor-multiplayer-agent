@@ -24,7 +24,7 @@ type WorkerEventCallback = (
 
 type WorkerDiffCallback = (
   roomId: string,
-  msgId: string,
+  callId: string,
   toolName: string,
   path: string,
   patch: string,
@@ -151,8 +151,13 @@ export class WorkerRelay {
       });
 
       socket.on("worker:file-diff", (data) => {
+        const callId =
+          data.callId ||
+          (data as { msgId?: string }).msgId ||
+          "";
+        if (!callId) return;
         const cb = this.diffListeners.get(data.roomId);
-        if (cb) cb(data.roomId, data.msgId, data.toolName, data.path, data.patch);
+        if (cb) cb(data.roomId, callId, data.toolName, data.path, data.patch);
       });
 
       socket.on("worker:folder-picked", (data) => {
@@ -373,6 +378,15 @@ export class WorkerRelay {
       const w = this.workers.get(wId);
       if (w) w.busy = false;
     }
+  }
+
+  /** Abort in-flight work and drop room→worker binding (stop / teardown). */
+  detachRoom(roomId: string): void {
+    this.abortWorker(roomId);
+    this.releaseWorker(roomId);
+    this.roomToWorker.delete(roomId);
+    this.clearRoomListeners(roomId);
+    this.clearRoomGrace(roomId);
   }
 
   /** Register callbacks for agent events from workers. */
