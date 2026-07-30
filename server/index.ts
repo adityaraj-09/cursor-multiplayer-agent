@@ -629,7 +629,7 @@ app.patch("/api/rooms/:id/agents/:agentId", requireAuth, (req, res) => {
   }
 });
 
-app.post("/api/rooms/:id/agents/:agentId/stop", requireAuth, (req, res) => {
+app.post("/api/rooms/:id/agents/:agentId/stop", requireAuth, async (req, res) => {
   const id = routeParam(req.params.id);
   const agentId = routeParam(req.params.agentId);
   if (!roomManager.userCanAccessRoom(id, req.user!.id)) {
@@ -637,7 +637,7 @@ app.post("/api/rooms/:id/agents/:agentId/stop", requireAuth, (req, res) => {
     return;
   }
   try {
-    roomManager.stopAgent(id, agentId, req.user!.id);
+    await roomManager.stopAgent(id, agentId, req.user!.id);
     res.json({ ok: true });
   } catch (err) {
     res.status(400).json({
@@ -646,7 +646,7 @@ app.post("/api/rooms/:id/agents/:agentId/stop", requireAuth, (req, res) => {
   }
 });
 
-app.post("/api/rooms/:id/agents/:agentId/abort", requireAuth, (req, res) => {
+app.post("/api/rooms/:id/agents/:agentId/abort", requireAuth, async (req, res) => {
   const id = routeParam(req.params.id);
   const agentId = routeParam(req.params.agentId);
   if (!roomManager.userCanAccessRoom(id, req.user!.id)) {
@@ -654,7 +654,7 @@ app.post("/api/rooms/:id/agents/:agentId/abort", requireAuth, (req, res) => {
     return;
   }
   try {
-    roomManager.abortRun(id, agentId, req.user!.id);
+    await roomManager.abortRun(id, agentId, req.user!.id);
     res.json({ ok: true });
   } catch (err) {
     res.status(400).json({
@@ -683,14 +683,14 @@ app.post("/api/rooms/:id/stop", requireAuth, (req, res) => {
  * POST /api/rooms/:id/abort — cancel the in-flight agent run (room stays open).
  * Aborts the default agent for backward compatibility.
  */
-app.post("/api/rooms/:id/abort", requireAuth, (req, res) => {
+app.post("/api/rooms/:id/abort", requireAuth, async (req, res) => {
   const id = routeParam(req.params.id);
   if (!roomManager.userCanAccessRoom(id, req.user!.id)) {
     res.status(404).json({ error: "Room not found" });
     return;
   }
   try {
-    roomManager.abortRun(
+    await roomManager.abortRun(
       id,
       req.body?.agentId ? String(req.body.agentId) : undefined,
       req.user!.id,
