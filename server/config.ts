@@ -16,6 +16,25 @@ export function getEnvCursorApiKey(): string {
 export const AUTH_SECRET = process.env.AUTH_SECRET || "dev-secret-change-in-production";
 export const IS_PRODUCTION = process.env.NODE_ENV === "production";
 
+/** Comma-separated Clerk user IDs allowed to manage the shared server API key. */
+export const ADMIN_USER_IDS: string[] = (process.env.ADMIN_USER_IDS || "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+export function isAdminUser(userId: string | undefined | null): boolean {
+  if (!userId || ADMIN_USER_IDS.length === 0) return false;
+  return ADMIN_USER_IDS.includes(userId);
+}
+
+/** Default invite link lifetime (7 days). */
+export const INVITE_TTL_MS = (() => {
+  const raw = process.env.INVITE_TTL_MS?.trim();
+  if (!raw) return 7 * 24 * 60 * 60 * 1000;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : 7 * 24 * 60 * 60 * 1000;
+})();
+
 /** Comma-separated browser origins allowed in production (e.g. Vercel URL). */
 export const CORS_ORIGINS: string[] = (process.env.CORS_ORIGIN || "")
   .split(",")

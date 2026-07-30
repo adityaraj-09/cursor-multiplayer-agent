@@ -5,7 +5,7 @@ import { steerClerkAppearance } from "../lib/clerkAppearance";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Build Lasting Relationships — Steer",
+  title: "Steer — Shared live Cursor agent sessions",
   description:
     "Shared live Cursor agent sessions. Watch, redirect, and hand off control together.",
 };
@@ -13,7 +13,6 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  maximumScale: 1,
   viewportFit: "cover",
 };
 

@@ -44,6 +44,7 @@ export default function CreateSession() {
   const [byokAvailable, setByokAvailable] = useState(false);
   const [userByokConfigured, setUserByokConfigured] = useState(false);
   const [userByokHint, setUserByokHint] = useState<string | null>(null);
+  const [canManageServerKey, setCanManageServerKey] = useState(false);
   const [savingServerKey, setSavingServerKey] = useState(false);
   const [clearingByok, setClearingByok] = useState(false);
   const [error, setError] = useState("");
@@ -60,6 +61,7 @@ export default function CreateSession() {
         setByokAvailable(s.byokAvailable);
         setUserByokConfigured(Boolean(s.userByokConfigured));
         setUserByokHint(s.userByokHint ?? null);
+        setCanManageServerKey(Boolean(s.canManageServerKey));
       })
       .catch(() => {});
 
@@ -356,32 +358,37 @@ export default function CreateSession() {
                   </p>
                 ) : (
                   <p className="text-[11px] text-[#6e6e6e]">
-                    No server key yet — paste one below to pick it up (stored
-                    encrypted), or set CURSOR_API_KEY in .env.
+                    No server key configured. Set CURSOR_API_KEY in the server
+                    environment
+                    {canManageServerKey
+                      ? ", or paste one below to pick it up."
+                      : " (admins only can pick up a key in the UI)."}
                   </p>
                 )}
-                <div className="flex gap-2">
-                  <input
-                    type="password"
-                    value={serverKeyInput}
-                    onChange={(e) => setServerKeyInput(e.target.value)}
-                    placeholder={
-                      serverKeyConfigured
-                        ? "Replace server key…"
-                        : "cursor_… (server key)"
-                    }
-                    className={`${inputClass} font-mono flex-1`}
-                    autoComplete="off"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => void handlePickupServerKey()}
-                    disabled={savingServerKey || !serverKeyInput.trim()}
-                    className="h-10 px-3 rounded-md bg-[#252525] border border-[#2b2b2b] text-[13px] text-[#e4e4e4] hover:border-[#3c3c3c] disabled:opacity-40 shrink-0"
-                  >
-                    {savingServerKey ? "Saving…" : "Save"}
-                  </button>
-                </div>
+                {canManageServerKey && (
+                  <div className="flex gap-2">
+                    <input
+                      type="password"
+                      value={serverKeyInput}
+                      onChange={(e) => setServerKeyInput(e.target.value)}
+                      placeholder={
+                        serverKeyConfigured
+                          ? "Replace server key…"
+                          : "cursor_… (server key)"
+                      }
+                      className={`${inputClass} font-mono flex-1`}
+                      autoComplete="off"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => void handlePickupServerKey()}
+                      disabled={savingServerKey || !serverKeyInput.trim()}
+                      className="h-10 px-3 rounded-md bg-[#252525] border border-[#2b2b2b] text-[13px] text-[#e4e4e4] hover:border-[#3c3c3c] disabled:opacity-40 shrink-0"
+                    >
+                      {savingServerKey ? "Saving…" : "Save"}
+                    </button>
+                  </div>
+                )}
               </div>
             )}
             {authMode === "byok" && (

@@ -11,6 +11,7 @@ import {
   requireAuth,
   clerkConfigured,
 } from "./auth.js";
+import { INVITE_TTL_MS } from "./config.js";
 
 const router: RouterType = Router();
 
@@ -145,10 +146,9 @@ router.delete("/invite/:code", requireAuth, (req, res) => {
     return;
   }
   if (
-    room.owner_id !== req.user.id &&
-    !db.isRoomMember(invite.room_id, req.user.id)
+    room.owner_id !== req.user.id
   ) {
-    res.status(403).json({ error: "Not allowed to revoke this invite" });
+    res.status(403).json({ error: "Only the host can revoke invites" });
     return;
   }
 
@@ -191,18 +191,30 @@ router.post("/invite/:code/join", requireAuth, (req, res) => {
     return;
   }
 
+  if (
+    invite.expires_at !== null &&
+    invite.expires_at !== undefined &&
+    invite.expires_at <= Date.now()
+  ) {
+    res.status(410).json({ error: "Invite link has expired" });
+    return;
+  }
+
   if (invite.max_uses !== null && invite.use_count >= invite.max_uses) {
     res.status(410).json({ error: "Invite link has expired" });
     return;
   }
 
-  db.useInviteLink(inviteCode);
+  if (!db.useInviteLink(inviteCode)) {
+    res.status(410).json({ error: "Invite link has expired" });
+    return;
+  }
   db.addRoomMember(invite.room_id, req.user.id, "member");
 
   res.json({ roomId: invite.room_id });
 });
 
-/** POST /api/auth/:id/invite — create invite link */
+/** POST /api/auth/:id/invite — create invite link (host only) */
 router.post("/:id/invite", requireAuth, (req, res) => {
   if (!req.user) {
     res.status(401).json({ error: "Authentication required" });
@@ -215,12 +227,8 @@ router.post("/:id/invite", requireAuth, (req, res) => {
     return;
   }
 
-  // Require owner/member to mint invites
-  if (
-    room.owner_id !== req.user.id &&
-    !db.isRoomMember(roomId, req.user.id)
-  ) {
-    res.status(403).json({ error: "Not allowed to invite to this room" });
+  if (room.owner_id !== req.user.id) {
+    res.status(403).json({ error: "Only the host can create invites" });
     return;
   }
 
@@ -232,10 +240,11 @@ router.post("/:id/invite", requireAuth, (req, res) => {
     res.status(400).json({ error: "maxUses must be a positive number or null" });
     return;
   }
+  const expiresAt = Date.now() + INVITE_TTL_MS;
   const code = generateInviteCode();
-  db.createInviteLink(code, roomId, req.user.id, maxUses);
+  db.createInviteLink(code, roomId, req.user.id, maxUses, expiresAt);
 
-  res.json({ code, roomId, maxUses, useCount: 0 });
+  res.json({ code, roomId, maxUses, useCount: 0, expiresAt });
 });
 
 /** GET /api/auth/:id/invites — list invite links for a room */
@@ -265,6 +274,7 @@ router.get("/:id/invites", requireAuth, (req, res) => {
     createdAt: row.created_at,
     maxUses: row.max_uses,
     useCount: row.use_count,
+    expiresAt: row.expires_at ?? null,
   }));
   res.json({ invites });
 });

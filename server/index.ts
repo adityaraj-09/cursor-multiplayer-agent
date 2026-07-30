@@ -3,7 +3,7 @@ import express from "express";
 import cors from "cors";
 import { createServer } from "http";
 import { Server } from "socket.io";
-import { PORT, IS_PRODUCTION, CORS_ORIGINS } from "./config.js";
+import { PORT, IS_PRODUCTION, CORS_ORIGINS, isAdminUser } from "./config.js";
 import { RoomManager } from "./roomManager.js";
 import { WorkerRelay } from "./workerRelay.js";
 import { listModelsForKey, listReposForKey } from "./sdkAgent.js";
@@ -101,6 +101,41 @@ const workerRelay = new WorkerRelay(io as unknown as Server, (token) => {
 
 const roomManager = new RoomManager(io, workerRelay);
 
+async function attachRedisAdapter(): Promise<void> {
+  const redisUrl = process.env.REDIS_URL?.trim();
+  if (!redisUrl) return;
+  try {
+    const { createAdapter } = await import("@socket.io/redis-adapter");
+    const { createClient } = await import("redis");
+    const pub = createClient({ url: redisUrl });
+    const sub = pub.duplicate();
+    pub.on("error", (err) => console.error("[redis pub]", err));
+    sub.on("error", (err) => console.error("[redis sub]", err));
+    await Promise.all([pub.connect(), sub.connect()]);
+    io.adapter(createAdapter(pub, sub));
+    console.log("[socket.io] Redis adapter attached");
+  } catch (err) {
+    console.error(
+      "[socket.io] Failed to attach Redis adapter — continuing in-memory:",
+      err,
+    );
+  }
+}
+
+// Periodically purge expired CLI session tokens.
+setInterval(() => {
+  try {
+    db.deleteExpiredSessions();
+  } catch (err) {
+    console.error("[auth] deleteExpiredSessions failed:", err);
+  }
+}, 60 * 60 * 1000).unref?.();
+try {
+  db.deleteExpiredSessions();
+} catch {
+  // ignore startup cleanup failures
+}
+
 function resolveRequestKey(
   authMode: AuthMode,
   bodyKey?: string,
@@ -139,11 +174,19 @@ app.get("/api/auth/status", (req, res) => {
     byokAvailable: encryptionConfigured(),
     userByokConfigured: userId ? userByokConfigured(userId) : false,
     userByokHint: userId ? userByokHint(userId) : null,
+    canManageServerKey: isAdminUser(userId),
   });
 });
 
-/** Pick up / replace the shared server API key (encrypted in DB). */
+/** Pick up / replace the shared server API key (encrypted in DB). Admin only. */
 app.post("/api/auth/server-key", requireAuth, (req, res) => {
+  if (!isAdminUser(req.user!.id)) {
+    res.status(403).json({
+      error:
+        "Only admins can change the shared server key (set ADMIN_USER_IDS)",
+    });
+    return;
+  }
   try {
     const apiKey = String(req.body?.apiKey || "").trim();
     const result = setServerApiKey(apiKey);
@@ -152,6 +195,7 @@ app.post("/api/auth/server-key", requireAuth, (req, res) => {
       serverKeyConfigured: true,
       serverKeySource: serverKeySource(),
       serverKeyHint: result.hint,
+      canManageServerKey: true,
     });
   } catch (err) {
     res.status(400).json({
@@ -160,13 +204,21 @@ app.post("/api/auth/server-key", requireAuth, (req, res) => {
   }
 });
 
-app.delete("/api/auth/server-key", requireAuth, (_req, res) => {
+app.delete("/api/auth/server-key", requireAuth, (req, res) => {
+  if (!isAdminUser(req.user!.id)) {
+    res.status(403).json({
+      error:
+        "Only admins can change the shared server key (set ADMIN_USER_IDS)",
+    });
+    return;
+  }
   clearServerApiKey();
   res.json({
     ok: true,
     serverKeyConfigured: serverKeyConfigured(),
     serverKeySource: serverKeySource(),
     serverKeyHint: serverKeyHint(),
+    canManageServerKey: true,
   });
 });
 
@@ -196,7 +248,7 @@ app.delete("/api/auth/byok-key", requireAuth, (req, res) => {
   });
 });
 
-app.post("/api/models", async (req, res) => {
+app.post("/api/models", requireAuth, async (req, res) => {
   try {
     const authMode = parseAuthMode(req.body?.authMode);
     if (authMode === "cli") {
@@ -239,7 +291,7 @@ app.post("/api/models", async (req, res) => {
   }
 });
 
-app.post("/api/repositories", async (req, res) => {
+app.post("/api/repositories", requireAuth, async (req, res) => {
   try {
     const authMode = parseAuthMode(req.body?.authMode);
     if (authMode === "cli") {
@@ -575,13 +627,15 @@ io.on("connection", (socket) => {
   socket.on("disconnect", () => roomManager.leaveRoom(socket));
 });
 
-httpServer.listen(PORT, "0.0.0.0", () => {
-  console.log(`\n  Shared Agent Session API running at:`);
-  console.log(`    Local:   http://localhost:${PORT}`);
-  console.log(`    API:     http://localhost:${PORT}/api/rooms`);
-  console.log(
-    `    Auth:    serverKey=${serverKeyConfigured()} (${serverKeySource()}) encryption=${encryptionConfigured()}\n`,
-  );
+void attachRedisAdapter().finally(() => {
+  httpServer.listen(PORT, "0.0.0.0", () => {
+    console.log(`\n  Shared Agent Session API running at:`);
+    console.log(`    Local:   http://localhost:${PORT}`);
+    console.log(`    API:     http://localhost:${PORT}/api/rooms`);
+    console.log(
+      `    Auth:    serverKey=${serverKeyConfigured()} (${serverKeySource()}) encryption=${encryptionConfigured()}\n`,
+    );
+  });
 });
 
 process.on("SIGINT", () => {

@@ -543,16 +543,7 @@ export class RoomManager {
       ? this.workerRelay.findWorkerForUser(ownerId)
       : null;
 
-    // Legacy rooms created before owner tracking — attach first free worker.
-    if (!worker && !ownerId) {
-      worker = this.workerRelay.findFirstFreeWorker();
-      if (worker) {
-        ownerId = worker.userId;
-        db.setRoomOwner(room.id, ownerId);
-        room.row.owner_id = ownerId;
-      }
-    }
-
+    // Legacy rooms without owner_id cannot safely bind a worker.
     if (!worker) return false;
 
     // Clear any leftover subscriptions from a previous interrupted run
@@ -742,7 +733,8 @@ export class RoomManager {
 
     if (!dispatched) {
       finishWorkerRun("error", "Failed to reach Steer worker");
-      return false;
+      // Handled — do not fall through to in-process cursor spawn.
+      return true;
     }
 
     return true;

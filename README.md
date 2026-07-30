@@ -1,22 +1,20 @@
-# Shared Live Agent Session
+# Steer — Shared Live Agent Sessions
 
-Multiplayer AI — shared live Cursor Agent sessions where multiple people can watch, redirect, and hand off control, like Google Docs for agent work.
+Multiplayer Cursor agent sessions where multiple people can watch, redirect, and hand off control — like Google Docs for agent work.
 
 ## Prerequisites
 
 - **Node.js** 22+
 - **pnpm** 9+
-- **tmux** 3.x (`brew install tmux`)
-- **Cursor CLI** with `cursor agent` (`cursor agent --help` to verify)
+- **Cursor CLI** with `cursor agent` (for local runtime / CLI worker)
 
 ## Quick Start
 
 ```bash
-# Install dependencies
 pnpm install
 cd web && pnpm install && cd ..
 
-# Start both servers (Express API on :3000, Next.js on :3001)
+# Start API (:3000) + Next.js (:3001)
 pnpm dev
 
 # Open http://localhost:3001
@@ -25,17 +23,19 @@ pnpm dev
 ## Architecture
 
 ```
-Express API (:3000)              Next.js App (:3001)
-├─ POST /api/rooms  ──────────── /create page
-├─ GET  /api/rooms  ──────────── / dashboard
-├─ Socket.IO (per-room)  ─────── /room/[id] page
+Express API (:3000)                 Next.js App (:3001)
+├─ REST /api/rooms, /api/auth  ──── /dashboard, /create, /invite
+├─ Socket.IO (rooms + workers) ──── /room/[id]
 │
 ├─ RoomManager
-│   ├─ per-room PtyRunner  ───── tmux session (durable)
-│   ├─ per-room DiffWatcher ──── chokidar + git diff
-│   ├─ per-room participants ─── driver lock + steer
-│   └─ SQLite persistence ────── rooms + steer history
+│   ├─ SdkAgentSession ──────────── Cloud / BYOK / server-key agents
+│   ├─ WorkerRelay ──────────────── Local CLI via `steer start`
+│   ├─ DiffWatcher ──────────────── git diffs for local SDK rooms
+│   └─ SQLite / Postgres ────────── rooms, chat, invites, keys
 ```
+
+Chat + diffs + presence are the live collaboration surface. There is no per-room
+tmux/PTY terminal in the current product UI.
 
 ## Environment Variables
 
@@ -44,41 +44,52 @@ Copy `.env.example` to `.env`:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PORT` | `3000` | Express API port |
-| `REPO_PATH` | `./demo-repo` | Default repository path for new sessions |
-| `AGENT_COMMAND` | `cursor agent --force --trust` | Default agent command |
+| `CURSOR_API_KEY` | | Shared server key for Cloud / server auth mode |
+| `KEY_ENCRYPTION_SECRET` | | Encrypt BYOK + stored server keys |
+| `ADMIN_USER_IDS` | | Comma-separated Clerk user IDs allowed to manage the server key |
+| `CLERK_SECRET_KEY` | | Clerk backend secret |
+| `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | | Clerk publishable key |
+| `REDIS_URL` | | Optional — enables Socket.IO Redis adapter for multi-instance |
+| `INVITE_TTL_MS` | 7 days | Invite link lifetime |
+| `CORS_ORIGIN` | | Comma-separated allowed browser origins in production |
+| `NEXT_PUBLIC_SOCKET_URL` | | Public API origin for Socket.IO |
+| `DATABASE_URL` | | Postgres URL; omit for SQLite |
 
 ## Features
 
-- **Multi-room** — Create multiple independent agent sessions
-- **Live terminal** — Watch cursor-agent work in real time via xterm.js
-- **Steering** — Anyone can redirect the agent with attributed messages
-- **Driver control** — Request, grant, and release keyboard control
-- **Live diff** — See file changes as they happen via diff2html
-- **Persistence** — Rooms and steer history stored in SQLite
-- **Durability** — tmux sessions survive server restarts
-- **Auto-reassign** — Driver automatically transferred on disconnect
+- **Multi-room** — Independent Steer sessions with durable chat history
+- **Cloud + local** — Cloud agents via Cursor SDK; local via CLI worker
+- **Steering** — Attributed prompts from anyone in the room
+- **Driver control** — Request, grant, and release the driver seat
+- **Live diffs** — File changes stream into the room
+- **Invites** — Host-managed invite links with max uses + expiry
+- **BYOK** — Per-user saved Cursor API keys for cloud sessions
 
 ## Scripts
 
 | Script | Description |
 |--------|-------------|
-| `pnpm dev` | Start both servers concurrently |
-| `pnpm dev:server` | Start Express API only |
-| `pnpm dev:web` | Start Next.js only |
+| `pnpm dev` | Start API + web concurrently |
+| `pnpm dev:server` | Express API only |
+| `pnpm dev:web` | Next.js only |
 | `pnpm build` | Typecheck + build Next.js |
-| `pnpm smoke:pty` | Verify tmux + node-pty integration |
+| `pnpm typecheck` | Server TypeScript check |
 
-## tmux Fallback
-
-Connect to any session directly:
+## CLI worker (local agents)
 
 ```bash
-tmux list-sessions
-tmux attach -t <session-id>
+# Sign in on the web → /cli-pair → generate code
+steer login     # server URL + pairing code
+steer start     # worker stays online for your account
 ```
+
+## Socket.IO scaling
+
+Set `REDIS_URL` and the API attaches `@socket.io/redis-adapter` automatically.
+Sticky sessions are still required at the load balancer for WebSocket upgrades.
 
 ## Demo Reset
 
 ```bash
-cd demo-repo && git checkout . && git clean -fd
+rm -f data.db data.db-*
 ```
