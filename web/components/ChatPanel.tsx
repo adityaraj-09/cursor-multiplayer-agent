@@ -9,8 +9,8 @@ interface ChatPanelProps {
   messages: ChatMessage[];
   agentStatus: AgentRunStatus;
   agents?: Array<{ id: string; label: string }>;
+  /** When set with multiple agents, only show this agent's messages. */
   filterAgentId?: string | null;
-  onFilterAgentChange?: (agentId: string | null) => void;
 }
 
 type ChatItem =
@@ -48,7 +48,6 @@ export default function ChatPanel({
   agentStatus,
   agents = [],
   filterAgentId = null,
-  onFilterAgentChange,
 }: ChatPanelProps) {
   const scrollerRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
@@ -99,7 +98,6 @@ export default function ChatPanel({
   }
 
   const items = groupMessages(filtered);
-  const showFilter = agents.length > 1 && onFilterAgentChange;
 
   return (
     <div className="flex-1 min-h-0 h-full overflow-hidden flex flex-col">
@@ -174,10 +172,16 @@ function ToolCallGroup({
   const anyStreaming = messages.some((m) => m.status === "streaming");
   const anyDiff = messages.some((m) => Boolean(m.diffPatch));
   const [open, setOpen] = useState(anyStreaming || anyDiff);
+  const userHidden = useRef(false);
   const prevStreaming = useRef(anyStreaming);
 
-  // Auto-expand while tools are running, or when a diff lands.
+  // Auto-expand only until the user collapses. Once hidden, stay hidden
+  // even when new tool calls or diffs arrive in this group.
   useEffect(() => {
+    if (userHidden.current) {
+      prevStreaming.current = anyStreaming;
+      return;
+    }
     if (anyStreaming && !prevStreaming.current) setOpen(true);
     if (anyDiff) setOpen(true);
     prevStreaming.current = anyStreaming;
@@ -193,7 +197,13 @@ function ToolCallGroup({
     <div className="rounded-lg border border-[#2b2b2b] bg-[#1a1a1a] overflow-hidden">
       <button
         type="button"
-        onClick={() => setOpen((v) => !v)}
+        onClick={() =>
+          setOpen((v) => {
+            const next = !v;
+            userHidden.current = !next;
+            return next;
+          })
+        }
         className="w-full flex items-center gap-2 px-3 h-9 text-left hover:bg-[#1e1e1e] transition-colors"
       >
         <Chevron open={open} />
@@ -232,8 +242,10 @@ function ToolCallRow({ message }: { message: ChatMessage }) {
   const [open, setOpen] = useState(
     message.status === "streaming" || Boolean(message.diffPatch),
   );
+  const userHidden = useRef(false);
 
   useEffect(() => {
+    if (userHidden.current) return;
     if (message.diffPatch) setOpen(true);
   }, [message.diffPatch]);
 
@@ -241,7 +253,13 @@ function ToolCallRow({ message }: { message: ChatMessage }) {
     <div className="bg-[#161616]">
       <button
         type="button"
-        onClick={() => setOpen((v) => !v)}
+        onClick={() =>
+          setOpen((v) => {
+            const next = !v;
+            userHidden.current = !next;
+            return next;
+          })
+        }
         className="w-full flex items-start gap-2 px-3 py-2 text-left hover:bg-[#1a1a1a] transition-colors"
       >
         <Chevron open={open} className="mt-0.5" />
