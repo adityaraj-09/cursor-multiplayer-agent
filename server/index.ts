@@ -6,6 +6,7 @@ import { Server } from "socket.io";
 import { PORT, IS_PRODUCTION, CORS_ORIGINS, isAdminUser } from "./config.js";
 import { RoomManager } from "./roomManager.js";
 import { WorkerRelay } from "./workerRelay.js";
+import { FileLockRegistry } from "./fileLocks.js";
 import { listModelsForKey, listReposForKey } from "./sdkAgent.js";
 import { listCliModels } from "./cliModels.js";
 import { encryptionConfigured } from "./keyCrypto.js";
@@ -86,6 +87,7 @@ const io = new Server<ClientToServerEvents, ServerToClientEvents>(httpServer, {
   allowEIO3: true,
 });
 
+const fileLocks = new FileLockRegistry();
 const workerRelay = new WorkerRelay(io as unknown as Server, (token) => {
   // CLI workers use hashed session tokens (not Clerk JWTs)
   const session =
@@ -97,9 +99,9 @@ const workerRelay = new WorkerRelay(io as unknown as Server, (token) => {
       | undefined);
   if (!session || session.expires_at < Date.now()) return null;
   return { userId: session.user_id, workerId: `w-${session.user_id}` };
-});
+}, fileLocks);
 
-const roomManager = new RoomManager(io, workerRelay);
+const roomManager = new RoomManager(io, workerRelay, fileLocks);
 
 async function attachRedisAdapter(): Promise<void> {
   const redisUrl = process.env.REDIS_URL?.trim();
@@ -126,6 +128,7 @@ async function attachRedisAdapter(): Promise<void> {
 setInterval(() => {
   try {
     db.deleteExpiredSessions();
+    fileLocks.purgeExpired();
   } catch (err) {
     console.error("[auth] deleteExpiredSessions failed:", err);
   }
@@ -535,6 +538,52 @@ app.post("/api/rooms/:id/agents", requireAuth, (req, res) => {
   } catch (err) {
     res.status(400).json({
       error: err instanceof Error ? err.message : "Failed to add agent",
+    });
+  }
+});
+
+app.post("/api/rooms/:id/agents/validate-scope", requireAuth, (req, res) => {
+  const id = routeParam(req.params.id);
+  if (!roomManager.userCanAccessRoom(id, req.user!.id)) {
+    res.status(404).json({ error: "Room not found" });
+    return;
+  }
+  const scopePath =
+    req.body?.scopePath === null || req.body?.scopePath === undefined
+      ? null
+      : String(req.body.scopePath);
+  const excludeAgentId = req.body?.excludeAgentId
+    ? String(req.body.excludeAgentId)
+    : undefined;
+  const result = roomManager.validateAgentScope(id, scopePath, excludeAgentId);
+  if (result.ok) {
+    res.json({ ok: true });
+    return;
+  }
+  res.status(409).json({ ok: false, error: result.error });
+});
+
+app.post("/api/rooms/:id/file-locks/force-release", requireAuth, (req, res) => {
+  const id = routeParam(req.params.id);
+  if (!roomManager.userCanAccessRoom(id, req.user!.id)) {
+    res.status(404).json({ error: "Room not found" });
+    return;
+  }
+  const path = req.body?.path ? String(req.body.path) : "";
+  if (!path.trim()) {
+    res.status(400).json({ error: "path is required" });
+    return;
+  }
+  try {
+    const released = roomManager.forceReleaseFileLock(
+      id,
+      path,
+      req.user!.id,
+    );
+    res.json({ ok: true, released });
+  } catch (err) {
+    res.status(400).json({
+      error: err instanceof Error ? err.message : "Failed to release lock",
     });
   }
 });

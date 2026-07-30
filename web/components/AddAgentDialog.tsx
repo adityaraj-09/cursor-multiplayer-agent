@@ -1,11 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { ModelInfo } from "../../shared/events";
+import { validateAgentScope } from "../../lib/api";
 
 interface AddAgentDialogProps {
   open: boolean;
   onClose: () => void;
+  roomId: string;
   onSubmit: (data: {
     label: string;
     backend: "cursor" | "claude-code";
@@ -20,6 +22,7 @@ interface AddAgentDialogProps {
 export default function AddAgentDialog({
   open,
   onClose,
+  roomId,
   onSubmit,
   models,
   defaultModelId,
@@ -28,15 +31,46 @@ export default function AddAgentDialog({
   const [label, setLabel] = useState("");
   const [backend, setBackend] = useState<"cursor" | "claude-code">("cursor");
   const [scopePath, setScopePath] = useState("");
+  const [scopeWarning, setScopeWarning] = useState("");
   const [modelId, setModelId] = useState(defaultModelId || "auto");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (!open || runtime !== "local") {
+      setScopeWarning("");
+      return;
+    }
+    const trimmed = scopePath.trim();
+    if (!trimmed) {
+      setScopeWarning("");
+      return;
+    }
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      void validateAgentScope(roomId, trimmed).then((result) => {
+        if (cancelled) return;
+        setScopeWarning(result.ok ? "" : result.error);
+      });
+    }, 300);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [open, roomId, runtime, scopePath]);
 
   if (!open) return null;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
+    if (runtime === "local" && scopePath.trim()) {
+      const check = await validateAgentScope(roomId, scopePath.trim());
+      if (!check.ok) {
+        setError(check.error);
+        return;
+      }
+    }
     setBusy(true);
     try {
       await onSubmit({
@@ -104,8 +138,12 @@ export default function AddAgentDialog({
               value={scopePath}
               onChange={(e) => setScopePath(e.target.value)}
               placeholder="e.g. backend/ or frontend/"
-              className="w-full h-9 mb-3 px-2.5 rounded-md bg-[#252525] border border-[#2b2b2b] text-[13px] text-[#e4e4e4] outline-none focus:border-[#4d9fff]"
+              className="w-full h-9 mb-1 px-2.5 rounded-md bg-[#252525] border border-[#2b2b2b] text-[13px] text-[#e4e4e4] outline-none focus:border-[#4d9fff]"
             />
+            {scopeWarning && (
+              <p className="text-[11px] text-[#f07070] mb-3">{scopeWarning}</p>
+            )}
+            {!scopeWarning && <div className="mb-3" />}
           </>
         )}
 

@@ -75,6 +75,48 @@ export function normalizePath(p: string | null | undefined): string | null {
 /**
  * Resolve an agent cwd under the room repo, rejecting path traversal.
  */
+export interface ScopeOverlap {
+  agentId: string;
+  label: string;
+  scopePath: string;
+}
+
+/**
+ * Returns the first active agent whose explicit scope overlaps `proposedScope`.
+ * Null/empty proposed scope never conflicts at scope level (whole-repo agents).
+ */
+export function findScopeOverlap(
+  agents: Array<{
+    id: string;
+    label?: string;
+    status: string;
+    scopePath?: string | null;
+  }>,
+  proposedScope: string | null | undefined,
+  excludeAgentId?: string,
+): ScopeOverlap | null {
+  const proposed = proposedScope ? normalizePath(proposedScope) : null;
+  if (!proposed) return null;
+
+  for (const a of agents) {
+    if (excludeAgentId && a.id === excludeAgentId) continue;
+    if (a.status === "stopped" || a.status === "error") continue;
+    if (!a.scopePath) continue;
+    if (scopesOverlap(proposed, a.scopePath)) {
+      return {
+        agentId: a.id,
+        label: a.label || a.id.slice(0, 6),
+        scopePath: normalizePath(a.scopePath)!,
+      };
+    }
+  }
+  return null;
+}
+
+export function formatScopeOverlapError(overlap: ScopeOverlap): string {
+  return `Scope overlaps with agent "${overlap.label}" (${overlap.scopePath})`;
+}
+
 export function resolveAgentCwd(
   repoPath: string,
   scopePath: string | null | undefined,

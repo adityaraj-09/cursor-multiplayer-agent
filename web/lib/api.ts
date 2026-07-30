@@ -523,6 +523,45 @@ export async function updateRoomAgent(
   return res.json();
 }
 
+export async function validateAgentScope(
+  roomId: string,
+  scopePath: string | null | undefined,
+  excludeAgentId?: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const res = await fetch(`${API_BASE}/rooms/${roomId}/agents/validate-scope`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(await authHeaders()),
+    },
+    body: JSON.stringify({ scopePath: scopePath ?? null, excludeAgentId }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (res.ok) return { ok: true };
+  return {
+    ok: false,
+    error: data.error || "Scope overlaps with another agent",
+  };
+}
+
+export async function forceReleaseFileLock(
+  roomId: string,
+  path: string,
+): Promise<void> {
+  const res = await fetch(`${API_BASE}/rooms/${roomId}/file-locks/force-release`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(await authHeaders()),
+    },
+    body: JSON.stringify({ path }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Failed to release lock");
+  }
+}
+
 export async function stopRoomAgent(
   roomId: string,
   agentId: string,

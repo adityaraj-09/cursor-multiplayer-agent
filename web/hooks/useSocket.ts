@@ -5,10 +5,12 @@ import { useAuth as useClerkAuth } from "@clerk/nextjs";
 import { getSocket, disconnectSocket, type AppSocket } from "../lib/socket";
 import type {
   AgentConflict,
+  AgentConflictBlocked,
   AgentInfo,
   AgentRunStatus,
   ChatMessage,
   CloudMeta,
+  FileLease,
   Participant,
 } from "../../shared/events";
 
@@ -24,6 +26,8 @@ interface UseSocketReturn {
   errorByAgent: Record<string, string>;
   diffByAgent: Record<string, string>;
   conflicts: AgentConflict[];
+  fileLocks: FileLease[];
+  lastBlocked: AgentConflictBlocked | null;
   /** Legacy single-agent status (default / selected agent). */
   agentStatus: AgentRunStatus;
   agentError: string;
@@ -84,6 +88,9 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
   );
   const [diffByAgent, setDiffByAgent] = useState<Record<string, string>>({});
   const [conflicts, setConflicts] = useState<AgentConflict[]>([]);
+  const [fileLocks, setFileLocks] = useState<FileLease[]>([]);
+  const [lastBlocked, setLastBlocked] =
+    useState<AgentConflictBlocked | null>(null);
   const [agentStatus, setAgentStatus] = useState<AgentRunStatus>("idle");
   const [agentError, setAgentError] = useState("");
   const [pendingRequest, setPendingRequest] = useState<{
@@ -202,6 +209,9 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
     };
     const onAgents = (list: AgentInfo[]) => setAgents(list);
     const onConflicts = (c: AgentConflict[]) => setConflicts(c);
+    const onFileLocks = (leases: FileLease[]) => setFileLocks(leases);
+    const onConflictBlocked = (payload: AgentConflictBlocked) =>
+      setLastBlocked(payload);
     const onDriveRequested = (payload: {
       socketId: string;
       name: string;
@@ -254,6 +264,8 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
       s.on("agent-status", onAgentStatus);
       s.on("agents", onAgents);
       s.on("agent-conflicts", onConflicts);
+      s.on("file-locks", onFileLocks);
+      s.on("agent-conflict-blocked", onConflictBlocked);
       s.on("drive-requested", onDriveRequested);
       s.on("diff-update", onDiffUpdate);
       s.on("cloud-meta", onCloudMeta);
@@ -274,6 +286,8 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
         attached.off("agent-status", onAgentStatus);
         attached.off("agents", onAgents);
         attached.off("agent-conflicts", onConflicts);
+        attached.off("file-locks", onFileLocks);
+        attached.off("agent-conflict-blocked", onConflictBlocked);
         attached.off("drive-requested", onDriveRequested);
         attached.off("diff-update", onDiffUpdate);
         attached.off("cloud-meta", onCloudMeta);
@@ -296,6 +310,8 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
       setErrorByAgent({});
       setDiffByAgent({});
       setConflicts([]);
+      setFileLocks([]);
+      setLastBlocked(null);
     };
   }, [roomId, name, isSignedIn]);
 
@@ -354,6 +370,8 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
     errorByAgent,
     diffByAgent,
     conflicts,
+    fileLocks,
+    lastBlocked,
     agentStatus,
     agentError,
     pendingRequest,

@@ -26,10 +26,12 @@ import {
 } from "./keyCrypto.js";
 import { getServerApiKey } from "./serverKey.js";
 import { getUserByokKey, setUserByokKey } from "./userByok.js";
-import { detectAgentConflicts, resolveAgentCwd } from "./agentConflicts.js";
+import { detectAgentConflicts, resolveAgentCwd, findScopeOverlap, formatScopeOverlapError } from "./agentConflicts.js";
+import { FileLockRegistry, broadcastFileLocks } from "./fileLocks.js";
 import type {
   AgentInfo,
   AgentConflict,
+  AgentConflictBlocked,
   AgentBackendKind,
   AgentStatus,
   AgentRuntime,
@@ -200,11 +202,24 @@ function resolveApiKey(row: db.RoomRow): string {
 export class RoomManager {
   private rooms = new Map<string, RoomState>();
   private socketRooms = new Map<string, string>();
+  readonly fileLocks: FileLockRegistry;
 
   constructor(
     private io: Server<ClientToServerEvents, ServerToClientEvents>,
     private workerRelay?: WorkerRelay,
+    fileLocks?: FileLockRegistry,
   ) {
+    this.fileLocks =
+      fileLocks ??
+      new FileLockRegistry((roomId) => {
+        const room = this.rooms.get(roomId);
+        if (room) this.broadcastFileLocks(room);
+      });
+    this.fileLocks.setOnChange((roomId) => {
+      const room = this.rooms.get(roomId);
+      if (room) this.broadcastFileLocks(room);
+    });
+
     this.restoreRooms();
 
     this.workerRelay?.onRunsDisconnected((runs) => {
@@ -580,6 +595,12 @@ export class RoomManager {
       agentRow.label = opts.label.trim() || agentRow.label;
     }
     if (opts.scopePath !== undefined) {
+      const scopeCheck = this.validateAgentScope(
+        roomId,
+        opts.scopePath,
+        agentId,
+      );
+      if (!scopeCheck.ok) throw new Error(scopeCheck.error);
       if (row.runtime === "local" && opts.scopePath) {
         resolveAgentCwd(row.repo_path, opts.scopePath);
       }
@@ -614,6 +635,124 @@ export class RoomManager {
     }));
     const conflicts = detectAgentConflicts(agentData);
     this.io.to(room.id).emit("agent-conflicts", conflicts);
+  }
+
+  private broadcastFileLocks(room: RoomState): void {
+    broadcastFileLocks(this.io, room.id, this.fileLocks);
+  }
+
+  private agentScopeCandidates(roomId: string): Array<{
+    id: string;
+    label: string;
+    status: string;
+    scopePath?: string | null;
+  }> {
+    const room = this.rooms.get(roomId);
+    if (room) {
+      return [...room.agents.values()].map((a) => ({
+        id: a.row.id,
+        label: a.row.label,
+        status: a.row.status,
+        scopePath: a.row.scope_path,
+      }));
+    }
+    return db.listAgents(roomId).map((a) => ({
+      id: a.id,
+      label: a.label,
+      status: a.status,
+      scopePath: a.scope_path,
+    }));
+  }
+
+  validateAgentScope(
+    roomId: string,
+    proposedScope: string | null | undefined,
+    excludeAgentId?: string,
+  ): { ok: true } | { ok: false; error: string } {
+    const overlap = findScopeOverlap(
+      this.agentScopeCandidates(roomId),
+      proposedScope,
+      excludeAgentId,
+    );
+    if (!overlap) return { ok: true };
+    return { ok: false, error: formatScopeOverlapError(overlap) };
+  }
+
+  private agentLabel(room: RoomState, agentId: string): string {
+    const agent = room.agents.get(agentId);
+    if (agent) return agent.row.label;
+    const row = db.getAgent(agentId);
+    return row?.label || agentId.slice(0, 6);
+  }
+
+  private emitConflictBlocked(
+    room: RoomState,
+    agentId: string,
+    path: string,
+    holderAgentId: string,
+  ): void {
+    const payload: AgentConflictBlocked = {
+      agentId,
+      path,
+      holderAgentId,
+      action: "aborted",
+    };
+    this.io.to(room.id).emit("agent-conflict-blocked", payload);
+  }
+
+  private tryAcquireEditLock(
+    room: RoomState,
+    agent: AgentState,
+    toolName: string | undefined,
+    path: string | undefined,
+    callId?: string,
+  ): boolean {
+    if (!path || !toolName || !isEditTool(toolName)) return true;
+    const result = this.fileLocks.tryAcquire(
+      room.id,
+      agent.row.id,
+      path,
+      callId,
+    );
+    if (result.ok) return true;
+    this.emitConflictBlocked(room, agent.row.id, path, result.holderAgentId);
+    return false;
+  }
+
+  private releaseEditLock(
+    room: RoomState,
+    agent: AgentState,
+    toolName: string | undefined,
+    path: string | undefined,
+  ): void {
+    if (!path || !toolName || !isEditTool(toolName)) return;
+    this.fileLocks.release(room.id, agent.row.id, path);
+  }
+
+  forceReleaseFileLock(
+    roomId: string,
+    rawPath: string,
+    actorUserId: string,
+  ): boolean {
+    const row = db.getRoom(roomId);
+    if (!row || row.status !== "active") {
+      throw new Error("Room not found");
+    }
+    if (row.owner_id && row.owner_id !== actorUserId) {
+      throw new Error("Only the host can force-release file locks");
+    }
+    const released = this.fileLocks.forceRelease(roomId, rawPath);
+    broadcastFileLocks(this.io, roomId, this.fileLocks);
+    return released;
+  }
+
+  private lockConflictMessage(
+    room: RoomState,
+    path: string,
+    holderAgentId: string,
+  ): string {
+    const holder = this.agentLabel(room, holderAgentId);
+    return `\`${path}\` is locked by ${holder}. Wait for the other agent to finish or ask the host to release the lock.`;
   }
 
   private emitAgentStatus(
@@ -728,6 +867,7 @@ export class RoomManager {
       touchedPaths: a.touchedPaths,
     }));
     socket.emit("agent-conflicts", detectAgentConflicts(conflictData));
+    socket.emit("file-locks", this.fileLocks.list(roomId));
 
     if (room.row.runtime === "cloud") {
       socket.emit("cloud-meta", room.cloudMeta);
@@ -1085,6 +1225,26 @@ export class RoomManager {
             closeAssistant("done");
             afterTools = true;
             bubbleBaseLen = seenFullText.length;
+            const toolPath = event.path;
+            if (
+              !this.tryAcquireEditLock(
+                room,
+                agent,
+                event.name,
+                toolPath,
+                event.callId,
+              )
+            ) {
+              const holder =
+                this.fileLocks.list(room.id).find((l) => l.path === toolPath)
+                  ?.agentId || "another agent";
+              finishWorkerRun(
+                "error",
+                this.lockConflictMessage(room, toolPath || "file", holder),
+              );
+              this.workerRelay?.abortRun(room.id, agent.row.id);
+              break;
+            }
             const msg: ChatMessage = {
               id: nanoid(12),
               roomId: room.id,
@@ -1103,6 +1263,15 @@ export class RoomManager {
             break;
           }
           case "tool_done": {
+            const toolPath =
+              event.path ||
+              (event.callId
+                ? agent.toolPaths.get(event.callId)
+                : undefined);
+            this.releaseEditLock(room, agent, event.name, toolPath);
+            if (toolPath && event.name && isEditTool(event.name)) {
+              this.noteTouchedPath(room, agent, toolPath);
+            }
             const id = event.callId
               ? agent.toolMsgIds.get(event.callId)
               : undefined;
@@ -1249,6 +1418,7 @@ export class RoomManager {
     agent.workerRunActive = false;
     for (const c of agent.workerRunCleanups) c();
     agent.workerRunCleanups = [];
+    this.fileLocks.releaseAllForAgent(roomId, agentId);
     this.workerRelay?.releaseRun(roomId, agentId);
     this.workerRelay?.clearRunListeners(roomId, agentId);
 
@@ -1466,6 +1636,24 @@ export class RoomManager {
 
             const path =
               event.path || extractToolPath(event.detail) || undefined;
+            if (
+              !this.tryAcquireEditLock(
+                room,
+                agent,
+                event.name,
+                path,
+                event.callId,
+              )
+            ) {
+              const holder =
+                this.fileLocks
+                  .list(room.id)
+                  .find((l) => path && l.path === path)?.agentId ||
+                "another agent";
+              throw new Error(
+                this.lockConflictMessage(room, path || "file", holder),
+              );
+            }
             const msg: ChatMessage = {
               id: nanoid(12),
               roomId: room.id,
@@ -1489,9 +1677,12 @@ export class RoomManager {
               agent.toolPaths.get(event.callId) ||
               extractToolPath(event.detail) ||
               undefined;
+            this.releaseEditLock(room, agent, event.name, path);
             if (path) {
               agent.toolPaths.set(event.callId, path);
-              this.noteTouchedPath(room, agent, path);
+              if (event.name && isEditTool(event.name)) {
+                this.noteTouchedPath(room, agent, path);
+              }
             }
             if (id) {
               const content = event.detail || path || "Done";
@@ -1783,6 +1974,11 @@ export class RoomManager {
       throw new Error("Claude Code backend is coming soon");
     }
 
+    if (opts.scopePath) {
+      const scopeCheck = this.validateAgentScope(roomId, opts.scopePath);
+      if (!scopeCheck.ok) throw new Error(scopeCheck.error);
+    }
+
     const modelId =
       opts.modelId || row.model_id || (row.auth_mode === "cli" ? "auto" : DEFAULT_MODEL);
 
@@ -1888,6 +2084,8 @@ export class RoomManager {
     db.updateAgentStatus(agentId, "stopped");
     agent.row.status = "stopped";
 
+    this.fileLocks.releaseAllForAgent(roomId, agentId);
+
     this.emitAgentStatus(room, agentId, "idle");
     this.broadcastAgents(room);
     this.broadcastConflicts(room);
@@ -1928,6 +2126,7 @@ export class RoomManager {
 
     agent.backend.abort();
     agent.workerRunActive = false;
+    this.fileLocks.releaseAllForAgent(id, resolvedAgentId);
 
     const note: ChatMessage = {
       id: nanoid(12),
