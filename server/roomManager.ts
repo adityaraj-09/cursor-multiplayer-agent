@@ -40,7 +40,6 @@ import type {
 } from "../shared/events.js";
 import { AVATAR_COLORS } from "../shared/events.js";
 
-const MAX_STEER_LENGTH = 2000;
 const MAX_NAME_LENGTH = 30;
 
 interface ParticipantInfo {
@@ -484,7 +483,8 @@ export class RoomManager {
     if (!room) return;
     if (!text || typeof text !== "string") return;
 
-    const sanitized = text.slice(0, MAX_STEER_LENGTH).trim();
+    // No hard character cap — trim edges only (incl. trailing newlines from Shift+Enter).
+    const sanitized = text.replace(/^\s+|\s+$/g, "");
     if (!sanitized) return;
 
     // Server-side busy guard — UI disable alone is not enough with multiple clients.

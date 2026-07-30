@@ -527,18 +527,20 @@ function LiveRoom({
         )}
         <SteerInput
           onSend={sendSteer}
-          disabled={agentStatus === "running"}
+          agentBusy={agentStatus === "running"}
+          connected={connected}
           models={models}
           modelId={modelId}
           onModelChange={(id) => void handleModelChange(id)}
-          modelDisabled={
-            !amHost || savingModel || agentStatus === "running"
+          modelDisabled={!amHost || savingModel}
+          modelLockReason={
+            !amHost
+              ? "Only the host can change the model"
+              : savingModel
+                ? "Saving…"
+                : undefined
           }
-          placeholder={
-            agentStatus === "running"
-              ? "Agent is working…"
-              : "Message the agent…"
-          }
+          placeholder="Message the agent…"
         />
       </footer>
     </div>
