@@ -139,11 +139,78 @@ router.post("/:id/invite", requireAuth, (req, res) => {
     return;
   }
 
-  const maxUses = req.body?.maxUses ?? null;
+  const maxUses =
+    req.body?.maxUses === null || req.body?.maxUses === undefined
+      ? null
+      : Number(req.body.maxUses);
+  if (maxUses !== null && (!Number.isFinite(maxUses) || maxUses < 1)) {
+    res.status(400).json({ error: "maxUses must be a positive number or null" });
+    return;
+  }
   const code = generateInviteCode();
   db.createInviteLink(code, roomId, req.user.id, maxUses);
 
-  res.json({ code, roomId });
+  res.json({ code, roomId, maxUses, useCount: 0 });
+});
+
+/** GET /api/auth/:id/invites — list invite links for a room */
+router.get("/:id/invites", requireAuth, (req, res) => {
+  if (!req.user) {
+    res.status(401).json({ error: "Auth required" });
+    return;
+  }
+  const roomId = String(req.params.id);
+  const room = db.getRoom(roomId);
+  if (!room) {
+    res.status(404).json({ error: "Room not found" });
+    return;
+  }
+  if (
+    room.owner_id !== req.user.id &&
+    !db.isRoomMember(roomId, req.user.id)
+  ) {
+    res.status(403).json({ error: "Not allowed to view invites for this room" });
+    return;
+  }
+
+  const invites = db.listInviteLinks(roomId).map((row) => ({
+    code: row.code,
+    roomId: row.room_id,
+    createdBy: row.created_by,
+    createdAt: row.created_at,
+    maxUses: row.max_uses,
+    useCount: row.use_count,
+  }));
+  res.json({ invites });
+});
+
+/** DELETE /api/auth/invite/:code — revoke an invite link */
+router.delete("/invite/:code", requireAuth, (req, res) => {
+  if (!req.user) {
+    res.status(401).json({ error: "Auth required" });
+    return;
+  }
+  const inviteCode = String(req.params.code);
+  const invite = db.getInviteLink(inviteCode);
+  if (!invite) {
+    res.status(404).json({ error: "Invite link not found" });
+    return;
+  }
+  const room = db.getRoom(invite.room_id);
+  if (!room) {
+    res.status(404).json({ error: "Room not found" });
+    return;
+  }
+  if (
+    room.owner_id !== req.user.id &&
+    !db.isRoomMember(invite.room_id, req.user.id)
+  ) {
+    res.status(403).json({ error: "Not allowed to revoke this invite" });
+    return;
+  }
+
+  db.deleteInviteLink(inviteCode);
+  res.json({ ok: true });
 });
 
 /** POST /api/auth/invite/:code/join — join room via invite */

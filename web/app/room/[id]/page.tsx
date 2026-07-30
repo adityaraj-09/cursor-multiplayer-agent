@@ -7,7 +7,6 @@ import { useSocket } from "../../../hooks/useSocket";
 import { useAuth } from "../../../components/AuthProvider";
 import {
   abortRoomRun,
-  createInviteLink,
   fetchOrJoinRoom,
   fetchRoomModels,
   stopRoom,
@@ -25,6 +24,7 @@ import PresenceBar from "../../../components/PresenceBar";
 import SteerInput from "../../../components/SteerInput";
 import CursorSessionPicker from "../../../components/CursorSessionPicker";
 import DriverControls from "../../../components/DriverControls";
+import InvitePanel from "../../../components/InvitePanel";
 import type { ModelInfo, RoomInfo } from "../../../../shared/events";
 
 export default function RoomPage() {
@@ -223,7 +223,7 @@ function LiveRoom({
   );
   const [modelError, setModelError] = useState("");
   const [savingModel, setSavingModel] = useState(false);
-  const [shareLabel, setShareLabel] = useState("Invite");
+  const [inviteOpen, setInviteOpen] = useState(false);
   const [changesOpen, setChangesOpen] = useState(false);
   const [cursorSessionError, setCursorSessionError] = useState("");
   const [savingCursorSession, setSavingCursorSession] = useState(false);
@@ -314,25 +314,6 @@ function LiveRoom({
     grantDrive(pendingRequest.socketId);
   }, [pendingRequest, grantDrive]);
 
-  const handleShare = useCallback(async () => {
-    setActionError("");
-    try {
-      const { code } = await createInviteLink(roomId);
-      const url = `${window.location.origin}/invite/${code}`;
-      try {
-        await navigator.clipboard.writeText(url);
-        setShareLabel("Copied");
-        setTimeout(() => setShareLabel("Invite"), 1500);
-      } catch {
-        window.prompt("Copy this invite link:", url);
-      }
-    } catch (err) {
-      setActionError(
-        err instanceof Error ? err.message : "Failed to create invite",
-      );
-    }
-  }, [roomId]);
-
   const handleStopSession = useCallback(async () => {
     if (
       !window.confirm(
@@ -415,10 +396,10 @@ function LiveRoom({
           </button>
           <button
             type="button"
-            onClick={() => void handleShare()}
+            onClick={() => setInviteOpen(true)}
             className="h-7 px-2 sm:px-2.5 rounded-md text-[11px] sm:text-[12px] text-[#a0a0a0] hover:text-[#e4e4e4] border border-[#2b2b2b] hover:border-[#3c3c3c] transition-colors"
           >
-            {shareLabel}
+            Invite
           </button>
           {agentStatus === "running" && (
             <button
@@ -501,6 +482,12 @@ function LiveRoom({
           onClose={() => setChangesOpen(false)}
         />
       )}
+
+      <InvitePanel
+        roomId={roomId}
+        open={inviteOpen}
+        onClose={() => setInviteOpen(false)}
+      />
 
       <footer className="border-t border-[#2b2b2b] bg-[#1a1a1a] shrink-0 pb-[env(safe-area-inset-bottom)]">
         {(modelError || cursorSessionError || actionError) && (

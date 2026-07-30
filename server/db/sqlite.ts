@@ -292,6 +292,11 @@ const stmts = {
     VALUES (?, ?, ?, ?, ?, 0)
   `),
   getInviteLink: db.prepare(`SELECT * FROM invite_links WHERE code = ?`),
+  listInviteLinks: db.prepare(`
+    SELECT * FROM invite_links WHERE room_id = ?
+    ORDER BY created_at DESC
+  `),
+  deleteInviteLink: db.prepare(`DELETE FROM invite_links WHERE code = ?`),
   useInviteLink: db.prepare(
     `UPDATE invite_links SET use_count = use_count + 1 WHERE code = ?`,
   ),
@@ -697,6 +702,31 @@ export function getInviteLink(
   return stmts.getInviteLink.get(code) as
     | { code: string; room_id: string; created_by: string; created_at: number; max_uses: number | null; use_count: number }
     | undefined;
+}
+
+export function listInviteLinks(
+  roomId: string,
+): Array<{
+  code: string;
+  room_id: string;
+  created_by: string;
+  created_at: number;
+  max_uses: number | null;
+  use_count: number;
+}> {
+  return stmts.listInviteLinks.all(roomId) as Array<{
+    code: string;
+    room_id: string;
+    created_by: string;
+    created_at: number;
+    max_uses: number | null;
+    use_count: number;
+  }>;
+}
+
+export function deleteInviteLink(code: string): boolean {
+  const result = stmts.deleteInviteLink.run(code);
+  return result.changes > 0;
 }
 
 export function useInviteLink(code: string): void {

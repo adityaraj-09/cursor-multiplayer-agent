@@ -20,6 +20,13 @@ import {
   serverKeySource,
   setServerApiKey,
 } from "./serverKey.js";
+import {
+  clearUserByokKey,
+  getUserByokKey,
+  setUserByokKey,
+  userByokConfigured,
+  userByokHint,
+} from "./userByok.js";
 import type {
   ServerToClientEvents,
   ClientToServerEvents,
@@ -98,14 +105,19 @@ function resolveRequestKey(
   authMode: AuthMode,
   bodyKey?: string,
   headerKey?: string,
+  userId?: string,
 ): string {
   if (authMode === "cli") {
     throw new Error("CLI auth does not use an API key");
   }
   if (authMode === "byok") {
     const key = (bodyKey || headerKey || "").trim();
-    if (!key) throw new Error("BYOK requires an API key");
-    return key;
+    if (key) return key;
+    if (userId) {
+      const saved = getUserByokKey(userId);
+      if (saved) return saved;
+    }
+    throw new Error("BYOK requires an API key");
   }
   const serverKey = getServerApiKey();
   if (!serverKey) {
@@ -117,13 +129,16 @@ function resolveRequestKey(
 // User auth routes
 app.use("/api/auth", authRoutes);
 
-app.get("/api/auth/status", (_req, res) => {
+app.get("/api/auth/status", (req, res) => {
+  const userId = req.user?.id;
   res.json({
     serverKeyConfigured: serverKeyConfigured(),
     serverKeySource: serverKeySource(),
     serverKeyHint: serverKeyHint(),
     encryptionConfigured: encryptionConfigured(),
     byokAvailable: encryptionConfigured(),
+    userByokConfigured: userId ? userByokConfigured(userId) : false,
+    userByokHint: userId ? userByokHint(userId) : null,
   });
 });
 
@@ -152,6 +167,32 @@ app.delete("/api/auth/server-key", requireAuth, (_req, res) => {
     serverKeyConfigured: serverKeyConfigured(),
     serverKeySource: serverKeySource(),
     serverKeyHint: serverKeyHint(),
+  });
+});
+
+/** Save / replace the signed-in user's BYOK Cursor API key. */
+app.post("/api/auth/byok-key", requireAuth, (req, res) => {
+  try {
+    const apiKey = String(req.body?.apiKey || "").trim();
+    const result = setUserByokKey(req.user!.id, apiKey);
+    res.json({
+      ok: true,
+      userByokConfigured: true,
+      userByokHint: result.hint,
+    });
+  } catch (err) {
+    res.status(400).json({
+      error: err instanceof Error ? err.message : "Failed to save BYOK key",
+    });
+  }
+});
+
+app.delete("/api/auth/byok-key", requireAuth, (req, res) => {
+  clearUserByokKey(req.user!.id);
+  res.json({
+    ok: true,
+    userByokConfigured: false,
+    userByokHint: null,
   });
 });
 
@@ -187,6 +228,7 @@ app.post("/api/models", async (req, res) => {
       typeof req.headers["x-cursor-api-key"] === "string"
         ? req.headers["x-cursor-api-key"]
         : undefined,
+      req.user?.id,
     );
     const models = await listModelsForKey(apiKey);
     res.json({ models });
@@ -212,6 +254,7 @@ app.post("/api/repositories", async (req, res) => {
       typeof req.headers["x-cursor-api-key"] === "string"
         ? req.headers["x-cursor-api-key"]
         : undefined,
+      req.user?.id,
     );
     const repositories = await listReposForKey(apiKey);
     res.json({ repositories });
