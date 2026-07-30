@@ -1308,6 +1308,52 @@ export class RoomManager {
   }
 
   /**
+   * Abort the in-flight agent run without stopping the room.
+   * Any room member may abort (same trust as steering).
+   */
+  abortRun(id: string, actorUserId?: string): void {
+    const row = db.getRoom(id);
+    if (!row || row.status !== "active") {
+      throw new Error("Room not found");
+    }
+    if (actorUserId && !this.userCanAccessRoom(id, actorUserId)) {
+      throw new Error("Not allowed");
+    }
+
+    const room = this.rooms.get(id);
+    if (!room) {
+      throw new Error("Room is not loaded — reconnect and try again");
+    }
+
+    const wasBusy = room.workerRunActive || room.agent.isBusy();
+    if (!wasBusy) return;
+
+    if (room.workerRunActive) {
+      this.workerRelay?.abortWorker(id);
+      for (const c of room.workerRunCleanups) c();
+      room.workerRunCleanups = [];
+      this.workerRelay?.releaseWorker(id);
+      this.workerRelay?.clearRoomListeners(id);
+    }
+
+    room.agent.abort();
+    room.workerRunActive = false;
+
+    const note: ChatMessage = {
+      id: nanoid(12),
+      roomId: room.id,
+      role: "assistant",
+      content: "Run aborted.",
+      status: "done",
+      ts: Date.now(),
+    };
+    db.insertMessage(note);
+    this.io.to(room.id).emit("chat-message", note);
+    this.io.to(room.id).emit("agent-status", "idle");
+    db.updateRoomActivity(room.id);
+  }
+
+  /**
    * Revoke membership and disconnect every live socket for a user in a room.
    * Used by HTTP leave / remove-member so access checks on reconnect stick.
    */

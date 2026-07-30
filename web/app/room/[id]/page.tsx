@@ -6,8 +6,11 @@ import Link from "next/link";
 import { useSocket } from "../../../hooks/useSocket";
 import { useAuth } from "../../../components/AuthProvider";
 import {
+  abortRoomRun,
+  createInviteLink,
   fetchOrJoinRoom,
   fetchRoomModels,
+  stopRoom,
   updateRoomCursorSession,
   updateRoomModel,
 } from "../../../lib/api";
@@ -185,6 +188,7 @@ function LiveRoom({
   roomInfo: RoomInfo | null;
   onRoomInfo: (info: RoomInfo) => void;
 }) {
+  const router = useRouter();
   const {
     socket,
     connected,
@@ -219,10 +223,13 @@ function LiveRoom({
   );
   const [modelError, setModelError] = useState("");
   const [savingModel, setSavingModel] = useState(false);
-  const [shareLabel, setShareLabel] = useState("Share");
+  const [shareLabel, setShareLabel] = useState("Invite");
   const [changesOpen, setChangesOpen] = useState(false);
   const [cursorSessionError, setCursorSessionError] = useState("");
   const [savingCursorSession, setSavingCursorSession] = useState(false);
+  const [actionError, setActionError] = useState("");
+  const [stopping, setStopping] = useState(false);
+  const [aborting, setAborting] = useState(false);
 
   useEffect(() => {
     if (!socket || !roomInfo) return;
@@ -308,13 +315,56 @@ function LiveRoom({
   }, [pendingRequest, grantDrive]);
 
   const handleShare = useCallback(async () => {
-    const url = `${window.location.origin}/room/${roomId}`;
+    setActionError("");
     try {
-      await navigator.clipboard.writeText(url);
-      setShareLabel("Copied");
-      setTimeout(() => setShareLabel("Share"), 1500);
-    } catch {
-      window.prompt("Copy this link:", url);
+      const { code } = await createInviteLink(roomId);
+      const url = `${window.location.origin}/invite/${code}`;
+      try {
+        await navigator.clipboard.writeText(url);
+        setShareLabel("Copied");
+        setTimeout(() => setShareLabel("Invite"), 1500);
+      } catch {
+        window.prompt("Copy this invite link:", url);
+      }
+    } catch (err) {
+      setActionError(
+        err instanceof Error ? err.message : "Failed to create invite",
+      );
+    }
+  }, [roomId]);
+
+  const handleStopSession = useCallback(async () => {
+    if (
+      !window.confirm(
+        "Stop this session? Everyone will be disconnected and the room will close.",
+      )
+    ) {
+      return;
+    }
+    setStopping(true);
+    setActionError("");
+    try {
+      await stopRoom(roomId);
+      router.push("/?notice=" + encodeURIComponent("Session stopped"));
+    } catch (err) {
+      setActionError(
+        err instanceof Error ? err.message : "Failed to stop session",
+      );
+      setStopping(false);
+    }
+  }, [roomId, router]);
+
+  const handleAbortRun = useCallback(async () => {
+    setAborting(true);
+    setActionError("");
+    try {
+      await abortRoomRun(roomId);
+    } catch (err) {
+      setActionError(
+        err instanceof Error ? err.message : "Failed to abort run",
+      );
+    } finally {
+      setAborting(false);
     }
   }, [roomId]);
 
@@ -370,6 +420,26 @@ function LiveRoom({
           >
             {shareLabel}
           </button>
+          {agentStatus === "running" && (
+            <button
+              type="button"
+              onClick={() => void handleAbortRun()}
+              disabled={aborting}
+              className="h-7 px-2 sm:px-2.5 rounded-md text-[11px] sm:text-[12px] text-[#f07070] hover:text-[#ff8a8a] border border-[#3c2b2b] hover:border-[#5a3a3a] transition-colors disabled:opacity-50"
+            >
+              {aborting ? "Stopping…" : "Abort"}
+            </button>
+          )}
+          {amHost && (
+            <button
+              type="button"
+              onClick={() => void handleStopSession()}
+              disabled={stopping}
+              className="h-7 px-2 sm:px-2.5 rounded-md text-[11px] sm:text-[12px] text-[#a0a0a0] hover:text-[#f07070] border border-[#2b2b2b] hover:border-[#3c3c3c] transition-colors disabled:opacity-50"
+            >
+              {stopping ? "…" : "Stop"}
+            </button>
+          )}
           {!amHost && (
             <button
               type="button"
@@ -433,9 +503,9 @@ function LiveRoom({
       )}
 
       <footer className="border-t border-[#2b2b2b] bg-[#1a1a1a] shrink-0 pb-[env(safe-area-inset-bottom)]">
-        {(modelError || cursorSessionError) && (
+        {(modelError || cursorSessionError || actionError) && (
           <p className="px-3 pt-2 text-[11px] text-[#f07070]">
-            {modelError || cursorSessionError}
+            {actionError || modelError || cursorSessionError}
           </p>
         )}
         {runtime === "local" && roomInfo?.authMode === "cli" && roomInfo.repoPath && (

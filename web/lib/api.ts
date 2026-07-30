@@ -292,7 +292,21 @@ export async function stopRoom(id: string): Promise<void> {
     method: "POST",
     headers: await authHeaders(),
   });
-  if (!res.ok) throw new Error("Failed to stop room");
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Failed to stop room");
+  }
+}
+
+export async function abortRoomRun(id: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/rooms/${id}/abort`, {
+    method: "POST",
+    headers: await authHeaders(),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Failed to abort run");
+  }
 }
 
 export async function fetchRoomModels(roomId: string): Promise<ModelInfo[]> {

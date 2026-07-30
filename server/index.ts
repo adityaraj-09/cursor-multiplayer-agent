@@ -417,6 +417,25 @@ app.post("/api/rooms/:id/stop", requireAuth, (req, res) => {
 });
 
 /**
+ * POST /api/rooms/:id/abort — cancel the in-flight agent run (room stays open).
+ */
+app.post("/api/rooms/:id/abort", requireAuth, (req, res) => {
+  const id = routeParam(req.params.id);
+  if (!roomManager.userCanAccessRoom(id, req.user!.id)) {
+    res.status(404).json({ error: "Room not found" });
+    return;
+  }
+  try {
+    roomManager.abortRun(id, req.user!.id);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(400).json({
+      error: err instanceof Error ? err.message : "Failed to abort run",
+    });
+  }
+});
+
+/**
  * POST /api/rooms/:id/leave — member leaves (host cannot).
  */
 app.post("/api/rooms/:id/leave", requireAuth, (req, res) => {
