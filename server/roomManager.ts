@@ -17,7 +17,6 @@ import {
   DEFAULT_AGENT_COMMAND,
   DEFAULT_MODEL,
   DEFAULT_REPO_PATH,
-  IS_PRODUCTION,
 } from "./config.js";
 import {
   decryptApiKey,
@@ -27,7 +26,12 @@ import {
 } from "./keyCrypto.js";
 import { getServerApiKey } from "./serverKey.js";
 import { getUserByokKey, setUserByokKey } from "./userByok.js";
+import { detectAgentConflicts, resolveAgentCwd } from "./agentConflicts.js";
 import type {
+  AgentInfo,
+  AgentConflict,
+  AgentBackendKind,
+  AgentStatus,
   AgentRuntime,
   AuthMode,
   AgentStreamEventPayload,
@@ -42,6 +46,10 @@ import type {
 import { AVATAR_COLORS } from "../shared/events.js";
 
 const MAX_NAME_LENGTH = 30;
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
 
 interface ParticipantInfo {
   name: string;
@@ -64,24 +72,92 @@ export interface CreateRoomRequest {
 
 type AgentBackend = AgentRunner | SdkAgentSession;
 
+interface AgentState {
+  row: db.AgentRow;
+  backend: AgentBackend;
+  cwd: string;
+  diffWatcher: DiffWatcher | null;
+  ownsDiffWatcher: boolean;
+  toolMsgIds: Map<string, string>;
+  toolPaths: Map<string, string>;
+  workerRunActive: boolean;
+  workerRunCleanups: (() => void)[];
+  driverSocketId: string | null;
+  pendingDriveRequest: { socketId: string; name: string } | null;
+  filePatches: Map<string, string>;
+  touchedPaths: Set<string>;
+}
+
 interface RoomState {
   id: string;
   row: db.RoomRow;
-  agent: AgentBackend;
-  diffWatcher: DiffWatcher | null;
   participants: Map<string, ParticipantInfo>;
-  driverSocketId: string | null;
-  pendingDriveRequest: { socketId: string; name: string } | null;
   colorIndex: number;
   cleanups: (() => void)[];
-  toolMsgIds: Map<string, string>;
-  toolPaths: Map<string, string>;
   cloudMeta: CloudMeta;
-  /** True while a CLI worker is running a prompt for this room. */
-  workerRunActive: boolean;
-  /** Unsubscribe hooks for the active worker run. */
-  workerRunCleanups: (() => void)[];
+  agents: Map<string, AgentState>;
+  /** Legacy room-level driver — prefer per-agent drivers. Kept as fallback for single-agent rooms. */
+  driverSocketId: string | null;
+  pendingDriveRequest: { socketId: string; name: string } | null;
 }
+
+// ---------------------------------------------------------------------------
+// Diff watcher pool — agents sharing a cwd share one watcher
+// ---------------------------------------------------------------------------
+
+const diffWatcherPool = new Map<
+  string,
+  { watcher: DiffWatcher; refs: number; unsubs: Map<string, () => void> }
+>();
+
+function acquireDiffWatcher(
+  absCwd: string,
+  roomId: string,
+  agentId: string,
+  onDiff: (patch: string) => void,
+): { watcher: DiffWatcher; unsub: () => void; isOwner: boolean } {
+  let entry = diffWatcherPool.get(absCwd);
+  let isOwner = false;
+  if (!entry) {
+    const watcher = new DiffWatcher(absCwd);
+    watcher
+      .start()
+      .catch((err) =>
+        console.error(`DiffWatcher error for ${absCwd}:`, err),
+      );
+    entry = { watcher, refs: 0, unsubs: new Map() };
+    diffWatcherPool.set(absCwd, entry);
+    isOwner = true;
+  }
+  entry.refs++;
+  const key = `${roomId}:${agentId}`;
+  const unsub = entry.watcher.onDiff(onDiff);
+  entry.unsubs.set(key, unsub);
+  return {
+    watcher: entry.watcher,
+    unsub: () => releaseDiffWatcher(absCwd, key),
+    isOwner,
+  };
+}
+
+function releaseDiffWatcher(absCwd: string, key: string): void {
+  const entry = diffWatcherPool.get(absCwd);
+  if (!entry) return;
+  const unsub = entry.unsubs.get(key);
+  if (unsub) {
+    unsub();
+    entry.unsubs.delete(key);
+  }
+  entry.refs--;
+  if (entry.refs <= 0) {
+    void entry.watcher.stop();
+    diffWatcherPool.delete(absCwd);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
 function normalizeAuthMode(
   runtime: AgentRuntime,
@@ -117,6 +193,10 @@ function resolveApiKey(row: db.RoomRow): string {
   return serverKey;
 }
 
+// ---------------------------------------------------------------------------
+// RoomManager
+// ---------------------------------------------------------------------------
+
 export class RoomManager {
   private rooms = new Map<string, RoomState>();
   private socketRooms = new Map<string, string>();
@@ -126,13 +206,28 @@ export class RoomManager {
     private workerRelay?: WorkerRelay,
   ) {
     this.restoreRooms();
-    this.workerRelay?.onRoomsDisconnected((roomIds) => {
-      for (const roomId of roomIds) this.handleWorkerSoftDisconnect(roomId);
+
+    this.workerRelay?.onRunsDisconnected((runs) => {
+      for (const { roomId, agentId } of runs) {
+        this.handleWorkerSoftDisconnect(roomId, agentId);
+      }
     });
-    this.workerRelay?.onRoomsLost((roomIds) => {
-      for (const roomId of roomIds) this.handleWorkerLost(roomId);
+
+    this.workerRelay?.onRunsLost((runs) => {
+      for (const { roomId, agentId } of runs) {
+        this.handleWorkerLost(roomId, agentId);
+      }
+    });
+
+    this.workerRelay?.setDefaultAgentResolver((roomId) => {
+      const agents = db.listAgents(roomId);
+      return agents[0]?.id ?? null;
     });
   }
+
+  // -----------------------------------------------------------------------
+  // Restore
+  // -----------------------------------------------------------------------
 
   private restoreRooms(): void {
     for (const row of db.listRooms()) {
@@ -146,6 +241,10 @@ export class RoomManager {
       }
     }
   }
+
+  // -----------------------------------------------------------------------
+  // createRoom
+  // -----------------------------------------------------------------------
 
   async createRoom(req: CreateRoomRequest): Promise<RoomInfo> {
     const name = req.name.trim();
@@ -164,7 +263,6 @@ export class RoomManager {
     if (authMode === "byok") {
       const pasted = req.apiKey?.trim() || "";
       const ownerId = req.ownerId?.trim() || "";
-      // Prefer freshly pasted key; otherwise reuse the user's saved BYOK.
       const raw = pasted || (ownerId ? getUserByokKey(ownerId) : "");
       if (!raw) {
         throw new Error(
@@ -177,7 +275,6 @@ export class RoomManager {
       keyCiphertext = encryptApiKey(raw);
       keyHint = maskApiKey(raw);
       apiKey = raw;
-      // Persist for this user so they don't re-paste on every cloud session.
       if (ownerId && pasted) {
         setUserByokKey(ownerId, pasted);
       }
@@ -197,8 +294,6 @@ export class RoomManager {
 
     if (runtime === "local") {
       const raw = req.repoPath?.trim() || DEFAULT_REPO_PATH;
-      // Absolute paths come from the CLI worker folder picker (exist on the
-      // worker machine, not necessarily on this server).
       repoPath = raw.startsWith("/") || /^[A-Za-z]:[\\/]/.test(raw)
         ? raw
         : resolve(raw);
@@ -215,15 +310,15 @@ export class RoomManager {
         throw new Error("Cloud repoUrl must be an https://github.com/... URL");
       }
       startingRef = req.startingRef?.trim() || "main";
-      repoPath = ""; // not used for cloud
+      repoPath = "";
     }
 
     const id = nanoid(10);
     let cursorAgentId: string | null = null;
-    let agent: AgentBackend;
+    let existingSdk: SdkAgentSession | null = null;
 
     if (authMode === "cli") {
-      agent = new AgentRunner(repoPath, null, modelId);
+      // Backend will be created inside initRoomState from the agent row.
     } else {
       const sdk = new SdkAgentSession({
         runtime,
@@ -236,7 +331,7 @@ export class RoomManager {
         autoCreatePR,
       });
       cursorAgentId = await sdk.ensureStarted();
-      agent = sdk;
+      existingSdk = sdk;
     }
 
     const ownerId = req.ownerId?.trim() || null;
@@ -270,87 +365,325 @@ export class RoomManager {
       }
     }
 
-    this.initRoomState(row, agent);
+    const agentRow = db.createAgent({
+      roomId: id,
+      backend: "cursor",
+      label: "Agent 1",
+      sessionId: null,
+      sdkAgentId: cursorAgentId,
+      modelId,
+      createdBy: ownerId,
+    });
+
+    const existingByAgentId = new Map<string, AgentBackend>();
+    if (existingSdk) {
+      existingByAgentId.set(agentRow.id, existingSdk);
+    }
+
+    this.initRoomState(row, existingByAgentId);
     console.log(
       `Created ${runtime}/${authMode} room "${name}" (${id}) model=${modelId}`,
     );
     return this.toRoomInfo(row, 0);
   }
 
-  private initRoomState(row: db.RoomRow, existing?: AgentBackend): void {
-    let agent: AgentBackend;
-    if (existing) {
-      agent = existing;
-    } else if (row.auth_mode === "cli") {
-      agent = new AgentRunner(
-        row.repo_path,
-        row.cursor_session_id,
-        row.model_id || "auto",
-      );
-    } else {
-      const apiKey = resolveApiKey(row);
-      agent = new SdkAgentSession({
-        runtime: row.runtime === "cloud" ? "cloud" : "local",
-        apiKey,
-        model: { id: row.model_id || DEFAULT_MODEL },
-        name: row.name,
-        agentId: row.cursor_agent_id,
-        localCwd: row.runtime === "local" ? row.repo_path : undefined,
-        repoUrl: row.repo_url || undefined,
-        startingRef: row.starting_ref || undefined,
-        autoCreatePR: Boolean(row.auto_create_pr),
+  // -----------------------------------------------------------------------
+  // initRoomState
+  // -----------------------------------------------------------------------
+
+  private initRoomState(
+    row: db.RoomRow,
+    existingByAgentId?: Map<string, AgentBackend>,
+  ): void {
+    let agentRows = db.listAgents(row.id);
+
+    // Safety: if no agents exist (legacy / corrupted), create one default
+    if (agentRows.length === 0) {
+      const created = db.createAgent({
+        roomId: row.id,
+        backend: "cursor",
+        label: "Agent 1",
+        sessionId: row.cursor_session_id,
+        sdkAgentId: row.cursor_agent_id,
+        modelId: row.model_id || "auto",
+        createdBy: row.owner_id,
+        sortOrder: 0,
       });
+      agentRows = [created];
     }
 
-    let diffWatcher: DiffWatcher | null = null;
+    const agents = new Map<string, AgentState>();
     const cleanups: (() => void)[] = [];
 
-    // CLI local rooms use a path on the worker machine — don't watch/git
-    // on the API host (simple-git throws if the directory is missing).
-    const canWatchLocally =
-      row.runtime === "local" &&
-      row.auth_mode !== "cli" &&
-      Boolean(row.repo_path) &&
-      existsSync(row.repo_path);
+    for (const agentRow of agentRows) {
+      let backend: AgentBackend;
+      const existing = existingByAgentId?.get(agentRow.id);
 
-    if (canWatchLocally) {
-      diffWatcher = new DiffWatcher(row.repo_path);
-      diffWatcher
-        .start()
-        .catch((err) =>
-          console.error(`DiffWatcher error for ${row.id}:`, err),
+      if (existing) {
+        backend = existing;
+      } else if (row.auth_mode === "cli") {
+        const cwd = resolveAgentCwd(row.repo_path, agentRow.scope_path);
+        backend = new AgentRunner(
+          cwd,
+          agentRow.session_id,
+          agentRow.model_id || "auto",
         );
-      cleanups.push(() => {
-        void diffWatcher?.stop();
+      } else {
+        const apiKey = resolveApiKey(row);
+        const cwd = row.runtime === "local"
+          ? resolveAgentCwd(row.repo_path, agentRow.scope_path)
+          : "";
+        backend = new SdkAgentSession({
+          runtime: row.runtime === "cloud" ? "cloud" : "local",
+          apiKey,
+          model: { id: agentRow.model_id || DEFAULT_MODEL },
+          name: row.name,
+          agentId: agentRow.sdk_agent_id,
+          localCwd: row.runtime === "local" ? cwd : undefined,
+          repoUrl: row.repo_url || undefined,
+          startingRef: row.starting_ref || undefined,
+          autoCreatePR: Boolean(row.auto_create_pr),
+        });
+      }
+
+      const cwd = row.runtime === "local"
+        ? resolveAgentCwd(row.repo_path, agentRow.scope_path)
+        : "";
+
+      let diffWatcher: DiffWatcher | null = null;
+      let ownsDiffWatcher = false;
+
+      const canWatchLocally =
+        row.runtime === "local" &&
+        row.auth_mode !== "cli" &&
+        Boolean(cwd) &&
+        existsSync(cwd);
+
+      if (canWatchLocally) {
+        const poolResult = acquireDiffWatcher(
+          cwd,
+          row.id,
+          agentRow.id,
+          (patch) => {
+            this.io.to(row.id).emit("diff-update", patch, agentRow.id);
+          },
+        );
+        diffWatcher = poolResult.watcher;
+        ownsDiffWatcher = poolResult.isOwner;
+        cleanups.push(poolResult.unsub);
+      }
+
+      agents.set(agentRow.id, {
+        row: agentRow,
+        backend,
+        cwd,
+        diffWatcher,
+        ownsDiffWatcher,
+        toolMsgIds: new Map(),
+        toolPaths: new Map(),
+        workerRunActive: false,
+        workerRunCleanups: [],
+        driverSocketId: null,
+        pendingDriveRequest: null,
+        filePatches: new Map(),
+        touchedPaths: new Set(),
       });
-      const unsub = diffWatcher.onDiff((patch) => {
-        this.io.to(row.id).emit("diff-update", patch);
-      });
-      cleanups.push(unsub);
     }
 
     this.rooms.set(row.id, {
       id: row.id,
       row,
-      agent,
-      diffWatcher,
       participants: new Map(),
-      driverSocketId: null,
-      pendingDriveRequest: null,
       colorIndex: 0,
       cleanups,
-      toolMsgIds: new Map(),
-      toolPaths: new Map(),
       cloudMeta: {
         repoUrl: row.repo_url || undefined,
         startingRef: row.starting_ref || undefined,
         prUrl: row.pr_url || undefined,
         autoCreatePR: Boolean(row.auto_create_pr),
       },
-      workerRunActive: false,
-      workerRunCleanups: [],
+      agents,
+      driverSocketId: null,
+      pendingDriveRequest: null,
     });
   }
+
+  // -----------------------------------------------------------------------
+  // Agent helpers
+  // -----------------------------------------------------------------------
+
+  private getDefaultAgent(room: RoomState): AgentState {
+    // First by sort_order (agentRows come sorted from DB)
+    let first: AgentState | undefined;
+    for (const a of room.agents.values()) {
+      if (!first || a.row.sort_order < first.row.sort_order) {
+        first = a;
+      }
+    }
+    if (!first) throw new Error("Room has no agents");
+    return first;
+  }
+
+  private getAgentState(
+    room: RoomState,
+    agentId: string,
+  ): AgentState | undefined {
+    return room.agents.get(agentId);
+  }
+
+  toAgentInfo(row: db.AgentRow): AgentInfo {
+    return {
+      id: row.id,
+      roomId: row.room_id,
+      backend: row.backend,
+      label: row.label,
+      scopePath: row.scope_path || undefined,
+      sessionId: row.session_id || undefined,
+      modelId: row.model_id,
+      status: row.status,
+      createdBy: row.created_by || undefined,
+      createdAt: row.created_at,
+      sortOrder: row.sort_order,
+      sdkAgentId: row.sdk_agent_id || undefined,
+      branch: row.branch || undefined,
+      prUrl: row.pr_url || undefined,
+    };
+  }
+
+  listAgentInfos(roomId: string): AgentInfo[] {
+    const room = this.rooms.get(roomId);
+    if (room) {
+      return [...room.agents.values()].map((a) => this.toAgentInfo(a.row));
+    }
+    return db.listAgents(roomId).map((r) => this.toAgentInfo(r));
+  }
+
+  updateAgentMeta(
+    roomId: string,
+    agentId: string,
+    opts: { label?: string; scopePath?: string | null },
+    actorUserId?: string,
+  ): AgentInfo {
+    const row = db.getRoom(roomId);
+    if (!row || row.status !== "active") throw new Error("Room not found");
+    if (actorUserId && row.owner_id && row.owner_id !== actorUserId) {
+      throw new Error("Only the host can update agents");
+    }
+    const room = this.rooms.get(roomId);
+    const agent = room?.agents.get(agentId);
+    const agentRow = agent?.row || db.getAgent(agentId);
+    if (!agentRow || agentRow.room_id !== roomId) {
+      throw new Error("Agent not found");
+    }
+    if (opts.label !== undefined) {
+      db.setAgentLabel(agentId, opts.label.trim() || agentRow.label);
+      agentRow.label = opts.label.trim() || agentRow.label;
+    }
+    if (opts.scopePath !== undefined) {
+      if (row.runtime === "local" && opts.scopePath) {
+        resolveAgentCwd(row.repo_path, opts.scopePath);
+      }
+      db.setAgentScope(agentId, opts.scopePath);
+      agentRow.scope_path = opts.scopePath;
+      if (agent && row.runtime === "local") {
+        agent.cwd = resolveAgentCwd(row.repo_path, opts.scopePath);
+      }
+    }
+    if (agent) agent.row = agentRow;
+    if (room) {
+      this.broadcastAgents(room);
+      this.broadcastConflicts(room);
+    }
+    return this.toAgentInfo(agentRow);
+  }
+
+  private broadcastAgents(room: RoomState): void {
+    const infos: AgentInfo[] = [];
+    for (const a of room.agents.values()) {
+      infos.push(this.toAgentInfo(a.row));
+    }
+    this.io.to(room.id).emit("agents", infos);
+  }
+
+  private broadcastConflicts(room: RoomState): void {
+    const agentData = [...room.agents.values()].map((a) => ({
+      id: a.row.id,
+      status: a.row.status,
+      scopePath: a.row.scope_path,
+      touchedPaths: a.touchedPaths,
+    }));
+    const conflicts = detectAgentConflicts(agentData);
+    this.io.to(room.id).emit("agent-conflicts", conflicts);
+  }
+
+  private emitAgentStatus(
+    room: RoomState,
+    agentId: string,
+    status: string,
+    detail?: string,
+  ): void {
+    // Multi-agent: emit (agentId, status, detail)
+    if (detail) {
+      this.io.to(room.id).emit("agent-status", agentId, status, detail);
+    } else {
+      this.io.to(room.id).emit("agent-status", agentId, status);
+    }
+    // Single-agent compat: also emit legacy (status, detail)
+    if (room.agents.size <= 1) {
+      if (detail) {
+        this.io.to(room.id).emit("agent-status", status, detail);
+      } else {
+        this.io.to(room.id).emit("agent-status", status);
+      }
+    }
+  }
+
+  private persistAgentSession(
+    room: RoomState,
+    agent: AgentState,
+    sessionId: string | null,
+  ): void {
+    const next = sessionId?.trim() || null;
+    if (next === agent.row.session_id) return;
+    db.setAgentSessionId(agent.row.id, next);
+    agent.row.session_id = next;
+
+    // Update room-level cursor_session_id if this is the default agent
+    const defaultAgent = this.getDefaultAgent(room);
+    if (agent.row.id === defaultAgent.row.id) {
+      if (next) db.setCursorSessionId(room.id, next);
+      else db.setCursorSessionId(room.id, "");
+      room.row.cursor_session_id = next;
+    }
+
+    this.io
+      .to(room.id)
+      .emit("cursor-session-updated", agent.row.id, next);
+  }
+
+  private noteTouchedPath(
+    room: RoomState,
+    agent: AgentState,
+    path: string,
+  ): void {
+    agent.touchedPaths.add(path);
+    this.broadcastConflicts(room);
+  }
+
+  private emitAgentDiff(room: RoomState, agent: AgentState): void {
+    const parts: string[] = [];
+    for (const patch of agent.filePatches.values()) {
+      if (patch) parts.push(patch);
+    }
+    const combined = parts.join("\n");
+    if (combined) {
+      this.io.to(room.id).emit("diff-update", combined, agent.row.id);
+    }
+  }
+
+  // -----------------------------------------------------------------------
+  // joinRoom
+  // -----------------------------------------------------------------------
 
   joinRoom(roomId: string, socket: Socket, userId: string): boolean {
     const room = this.rooms.get(roomId);
@@ -366,8 +699,7 @@ export class RoomManager {
     (socket.data as { userId?: string }).userId = userId;
     socket.join(roomId);
 
-    // Only take the driver seat when vacant — never steal from an active driver
-    // on host reconnect / multi-tab join.
+    // Only take the driver seat when vacant
     const driverStillPresent =
       room.driverSocketId != null &&
       room.participants.has(room.driverSocketId);
@@ -377,24 +709,56 @@ export class RoomManager {
 
     socket.emit("chat-history", db.getMessages(roomId, 500));
 
-    if (room.diffWatcher) {
-      const lastPatch = room.diffWatcher.getLastPatch();
-      if (lastPatch) socket.emit("diff-update", lastPatch);
+    // Emit agents snapshot and conflicts
+    const agentInfos: AgentInfo[] = [];
+    for (const a of room.agents.values()) {
+      agentInfos.push(this.toAgentInfo(a.row));
+
+      if (a.diffWatcher) {
+        const lastPatch = a.diffWatcher.getLastPatch();
+        if (lastPatch) socket.emit("diff-update", lastPatch, a.row.id);
+      }
     }
+    socket.emit("agents", agentInfos);
+
+    const conflictData = [...room.agents.values()].map((a) => ({
+      id: a.row.id,
+      status: a.row.status,
+      scopePath: a.row.scope_path,
+      touchedPaths: a.touchedPaths,
+    }));
+    socket.emit("agent-conflicts", detectAgentConflicts(conflictData));
 
     if (room.row.runtime === "cloud") {
       socket.emit("cloud-meta", room.cloudMeta);
     }
 
-    socket.emit(
-      "agent-status",
-      room.workerRunActive || room.agent.isBusy() ? "running" : "idle",
-    );
+    // Emit per-agent status
+    for (const [agentId, agent] of room.agents) {
+      const status =
+        agent.workerRunActive || agent.backend.isBusy() ? "running" : "idle";
+      socket.emit("agent-status", agentId, status);
+    }
+
+    // Legacy single-agent compat
+    if (room.agents.size <= 1) {
+      const defaultAgent = this.getDefaultAgent(room);
+      const status =
+        defaultAgent.workerRunActive || defaultAgent.backend.isBusy()
+          ? "running"
+          : "idle";
+      socket.emit("agent-status", status);
+    }
+
     this.broadcastPresence(room);
     db.updateRoomActivity(roomId);
     console.log(`${name} joined room ${roomId} (${socket.id})`);
     return true;
   }
+
+  // -----------------------------------------------------------------------
+  // leaveRoom
+  // -----------------------------------------------------------------------
 
   leaveRoom(socket: Socket): void {
     const roomId = this.socketRooms.get(socket.id);
@@ -406,6 +770,7 @@ export class RoomManager {
     room.participants.delete(socket.id);
     this.socketRooms.delete(socket.id);
 
+    // Room-level driver fallback
     if (socket.id === room.driverSocketId) {
       room.driverSocketId = null;
       if (
@@ -431,11 +796,33 @@ export class RoomManager {
       room.pendingDriveRequest = null;
     }
 
+    // Per-agent driver cleanup
+    for (const [, agent] of room.agents) {
+      if (agent.driverSocketId === socket.id) {
+        agent.driverSocketId = null;
+        if (
+          agent.pendingDriveRequest &&
+          room.participants.has(agent.pendingDriveRequest.socketId)
+        ) {
+          agent.driverSocketId = agent.pendingDriveRequest.socketId;
+          this.io.sockets.sockets
+            .get(agent.driverSocketId!)
+            ?.emit("drive-granted", agent.row.id);
+          agent.pendingDriveRequest = null;
+        }
+      }
+      if (
+        agent.pendingDriveRequest &&
+        agent.pendingDriveRequest.socketId === socket.id
+      ) {
+        agent.pendingDriveRequest = null;
+      }
+    }
+
     this.broadcastPresence(room);
     console.log(`${p?.name || "Unknown"} left room ${roomId}`);
   }
 
-  /** Member leaves the room permanently (revokes membership). Owner cannot leave this way. */
   handleLeaveRoom(socket: Socket): void {
     const room = this.getRoomForSocket(socket.id);
     if (!room) return;
@@ -454,7 +841,6 @@ export class RoomManager {
     socket.disconnect(true);
   }
 
-  /** Host removes a member by userId — kicks all their sockets and revokes access. */
   handleRemoveMember(socket: Socket, targetUserIdRaw: string): void {
     const room = this.getRoomForSocket(socket.id);
     if (!room) return;
@@ -490,17 +876,40 @@ export class RoomManager {
     return Boolean(row && row.owner_id === userId);
   }
 
-  handleSteerMessage(socket: Socket, text: string): void {
+  // -----------------------------------------------------------------------
+  // handleSteerMessage — parse (textOrAgentId, text?) overload
+  // -----------------------------------------------------------------------
+
+  handleSteerMessage(
+    socket: Socket,
+    textOrAgentId: string,
+    text?: string,
+  ): void {
     const room = this.getRoomForSocket(socket.id);
     if (!room) return;
-    if (!text || typeof text !== "string") return;
 
-    // No hard character cap — trim edges only (incl. trailing newlines from Shift+Enter).
-    const sanitized = text.replace(/^\s+|\s+$/g, "");
+    let agentId: string;
+    let prompt: string;
+
+    if (text !== undefined && text !== null) {
+      agentId = textOrAgentId;
+      prompt = text;
+    } else {
+      agentId = this.getDefaultAgent(room).row.id;
+      prompt = textOrAgentId;
+    }
+
+    if (!prompt || typeof prompt !== "string") return;
+    const sanitized = prompt.replace(/^\s+|\s+$/g, "");
     if (!sanitized) return;
 
-    // Server-side busy guard — UI disable alone is not enough with multiple clients.
-    if (room.workerRunActive || room.agent.isBusy()) {
+    const agent = this.getAgentState(room, agentId);
+    if (!agent) {
+      socket.emit("error", `Agent ${agentId} not found`);
+      return;
+    }
+
+    if (agent.workerRunActive || agent.backend.isBusy()) {
       socket.emit(
         "error",
         "Agent is still running — wait for it to finish before sending another message",
@@ -508,8 +917,7 @@ export class RoomManager {
       return;
     }
 
-    // Claim the run slot synchronously before insert/dispatch to close races.
-    room.workerRunActive = true;
+    agent.workerRunActive = true;
 
     const p = room.participants.get(socket.id);
     const userMsg: ChatMessage = {
@@ -521,37 +929,40 @@ export class RoomManager {
       senderColor: p?.color || "#888",
       status: "done",
       ts: Date.now(),
+      agentId,
     };
 
     db.insertMessage(userMsg);
     this.io.to(room.id).emit("chat-message", userMsg);
     db.updateRoomActivity(room.id);
-    void this.runAgent(room, sanitized);
+    void this.runAgent(room, agent, sanitized);
   }
 
-  /**
-   * Dispatch a local room's prompt to a connected CLI worker.
-   * Returns true if dispatched, false if no worker available (falls back to in-process).
-   */
-  private tryDispatchToWorker(room: RoomState, prompt: string): boolean {
+  // -----------------------------------------------------------------------
+  // tryDispatchToWorker
+  // -----------------------------------------------------------------------
+
+  private tryDispatchToWorker(
+    room: RoomState,
+    agent: AgentState,
+    prompt: string,
+  ): boolean {
     if (!this.workerRelay) return false;
     if (room.row.auth_mode !== "cli") return false;
     if (room.row.runtime !== "local") return false;
 
-    let ownerId = room.row.owner_id ?? undefined;
-    let worker = ownerId
+    const ownerId = room.row.owner_id ?? undefined;
+    const worker = ownerId
       ? this.workerRelay.findWorkerForUser(ownerId)
       : null;
 
-    // Legacy rooms without owner_id cannot safely bind a worker.
     if (!worker) return false;
 
-    // Clear any leftover subscriptions from a previous interrupted run
-    for (const c of room.workerRunCleanups) c();
-    room.workerRunCleanups = [];
-    room.workerRunActive = true;
+    for (const c of agent.workerRunCleanups) c();
+    agent.workerRunCleanups = [];
+    agent.workerRunActive = true;
 
-    this.io.to(room.id).emit("agent-status", "running");
+    this.emitAgentStatus(room, agent.row.id, "running");
 
     let assistantId: string | null = null;
     let assistantContent = "";
@@ -559,8 +970,8 @@ export class RoomManager {
     let bubbleBaseLen = 0;
     let afterTools = false;
     let finished = false;
-    room.toolMsgIds.clear();
-    room.toolPaths.clear();
+    agent.toolMsgIds.clear();
+    agent.toolPaths.clear();
 
     const finishWorkerRun = (
       status: "idle" | "error" = "idle",
@@ -568,26 +979,36 @@ export class RoomManager {
     ) => {
       if (finished) return;
       finished = true;
-      room.workerRunActive = false;
+      agent.workerRunActive = false;
       closeAssistant(status === "error" ? "error" : "done");
+
+      db.updateAgentStatus(agent.row.id, status === "error" ? "error" : "idle");
+      agent.row.status = status === "error" ? "error" : "idle";
+      this.broadcastAgents(room);
+
       if (status === "error" && detail) {
-        this.io.to(room.id).emit("agent-status", "error", detail);
+        this.emitAgentStatus(room, agent.row.id, "error", detail);
       }
-      this.io.to(room.id).emit("agent-status", "idle");
-      this.workerRelay?.releaseWorker(room.id);
-      for (const c of room.workerRunCleanups) c();
-      room.workerRunCleanups = [];
+      this.emitAgentStatus(room, agent.row.id, "idle");
+      this.workerRelay?.releaseRun(room.id, agent.row.id);
+      for (const c of agent.workerRunCleanups) c();
+      agent.workerRunCleanups = [];
     };
 
     const closeAssistant = (status: ChatMessage["status"] = "done") => {
       if (!assistantId) return;
       db.updateMessageContent(assistantId, assistantContent, status);
-      this.io.to(room.id).emit("chat-delta", assistantId, assistantContent, status);
+      this.io
+        .to(room.id)
+        .emit("chat-delta", assistantId, assistantContent, status);
       assistantId = null;
       assistantContent = "";
     };
 
-    const emitAssistantFromWorker = (text: string, status: ChatMessage["status"]) => {
+    const emitAssistantFromWorker = (
+      text: string,
+      status: ChatMessage["status"],
+    ) => {
       if (afterTools) {
         closeAssistant("done");
         afterTools = false;
@@ -614,12 +1035,15 @@ export class RoomManager {
           content: display,
           status,
           ts: Date.now(),
+          agentId: agent.row.id,
         };
         assistantId = msg.id;
         assistantContent = display;
         seenFullText = text.startsWith(seenFullText)
           ? text
-          : seenFullText ? `${seenFullText}\n${text}` : text;
+          : seenFullText
+            ? `${seenFullText}\n${text}`
+            : text;
         db.insertMessage(msg);
         this.io.to(room.id).emit("chat-message", msg);
         return;
@@ -627,140 +1051,174 @@ export class RoomManager {
       let display: string;
       if (text.length >= bubbleBaseLen) {
         display = text.slice(bubbleBaseLen).replace(/^\n+/, "");
-        seenFullText = text.length >= seenFullText.length ? text : seenFullText;
+        seenFullText =
+          text.length >= seenFullText.length ? text : seenFullText;
       } else {
         display = text;
         seenFullText = text;
       }
       assistantContent = display || assistantContent;
       db.updateMessageContent(assistantId, assistantContent, status);
-      this.io.to(room.id).emit("chat-delta", assistantId, assistantContent, status);
+      this.io
+        .to(room.id)
+        .emit("chat-delta", assistantId, assistantContent, status);
     };
 
-    const unsubEvent = this.workerRelay.onAgentEvent(room.id, (_roomId, event) => {
-      switch (event.kind) {
-        case "session":
-          if (event.sessionId) {
-            this.persistCursorSession(room, event.sessionId);
-          }
-          break;
-        case "assistant_delta":
-        case "assistant_final":
-          emitAssistantFromWorker(
-            event.text || "",
-            event.kind === "assistant_final" ? "done" : "streaming",
-          );
-          break;
-        case "tool_start": {
-          closeAssistant("done");
-          afterTools = true;
-          bubbleBaseLen = seenFullText.length;
-          const msg: ChatMessage = {
-            id: nanoid(12),
-            roomId: room.id,
-            role: "tool",
-            content: event.detail || "Running…",
-            toolName: event.name || "tool",
-            status: "streaming",
-            ts: Date.now(),
-          };
-          if (event.callId) room.toolMsgIds.set(event.callId, msg.id);
-          if (event.path && event.callId) room.toolPaths.set(event.callId, event.path);
-          db.insertMessage(msg);
-          this.io.to(room.id).emit("chat-message", msg);
-          break;
-        }
-        case "tool_done": {
-          const id = event.callId ? room.toolMsgIds.get(event.callId) : undefined;
-          if (id) {
-            const content = event.detail || event.path || "Done";
-            const patch = event.diffPatch?.trim() || "";
-            if (patch) {
-              db.updateMessageDiff(id, content, "done", patch);
-              this.io.to(room.id).emit("chat-message", {
-                id,
-                roomId: room.id,
-                role: "tool",
-                content,
-                toolName: event.name || "tool",
-                diffPatch: patch,
-                status: "done",
-                ts: Date.now(),
-              });
-            } else {
-              db.updateMessageContent(id, content, "done");
-              this.io.to(room.id).emit("chat-message", {
-                id,
-                roomId: room.id,
-                role: "tool",
-                content,
-                toolName: event.name || "tool",
-                status: "done",
-                ts: Date.now(),
-              });
-            }
-          }
-          afterTools = true;
-          break;
-        }
-        case "error":
-          emitAssistantFromWorker(event.message || "Unknown error", "error");
-          finishWorkerRun("error", event.message || "Agent error");
-          break;
-        case "done":
-          emitAssistantFromWorker(event.result || "", "done");
-          finishWorkerRun("idle");
-          break;
-      }
-    });
-
-    const unsubDiff = this.workerRelay.onFileDiff(room.id, (_roomId, callId, toolName, path, patch) => {
-      const msgId = room.toolMsgIds.get(callId);
-      if (!msgId) {
-        console.warn(
-          `[RoomManager] Dropping file-diff for unknown callId=${callId} path=${path}`,
-        );
-        return;
-      }
-      db.updateMessageDiff(msgId, path, "done", patch);
-      this.io.to(room.id).emit("chat-message", {
-        id: msgId,
-        roomId: room.id,
-        role: "tool",
-        content: path,
-        toolName,
-        diffPatch: patch,
-        status: "done",
-        ts: Date.now(),
-      });
-    });
-
-    room.workerRunCleanups.push(unsubEvent, unsubDiff);
-
-    const dispatched = this.workerRelay.dispatchToWorker(
+    const unsubEvent = this.workerRelay.onAgentEvent(
       room.id,
-      worker.workerId,
-      prompt,
-      room.row.repo_path,
-      room.row.model_id || "auto",
-      room.row.cursor_session_id,
+      agent.row.id,
+      (_roomId, _agentId, event) => {
+        switch (event.kind) {
+          case "session":
+            if (event.sessionId) {
+              this.persistAgentSession(room, agent, event.sessionId);
+            }
+            break;
+          case "assistant_delta":
+          case "assistant_final":
+            emitAssistantFromWorker(
+              event.text || "",
+              event.kind === "assistant_final" ? "done" : "streaming",
+            );
+            break;
+          case "tool_start": {
+            closeAssistant("done");
+            afterTools = true;
+            bubbleBaseLen = seenFullText.length;
+            const msg: ChatMessage = {
+              id: nanoid(12),
+              roomId: room.id,
+              role: "tool",
+              content: event.detail || "Running…",
+              toolName: event.name || "tool",
+              status: "streaming",
+              ts: Date.now(),
+              agentId: agent.row.id,
+            };
+            if (event.callId) agent.toolMsgIds.set(event.callId, msg.id);
+            if (event.path && event.callId)
+              agent.toolPaths.set(event.callId, event.path);
+            db.insertMessage(msg);
+            this.io.to(room.id).emit("chat-message", msg);
+            break;
+          }
+          case "tool_done": {
+            const id = event.callId
+              ? agent.toolMsgIds.get(event.callId)
+              : undefined;
+            if (id) {
+              const content = event.detail || event.path || "Done";
+              const patch = event.diffPatch?.trim() || "";
+              if (patch) {
+                db.updateMessageDiff(id, content, "done", patch);
+                this.io.to(room.id).emit("chat-message", {
+                  id,
+                  roomId: room.id,
+                  role: "tool",
+                  content,
+                  toolName: event.name || "tool",
+                  diffPatch: patch,
+                  status: "done",
+                  ts: Date.now(),
+                  agentId: agent.row.id,
+                });
+              } else {
+                db.updateMessageContent(id, content, "done");
+                this.io.to(room.id).emit("chat-message", {
+                  id,
+                  roomId: room.id,
+                  role: "tool",
+                  content,
+                  toolName: event.name || "tool",
+                  status: "done",
+                  ts: Date.now(),
+                  agentId: agent.row.id,
+                });
+              }
+            }
+            afterTools = true;
+            break;
+          }
+          case "error":
+            emitAssistantFromWorker(event.message || "Unknown error", "error");
+            finishWorkerRun("error", event.message || "Agent error");
+            break;
+          case "done":
+            emitAssistantFromWorker(event.result || "", "done");
+            finishWorkerRun("idle");
+            break;
+        }
+      },
     );
+
+    const unsubDiff = this.workerRelay.onFileDiff(
+      room.id,
+      agent.row.id,
+      (_roomId, _agentId, callId, toolName, path, patch) => {
+        const msgId = agent.toolMsgIds.get(callId);
+        if (!msgId) {
+          console.warn(
+            `[RoomManager] Dropping file-diff for unknown callId=${callId} path=${path}`,
+          );
+          return;
+        }
+        db.updateMessageDiff(msgId, path, "done", patch);
+        this.io.to(room.id).emit("chat-message", {
+          id: msgId,
+          roomId: room.id,
+          role: "tool",
+          content: path,
+          toolName,
+          diffPatch: patch,
+          status: "done",
+          ts: Date.now(),
+          agentId: agent.row.id,
+        });
+
+        agent.filePatches.set(path, patch);
+        this.noteTouchedPath(room, agent, path);
+        this.emitAgentDiff(room, agent);
+      },
+    );
+
+    agent.workerRunCleanups.push(unsubEvent, unsubDiff);
+
+    let dispatched: boolean;
+    try {
+      dispatched = this.workerRelay.dispatchToWorker(
+        room.id,
+        worker.workerId,
+        prompt,
+        room.row.repo_path,
+        agent.row.model_id || "auto",
+        agent.row.session_id,
+        agent.row.id,
+        agent.cwd,
+      );
+    } catch (err) {
+      // Multi-agent CLI upgrade error
+      const msg = err instanceof Error ? err.message : String(err);
+      finishWorkerRun("error", msg);
+      return true;
+    }
 
     if (!dispatched) {
       finishWorkerRun("error", "Failed to reach Steer worker");
-      // Handled — do not fall through to in-process cursor spawn.
       return true;
     }
 
     return true;
   }
 
-  /**
-   * Brief socket drop — keep the run active; agent may still be working on the CLI.
-   */
-  private handleWorkerSoftDisconnect(roomId: string): void {
+  // -----------------------------------------------------------------------
+  // Soft / hard disconnect — per agent
+  // -----------------------------------------------------------------------
+
+  private handleWorkerSoftDisconnect(roomId: string, agentId: string): void {
     const room = this.rooms.get(roomId);
-    if (!room || !room.workerRunActive) return;
+    if (!room) return;
+    const agent = room.agents.get(agentId);
+    if (!agent || !agent.workerRunActive) return;
 
     const msg =
       "Worker connection lost — agent is still running on your machine and will sync when `steer` reconnects.";
@@ -771,25 +1229,28 @@ export class RoomManager {
       content: msg,
       status: "done",
       ts: Date.now(),
+      agentId,
     };
     db.insertMessage(note);
     this.io.to(room.id).emit("chat-message", note);
-    // Stay "running" so the UI reflects an in-flight agent.
-    this.io.to(room.id).emit("agent-status", "running");
+    this.emitAgentStatus(room, agentId, "running");
   }
 
-  /** Grace period expired with no reconnect — unblock the room. */
-  private handleWorkerLost(roomId: string): void {
+  private handleWorkerLost(roomId: string, agentId: string): void {
     const room = this.rooms.get(roomId);
     if (!room) return;
-    if (!room.workerRunActive && room.workerRunCleanups.length === 0) return;
+    const agent = room.agents.get(agentId);
+    if (!agent) return;
+    if (!agent.workerRunActive && agent.workerRunCleanups.length === 0) return;
 
-    console.warn(`[RoomManager] Worker lost for room ${roomId} — clearing run`);
-    room.workerRunActive = false;
-    for (const c of room.workerRunCleanups) c();
-    room.workerRunCleanups = [];
-    this.workerRelay?.releaseWorker(roomId);
-    this.workerRelay?.clearRoomListeners(roomId);
+    console.warn(
+      `[RoomManager] Worker lost for room ${roomId} agent ${agentId} — clearing run`,
+    );
+    agent.workerRunActive = false;
+    for (const c of agent.workerRunCleanups) c();
+    agent.workerRunCleanups = [];
+    this.workerRelay?.releaseRun(roomId, agentId);
+    this.workerRelay?.clearRunListeners(roomId, agentId);
 
     const msg =
       "Worker did not reconnect in time. If the agent finished locally, send a new message to continue.";
@@ -800,25 +1261,31 @@ export class RoomManager {
       content: msg,
       status: "error",
       ts: Date.now(),
+      agentId,
     };
     db.insertMessage(errMsg);
     this.io.to(room.id).emit("chat-message", errMsg);
-    this.io.to(room.id).emit("agent-status", "error", msg);
-    this.io.to(room.id).emit("agent-status", "idle");
+    this.emitAgentStatus(room, agentId, "error", msg);
+    this.emitAgentStatus(room, agentId, "idle");
   }
 
-  private async runAgent(room: RoomState, prompt: string): Promise<void> {
-    // Try dispatching to a connected CLI worker first (production local rooms).
-    // On success, finishWorkerRun owns clearing workerRunActive.
-    if (this.tryDispatchToWorker(room, prompt)) return;
+  // -----------------------------------------------------------------------
+  // runAgent
+  // -----------------------------------------------------------------------
 
-    // CLI rooms whose repo isn't on this host must use the worker — don't
-    // spawn `cursor` here (ENOENT on Render / split deploy).
+  private async runAgent(
+    room: RoomState,
+    agent: AgentState,
+    prompt: string,
+  ): Promise<void> {
+    if (this.tryDispatchToWorker(room, agent, prompt)) return;
+
+    // CLI rooms whose repo isn't on this host must use the worker
     if (
       room.row.auth_mode === "cli" &&
       (!room.row.repo_path || !existsSync(room.row.repo_path))
     ) {
-      room.workerRunActive = false;
+      agent.workerRunActive = false;
       const msg = room.row.owner_id
         ? "No online Steer worker for this account. Run `steer start` on your machine."
         : "No online Steer worker. Run `steer start`, or recreate the session while signed in.";
@@ -829,25 +1296,25 @@ export class RoomManager {
         content: msg,
         status: "error",
         ts: Date.now(),
+        agentId: agent.row.id,
       };
       db.insertMessage(errMsg);
       this.io.to(room.id).emit("chat-message", errMsg);
-      this.io.to(room.id).emit("agent-status", "error", msg);
-      this.io.to(room.id).emit("agent-status", "idle");
+      this.emitAgentStatus(room, agent.row.id, "error", msg);
+      this.emitAgentStatus(room, agent.row.id, "idle");
       return;
     }
 
-    this.io.to(room.id).emit("agent-status", "running");
-    // Keep the claim from handleSteerMessage for the in-process run.
-    room.workerRunActive = true;
+    this.emitAgentStatus(room, agent.row.id, "running");
+    agent.workerRunActive = true;
 
     let assistantId: string | null = null;
     let assistantContent = "";
     let seenFullText = "";
     let bubbleBaseLen = 0;
     let afterTools = false;
-    room.toolMsgIds.clear();
-    room.toolPaths.clear();
+    agent.toolMsgIds.clear();
+    agent.toolPaths.clear();
 
     const attachFileDiff = async (
       msgId: string,
@@ -861,11 +1328,9 @@ export class RoomManager {
       const path = pathHint || extractToolPath(detail);
       if (!path) return;
 
-      // Small delay so the filesystem / git index settle after the write
       await new Promise((r) => setTimeout(r, 120));
       const patch = (await getFileDiff(room.row.repo_path, path)).trim();
       if (!patch) return;
-      // Skip re-emit if we already attached an identical synthetic patch.
       if (alreadyHasPatch) {
         // Still upgrade — git patch is usually richer than StrReplace spans.
       }
@@ -881,18 +1346,20 @@ export class RoomManager {
         diffPatch: patch,
         status: "done",
         ts: Date.now(),
+        agentId: agent.row.id,
       });
+
+      agent.filePatches.set(path, patch);
+      this.noteTouchedPath(room, agent, path);
+      this.emitAgentDiff(room, agent);
     };
 
     const closeAssistant = (status: ChatMessage["status"] = "done") => {
       if (!assistantId) return;
       db.updateMessageContent(assistantId, assistantContent, status);
-      this.io.to(room.id).emit(
-        "chat-delta",
-        assistantId,
-        assistantContent,
-        status,
-      );
+      this.io
+        .to(room.id)
+        .emit("chat-delta", assistantId, assistantContent, status);
       assistantId = null;
       assistantContent = "";
     };
@@ -932,6 +1399,7 @@ export class RoomManager {
           content: display,
           status,
           ts: Date.now(),
+          agentId: agent.row.id,
         };
         assistantId = msg.id;
         assistantContent = display;
@@ -945,14 +1413,15 @@ export class RoomManager {
         return;
       }
 
-      // Same bubble — prefer segment slice when the agent sends a cumulative buffer
       let display: string;
-      if (text.length >= bubbleBaseLen && (
-        text.startsWith(seenFullText.slice(0, bubbleBaseLen)) ||
-        seenFullText.startsWith(text.slice(0, bubbleBaseLen))
-      )) {
+      if (
+        text.length >= bubbleBaseLen &&
+        (text.startsWith(seenFullText.slice(0, bubbleBaseLen)) ||
+          seenFullText.startsWith(text.slice(0, bubbleBaseLen)))
+      ) {
         display = text.slice(bubbleBaseLen).replace(/^\n+/, "");
-        seenFullText = text.length >= seenFullText.length ? text : seenFullText;
+        seenFullText =
+          text.length >= seenFullText.length ? text : seenFullText;
       } else {
         display = text;
         seenFullText = text;
@@ -960,25 +1429,28 @@ export class RoomManager {
 
       assistantContent = display || assistantContent;
       db.updateMessageContent(assistantId, assistantContent, status);
-      this.io.to(room.id).emit(
-        "chat-delta",
-        assistantId,
-        assistantContent,
-        status,
-      );
+      this.io
+        .to(room.id)
+        .emit("chat-delta", assistantId, assistantContent, status);
     };
 
     try {
-      const agentId = room.agent.getAgentId();
-      if (agentId && agentId !== room.row.cursor_agent_id) {
-        db.setCursorAgentId(room.id, agentId);
-        room.row.cursor_agent_id = agentId;
+      const sdkId = agent.backend.getAgentId();
+      if (sdkId && sdkId !== agent.row.sdk_agent_id) {
+        db.setAgentSdkId(agent.row.id, sdkId);
+        agent.row.sdk_agent_id = sdkId;
+        // Also keep room-level field for default agent
+        const def = this.getDefaultAgent(room);
+        if (agent.row.id === def.row.id) {
+          db.setCursorAgentId(room.id, sdkId);
+          room.row.cursor_agent_id = sdkId;
+        }
       }
 
-      await room.agent.run(prompt, (event) => {
+      await agent.backend.run(prompt, (event) => {
         switch (event.kind) {
           case "session":
-            this.persistCursorSession(room, event.sessionId);
+            this.persistAgentSession(room, agent, event.sessionId);
             break;
           case "assistant_delta":
           case "assistant_final":
@@ -1002,21 +1474,25 @@ export class RoomManager {
               toolName: event.name,
               status: "streaming",
               ts: Date.now(),
+              agentId: agent.row.id,
             };
-            room.toolMsgIds.set(event.callId, msg.id);
-            if (path) room.toolPaths.set(event.callId, path);
+            agent.toolMsgIds.set(event.callId, msg.id);
+            if (path) agent.toolPaths.set(event.callId, path);
             db.insertMessage(msg);
             this.io.to(room.id).emit("chat-message", msg);
             break;
           }
           case "tool_done": {
-            const id = room.toolMsgIds.get(event.callId);
+            const id = agent.toolMsgIds.get(event.callId);
             const path =
               event.path ||
-              room.toolPaths.get(event.callId) ||
+              agent.toolPaths.get(event.callId) ||
               extractToolPath(event.detail) ||
               undefined;
-            if (path) room.toolPaths.set(event.callId, path);
+            if (path) {
+              agent.toolPaths.set(event.callId, path);
+              this.noteTouchedPath(room, agent, path);
+            }
             if (id) {
               const content = event.detail || path || "Done";
               const synthetic = event.diffPatch?.trim() || "";
@@ -1031,6 +1507,7 @@ export class RoomManager {
                   diffPatch: synthetic,
                   status: "done",
                   ts: Date.now(),
+                  agentId: agent.row.id,
                 });
               } else {
                 db.updateMessageContent(id, content, "done");
@@ -1042,17 +1519,28 @@ export class RoomManager {
                   toolName: event.name,
                   status: "done",
                   ts: Date.now(),
+                  agentId: agent.row.id,
                 });
               }
-              // Local: upgrade to a real git working-tree diff when possible.
-              void attachFileDiff(id, event.name, content, path, Boolean(synthetic));
+              void attachFileDiff(
+                id,
+                event.name,
+                content,
+                path,
+                Boolean(synthetic),
+              );
             }
             afterTools = true;
             break;
           }
           case "error":
             emitAssistant(event.message, "error");
-            this.io.to(room.id).emit("agent-status", "error", event.message);
+            this.emitAgentStatus(
+              room,
+              agent.row.id,
+              "error",
+              event.message,
+            );
             break;
           case "done": {
             emitAssistant(event.result, "done");
@@ -1072,6 +1560,13 @@ export class RoomManager {
               if (branch.prUrl) {
                 db.setPrUrl(room.id, branch.prUrl);
                 room.row.pr_url = branch.prUrl;
+                db.setAgentPr(
+                  agent.row.id,
+                  branch.prUrl,
+                  branch.branch || null,
+                );
+                agent.row.pr_url = branch.prUrl;
+                agent.row.branch = branch.branch || null;
               }
               this.io.to(room.id).emit("cloud-meta", room.cloudMeta);
             }
@@ -1080,37 +1575,71 @@ export class RoomManager {
         }
       });
 
-      const latestId = room.agent.getAgentId();
-      if (latestId && latestId !== room.row.cursor_agent_id) {
-        db.setCursorAgentId(room.id, latestId);
-        room.row.cursor_agent_id = latestId;
+      const latestId = agent.backend.getAgentId();
+      if (latestId && latestId !== agent.row.sdk_agent_id) {
+        db.setAgentSdkId(agent.row.id, latestId);
+        agent.row.sdk_agent_id = latestId;
+        const def = this.getDefaultAgent(room);
+        if (agent.row.id === def.row.id) {
+          db.setCursorAgentId(room.id, latestId);
+          room.row.cursor_agent_id = latestId;
+        }
       }
 
-      const sessionId = room.agent.getSessionId();
-      if (sessionId && sessionId !== room.row.cursor_session_id) {
-        this.persistCursorSession(room, sessionId);
+      const sessionId = agent.backend.getSessionId();
+      if (sessionId && sessionId !== agent.row.session_id) {
+        this.persistAgentSession(room, agent, sessionId);
       }
 
-      room.workerRunActive = false;
-      this.io.to(room.id).emit("agent-status", "idle");
+      agent.workerRunActive = false;
+      this.emitAgentStatus(room, agent.row.id, "idle");
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       emitAssistant(message, "error");
-      this.io.to(room.id).emit("agent-status", "error", message);
-      this.io.to(room.id).emit("agent-status", "idle");
+      this.emitAgentStatus(room, agent.row.id, "error", message);
+      this.emitAgentStatus(room, agent.row.id, "idle");
     } finally {
-      room.workerRunActive = false;
+      agent.workerRunActive = false;
     }
 
     db.updateRoomActivity(room.id);
   }
 
-  handleRequestDrive(socket: Socket): void {
+  // -----------------------------------------------------------------------
+  // Driver control — per agent
+  // -----------------------------------------------------------------------
+
+  handleRequestDrive(socket: Socket, agentId?: string): void {
     const room = this.getRoomForSocket(socket.id);
     if (!room) return;
     const p = room.participants.get(socket.id);
     if (!p) return;
 
+    if (agentId) {
+      const agent = room.agents.get(agentId);
+      if (!agent) return;
+
+      if (!agent.driverSocketId || agent.driverSocketId === socket.id) {
+        agent.driverSocketId = socket.id;
+        if (p.userId) db.setAgentDriver(agentId, p.userId);
+        this.broadcastPresence(room);
+        socket.emit("drive-granted", agentId);
+        return;
+      }
+
+      agent.pendingDriveRequest = { socketId: socket.id, name: p.name };
+      const driverSocket = this.io.sockets.sockets.get(agent.driverSocketId);
+      if (driverSocket) {
+        driverSocket.emit("drive-requested", {
+          socketId: socket.id,
+          name: p.name,
+          agentId,
+        });
+      }
+      return;
+    }
+
+    // Room-level fallback (single-agent compat)
     if (!room.driverSocketId || room.driverSocketId === socket.id) {
       room.driverSocketId = socket.id;
       this.broadcastPresence(room);
@@ -1128,25 +1657,79 @@ export class RoomManager {
     }
   }
 
-  handleGrantDrive(socket: Socket, toSocketId: string): void {
+  handleGrantDrive(
+    socket: Socket,
+    agentIdOrToSocketId: string,
+    toSocketId?: string,
+  ): void {
     const room = this.getRoomForSocket(socket.id);
     if (!room) return;
     const actor = room.participants.get(socket.id);
     const isOwner = Boolean(
       actor?.userId && room.row.owner_id === actor.userId,
     );
-    if (!isOwner && socket.id !== room.driverSocketId) return;
-    if (!room.participants.has(toSocketId)) return;
 
-    room.driverSocketId = toSocketId;
+    if (toSocketId !== undefined) {
+      // Per-agent: agentIdOrToSocketId is agentId
+      const agentId = agentIdOrToSocketId;
+      const agent = room.agents.get(agentId);
+      if (!agent) return;
+
+      if (!isOwner && socket.id !== agent.driverSocketId) return;
+      if (!room.participants.has(toSocketId)) return;
+
+      agent.driverSocketId = toSocketId;
+      agent.pendingDriveRequest = null;
+      const participant = room.participants.get(toSocketId);
+      if (participant?.userId) db.setAgentDriver(agentId, participant.userId);
+      this.broadcastPresence(room);
+      this.io.sockets.sockets.get(toSocketId)?.emit("drive-granted", agentId);
+      return;
+    }
+
+    // Room-level fallback
+    const targetSocketId = agentIdOrToSocketId;
+    if (!isOwner && socket.id !== room.driverSocketId) return;
+    if (!room.participants.has(targetSocketId)) return;
+
+    room.driverSocketId = targetSocketId;
     room.pendingDriveRequest = null;
     this.broadcastPresence(room);
-    this.io.sockets.sockets.get(toSocketId)?.emit("drive-granted");
+    this.io.sockets.sockets.get(targetSocketId)?.emit("drive-granted");
   }
 
-  handleReleaseDrive(socket: Socket): void {
+  handleReleaseDrive(socket: Socket, agentId?: string): void {
     const room = this.getRoomForSocket(socket.id);
     if (!room) return;
+
+    if (agentId) {
+      const agent = room.agents.get(agentId);
+      if (!agent) return;
+      if (socket.id !== agent.driverSocketId) return;
+
+      db.clearAgentDriver(agentId);
+
+      if (
+        agent.pendingDriveRequest &&
+        room.participants.has(agent.pendingDriveRequest.socketId)
+      ) {
+        agent.driverSocketId = agent.pendingDriveRequest.socketId;
+        const nextP = room.participants.get(agent.driverSocketId!);
+        if (nextP?.userId) db.setAgentDriver(agentId, nextP.userId);
+        this.io.sockets.sockets
+          .get(agent.driverSocketId!)
+          ?.emit("drive-granted", agentId);
+        agent.pendingDriveRequest = null;
+      } else {
+        agent.driverSocketId = null;
+      }
+
+      this.broadcastPresence(room);
+      this.io.to(room.id).emit("drive-released", agentId);
+      return;
+    }
+
+    // Room-level fallback
     if (socket.id !== room.driverSocketId) return;
 
     if (
@@ -1172,6 +1755,347 @@ export class RoomManager {
     this.io.to(room.id).emit("drive-released");
   }
 
+  // -----------------------------------------------------------------------
+  // addAgent / stopAgent
+  // -----------------------------------------------------------------------
+
+  addAgent(
+    roomId: string,
+    opts: {
+      backend?: AgentBackendKind;
+      label: string;
+      scopePath?: string;
+      modelId?: string;
+    },
+    actorUserId: string,
+  ): AgentInfo {
+    const room = this.rooms.get(roomId);
+    const row = db.getRoom(roomId);
+    if (!room || !row || row.status !== "active") {
+      throw new Error("Room not found");
+    }
+    if (row.owner_id && row.owner_id !== actorUserId) {
+      throw new Error("Only the host can add agents");
+    }
+
+    const backendKind: AgentBackendKind = opts.backend || "cursor";
+    if (backendKind === "claude-code") {
+      throw new Error("Claude Code backend is coming soon");
+    }
+
+    const modelId =
+      opts.modelId || row.model_id || (row.auth_mode === "cli" ? "auto" : DEFAULT_MODEL);
+
+    const agentRow = db.createAgent({
+      roomId,
+      backend: backendKind,
+      label: opts.label,
+      scopePath: opts.scopePath || null,
+      modelId,
+      createdBy: actorUserId,
+    });
+
+    const cwd = row.runtime === "local"
+      ? resolveAgentCwd(row.repo_path, agentRow.scope_path)
+      : "";
+
+    let backend: AgentBackend;
+    if (row.auth_mode === "cli") {
+      backend = new AgentRunner(cwd, null, modelId);
+    } else {
+      const apiKey = resolveApiKey(row);
+      backend = new SdkAgentSession({
+        runtime: row.runtime === "cloud" ? "cloud" : "local",
+        apiKey,
+        model: { id: modelId },
+        name: row.name,
+        localCwd: row.runtime === "local" ? cwd : undefined,
+        repoUrl: row.repo_url || undefined,
+        startingRef: row.starting_ref || undefined,
+        autoCreatePR: Boolean(row.auto_create_pr),
+      });
+    }
+
+    let diffWatcher: DiffWatcher | null = null;
+    let ownsDiffWatcher = false;
+    const canWatchLocally =
+      row.runtime === "local" &&
+      row.auth_mode !== "cli" &&
+      Boolean(cwd) &&
+      existsSync(cwd);
+
+    if (canWatchLocally) {
+      const poolResult = acquireDiffWatcher(
+        cwd,
+        roomId,
+        agentRow.id,
+        (patch) => {
+          this.io.to(roomId).emit("diff-update", patch, agentRow.id);
+        },
+      );
+      diffWatcher = poolResult.watcher;
+      ownsDiffWatcher = poolResult.isOwner;
+      room.cleanups.push(poolResult.unsub);
+    }
+
+    const agentState: AgentState = {
+      row: agentRow,
+      backend,
+      cwd,
+      diffWatcher,
+      ownsDiffWatcher,
+      toolMsgIds: new Map(),
+      toolPaths: new Map(),
+      workerRunActive: false,
+      workerRunCleanups: [],
+      driverSocketId: null,
+      pendingDriveRequest: null,
+      filePatches: new Map(),
+      touchedPaths: new Set(),
+    };
+
+    room.agents.set(agentRow.id, agentState);
+    this.broadcastAgents(room);
+    this.broadcastConflicts(room);
+
+    return this.toAgentInfo(agentRow);
+  }
+
+  stopAgent(roomId: string, agentId: string, actorUserId?: string): void {
+    const room = this.rooms.get(roomId);
+    const row = db.getRoom(roomId);
+    if (!room || !row || row.status !== "active") {
+      throw new Error("Room not found");
+    }
+    if (actorUserId && row.owner_id && row.owner_id !== actorUserId) {
+      throw new Error("Only the host can stop agents");
+    }
+
+    const agent = room.agents.get(agentId);
+    if (!agent) throw new Error("Agent not found");
+
+    // Abort running work
+    if (agent.workerRunActive) {
+      this.workerRelay?.detachRun(roomId, agentId);
+      for (const c of agent.workerRunCleanups) c();
+      agent.workerRunCleanups = [];
+    }
+    agent.backend.abort();
+    agent.workerRunActive = false;
+
+    void agent.backend.dispose();
+
+    db.updateAgentStatus(agentId, "stopped");
+    agent.row.status = "stopped";
+
+    this.emitAgentStatus(room, agentId, "idle");
+    this.broadcastAgents(room);
+    this.broadcastConflicts(room);
+  }
+
+  // -----------------------------------------------------------------------
+  // abortRun — per agent (compat: default agent if no agentId)
+  // -----------------------------------------------------------------------
+
+  abortRun(id: string, agentId?: string, actorUserId?: string): void {
+    const row = db.getRoom(id);
+    if (!row || row.status !== "active") {
+      throw new Error("Room not found");
+    }
+    if (actorUserId && !this.userCanAccessRoom(id, actorUserId)) {
+      throw new Error("Not allowed");
+    }
+
+    const room = this.rooms.get(id);
+    if (!room) {
+      throw new Error("Room is not loaded — reconnect and try again");
+    }
+
+    const resolvedAgentId = agentId || this.getDefaultAgent(room).row.id;
+    const agent = room.agents.get(resolvedAgentId);
+    if (!agent) throw new Error("Agent not found");
+
+    const wasBusy = agent.workerRunActive || agent.backend.isBusy();
+    if (!wasBusy) return;
+
+    if (agent.workerRunActive) {
+      this.workerRelay?.abortRun(id, resolvedAgentId);
+      for (const c of agent.workerRunCleanups) c();
+      agent.workerRunCleanups = [];
+      this.workerRelay?.releaseRun(id, resolvedAgentId);
+      this.workerRelay?.clearRunListeners(id, resolvedAgentId);
+    }
+
+    agent.backend.abort();
+    agent.workerRunActive = false;
+
+    const note: ChatMessage = {
+      id: nanoid(12),
+      roomId: room.id,
+      role: "assistant",
+      content: "Run aborted.",
+      status: "done",
+      ts: Date.now(),
+      agentId: resolvedAgentId,
+    };
+    db.insertMessage(note);
+    this.io.to(room.id).emit("chat-message", note);
+    this.emitAgentStatus(room, resolvedAgentId, "idle");
+    db.updateRoomActivity(room.id);
+  }
+
+  // -----------------------------------------------------------------------
+  // setModel / setCursorSession — per agent (compat: default if omitted)
+  // -----------------------------------------------------------------------
+
+  setModel(
+    id: string,
+    modelIdRaw: string,
+    actorUserId?: string,
+    agentId?: string,
+  ): RoomInfo {
+    const modelId = modelIdRaw.trim();
+    if (!modelId) throw new Error("modelId is required");
+
+    const room = this.rooms.get(id);
+    const row = db.getRoom(id);
+    if (!row || row.status !== "active") throw new Error("Room not found");
+
+    if (actorUserId && row.owner_id && row.owner_id !== actorUserId) {
+      throw new Error("Only the host can change the model");
+    }
+
+    const resolvedAgentId = agentId
+      ? agentId
+      : room
+        ? this.getDefaultAgent(room).row.id
+        : undefined;
+
+    if (room && resolvedAgentId) {
+      const agent = room.agents.get(resolvedAgentId);
+      if (agent) {
+        if (agent.workerRunActive || agent.backend.isBusy()) {
+          throw new Error(
+            "Wait for the agent to finish before changing model",
+          );
+        }
+        db.setAgentModel(agent.row.id, modelId);
+        agent.row.model_id = modelId;
+        agent.backend.setModel(modelId);
+      }
+    }
+
+    // Keep room-level model_id for compat
+    db.setModelId(id, modelId);
+    row.model_id = modelId;
+    if (room) {
+      room.row.model_id = modelId;
+      this.io.to(id).emit("model-updated", modelId, resolvedAgentId);
+      this.broadcastAgents(room);
+    }
+
+    return this.toRoomInfo(row, room?.participants.size || 0);
+  }
+
+  setCursorSession(
+    id: string,
+    sessionIdRaw: string | null | undefined,
+    actorUserId?: string,
+    agentId?: string,
+  ): RoomInfo {
+    const room = this.rooms.get(id);
+    const row = db.getRoom(id);
+    if (!row || row.status !== "active") throw new Error("Room not found");
+
+    if (actorUserId && row.owner_id && row.owner_id !== actorUserId) {
+      throw new Error("Only the host can change the Cursor chat");
+    }
+
+    const next = sessionIdRaw?.trim() || null;
+
+    if (room) {
+      const resolvedAgentId = agentId || this.getDefaultAgent(room).row.id;
+      const agent = room.agents.get(resolvedAgentId);
+
+      if (agent) {
+        if (agent.workerRunActive || agent.backend.isBusy()) {
+          throw new Error(
+            "Wait for the agent to finish before switching chats",
+          );
+        }
+        this.persistAgentSession(room, agent, next);
+        if (agent.backend instanceof AgentRunner) {
+          agent.backend.setSessionId(next);
+        }
+      }
+    } else {
+      if (next) db.setCursorSessionId(id, next);
+      else db.setCursorSessionId(id, "");
+      row.cursor_session_id = next;
+      this.io.to(id).emit("cursor-session-updated", next);
+    }
+
+    return this.toRoomInfo(row, room?.participants.size || 0);
+  }
+
+  // -----------------------------------------------------------------------
+  // stopRoom
+  // -----------------------------------------------------------------------
+
+  stopRoom(id: string, actorUserId?: string): void {
+    const row = db.getRoom(id);
+    if (!row) return;
+    if (actorUserId && row.owner_id && row.owner_id !== actorUserId) {
+      throw new Error("Only the host can stop the session");
+    }
+    const room = this.rooms.get(id);
+    if (room) {
+      // Stop all agents
+      for (const [agentId, agent] of room.agents) {
+        for (const c of agent.workerRunCleanups) c();
+        agent.workerRunCleanups = [];
+        agent.workerRunActive = false;
+        this.workerRelay?.detachRun(id, agentId);
+        void agent.backend.dispose();
+      }
+
+      for (const unsub of room.cleanups) unsub();
+
+      for (const [sid] of [...room.participants.entries()]) {
+        const s = this.io.sockets.sockets.get(sid);
+        this.socketRooms.delete(sid);
+        if (s) {
+          s.emit("kicked", "Session stopped by the host");
+          s.leave(id);
+          s.disconnect(true);
+        }
+      }
+      room.participants.clear();
+      room.agents.clear();
+      this.rooms.delete(id);
+    } else {
+      this.workerRelay?.detachRoom(id);
+    }
+    db.updateRoomStatus(id, "stopped");
+  }
+
+  // -----------------------------------------------------------------------
+  // setAgentCursorSession (alias for HTTP layer)
+  // -----------------------------------------------------------------------
+
+  setAgentCursorSession(
+    roomId: string,
+    sessionId: string | null | undefined,
+    actorUserId?: string,
+    agentId?: string,
+  ): RoomInfo {
+    return this.setCursorSession(roomId, sessionId, actorUserId, agentId);
+  }
+
+  // -----------------------------------------------------------------------
+  // Room query methods
+  // -----------------------------------------------------------------------
+
   listRooms(): RoomInfo[] {
     return db.listRooms().map((row) => {
       const room = this.rooms.get(row.id);
@@ -1193,10 +2117,6 @@ export class RoomManager {
     return db.isRoomMember(roomId, userId);
   }
 
-  /**
-   * Anyone with the room link can join once signed in (capability URL).
-   * Adds membership if missing; room IDs are unguessable nanoids.
-   */
   joinAsMember(roomId: string, userId: string): RoomInfo {
     const row = db.getRoom(roomId);
     if (!row || row.status !== "active") {
@@ -1205,7 +2125,10 @@ export class RoomManager {
     if (row.owner_id !== userId && !db.isRoomMember(roomId, userId)) {
       db.addRoomMember(roomId, userId, "member");
     }
-    return this.toRoomInfo(row, this.rooms.get(roomId)?.participants.size || 0);
+    return this.toRoomInfo(
+      row,
+      this.rooms.get(roomId)?.participants.size || 0,
+    );
   }
 
   getRoomInfo(id: string): RoomInfo | null {
@@ -1252,156 +2175,11 @@ export class RoomManager {
     return listModelsForKey(apiKey);
   }
 
-  setModel(id: string, modelIdRaw: string, actorUserId?: string): RoomInfo {
-    const modelId = modelIdRaw.trim();
-    if (!modelId) throw new Error("modelId is required");
+  // -----------------------------------------------------------------------
+  // kickUserSockets
+  // -----------------------------------------------------------------------
 
-    const room = this.rooms.get(id);
-    const row = db.getRoom(id);
-    if (!row || row.status !== "active") throw new Error("Room not found");
-
-    if (actorUserId && row.owner_id && row.owner_id !== actorUserId) {
-      throw new Error("Only the host can change the model");
-    }
-
-    if (room?.agent.isBusy() || room?.workerRunActive) {
-      throw new Error("Wait for the agent to finish before changing model");
-    }
-
-    db.setModelId(id, modelId);
-    row.model_id = modelId;
-    if (room) {
-      room.row.model_id = modelId;
-      room.agent.setModel(modelId);
-      this.io.to(id).emit("model-updated", modelId);
-    }
-
-    return this.toRoomInfo(row, room?.participants.size || 0);
-  }
-
-  setCursorSession(
-    id: string,
-    sessionIdRaw: string | null | undefined,
-    actorUserId?: string,
-  ): RoomInfo {
-    const room = this.rooms.get(id);
-    const row = db.getRoom(id);
-    if (!row || row.status !== "active") throw new Error("Room not found");
-
-    if (actorUserId && row.owner_id && row.owner_id !== actorUserId) {
-      throw new Error("Only the host can change the Cursor chat");
-    }
-
-    if (room?.agent.isBusy() || room?.workerRunActive) {
-      throw new Error("Wait for the agent to finish before switching chats");
-    }
-
-    const next = sessionIdRaw?.trim() || null;
-    if (room) {
-      this.persistCursorSession(room, next);
-      if (room.agent instanceof AgentRunner) {
-        room.agent.setSessionId(next);
-      }
-    } else {
-      if (next) db.setCursorSessionId(id, next);
-      else db.setCursorSessionId(id, "");
-      row.cursor_session_id = next;
-      this.io.to(id).emit("cursor-session-updated", next);
-    }
-
-    return this.toRoomInfo(row, room?.participants.size || 0);
-  }
-
-  stopRoom(id: string, actorUserId?: string): void {
-    const row = db.getRoom(id);
-    if (!row) return;
-    if (actorUserId && row.owner_id && row.owner_id !== actorUserId) {
-      throw new Error("Only the host can stop the session");
-    }
-    const room = this.rooms.get(id);
-    if (room) {
-      // Abort CLI worker + clear listeners before tearing down in-memory state.
-      for (const c of room.workerRunCleanups) c();
-      room.workerRunCleanups = [];
-      room.workerRunActive = false;
-      this.workerRelay?.detachRoom(id);
-
-      for (const unsub of room.cleanups) unsub();
-      void room.agent.dispose();
-
-      // Kick every connected client so sockets can't keep steering a ghost room.
-      for (const [sid] of [...room.participants.entries()]) {
-        const s = this.io.sockets.sockets.get(sid);
-        this.socketRooms.delete(sid);
-        if (s) {
-          s.emit("kicked", "Session stopped by the host");
-          s.leave(id);
-          s.disconnect(true);
-        }
-      }
-      room.participants.clear();
-      this.rooms.delete(id);
-    } else {
-      this.workerRelay?.detachRoom(id);
-    }
-    db.updateRoomStatus(id, "stopped");
-  }
-
-  /**
-   * Abort the in-flight agent run without stopping the room.
-   * Any room member may abort (same trust as steering).
-   */
-  abortRun(id: string, actorUserId?: string): void {
-    const row = db.getRoom(id);
-    if (!row || row.status !== "active") {
-      throw new Error("Room not found");
-    }
-    if (actorUserId && !this.userCanAccessRoom(id, actorUserId)) {
-      throw new Error("Not allowed");
-    }
-
-    const room = this.rooms.get(id);
-    if (!room) {
-      throw new Error("Room is not loaded — reconnect and try again");
-    }
-
-    const wasBusy = room.workerRunActive || room.agent.isBusy();
-    if (!wasBusy) return;
-
-    if (room.workerRunActive) {
-      this.workerRelay?.abortWorker(id);
-      for (const c of room.workerRunCleanups) c();
-      room.workerRunCleanups = [];
-      this.workerRelay?.releaseWorker(id);
-      this.workerRelay?.clearRoomListeners(id);
-    }
-
-    room.agent.abort();
-    room.workerRunActive = false;
-
-    const note: ChatMessage = {
-      id: nanoid(12),
-      roomId: room.id,
-      role: "assistant",
-      content: "Run aborted.",
-      status: "done",
-      ts: Date.now(),
-    };
-    db.insertMessage(note);
-    this.io.to(room.id).emit("chat-message", note);
-    this.io.to(room.id).emit("agent-status", "idle");
-    db.updateRoomActivity(room.id);
-  }
-
-  /**
-   * Revoke membership and disconnect every live socket for a user in a room.
-   * Used by HTTP leave / remove-member so access checks on reconnect stick.
-   */
-  kickUserSockets(
-    roomId: string,
-    userId: string,
-    reason: string,
-  ): void {
+  kickUserSockets(roomId: string, userId: string, reason: string): void {
     const room = this.rooms.get(roomId);
     if (!room) return;
 
@@ -1413,7 +2191,6 @@ export class RoomManager {
         this.leaveRoom(s);
         s.disconnect(true);
       } else {
-        // Stale participant entry without a live socket.
         room.participants.delete(sid);
         this.socketRooms.delete(sid);
       }
@@ -1421,13 +2198,54 @@ export class RoomManager {
     this.broadcastPresence(room);
   }
 
+  // -----------------------------------------------------------------------
+  // shutdown
+  // -----------------------------------------------------------------------
+
   shutdown(): void {
     for (const [, room] of this.rooms) {
       for (const unsub of room.cleanups) unsub();
-      void room.agent.dispose();
+      for (const [, agent] of room.agents) {
+        void agent.backend.dispose();
+      }
     }
     this.rooms.clear();
   }
+
+  // -----------------------------------------------------------------------
+  // Presence
+  // -----------------------------------------------------------------------
+
+  private broadcastPresence(room: RoomState): void {
+    const list: Participant[] = [];
+    for (const [socketId, p] of room.participants) {
+      const drivingAgentIds = [...room.agents]
+        .filter(([, a]) => a.driverSocketId === socketId)
+        .map(([id]) => id);
+
+      const isDriver =
+        drivingAgentIds.length > 0 ||
+        (room.agents.size <= 1 && socketId === room.driverSocketId);
+
+      list.push({
+        socketId,
+        name: p.name,
+        color: p.color,
+        userId: p.userId,
+        isOwner: Boolean(
+          room.row.owner_id && p.userId === room.row.owner_id,
+        ),
+        isDriver,
+        drivingAgentIds:
+          drivingAgentIds.length > 0 ? drivingAgentIds : undefined,
+      });
+    }
+    this.io.to(room.id).emit("presence", list);
+  }
+
+  // -----------------------------------------------------------------------
+  // Private helpers
+  // -----------------------------------------------------------------------
 
   private getRoomForSocket(socketId: string): RoomState | undefined {
     const roomId = this.socketRooms.get(socketId);
@@ -1435,31 +2253,12 @@ export class RoomManager {
     return this.rooms.get(roomId);
   }
 
-  private persistCursorSession(room: RoomState, sessionId: string | null): void {
-    const next = sessionId?.trim() || null;
-    if (next === room.row.cursor_session_id) return;
-    if (next) db.setCursorSessionId(room.id, next);
-    else db.setCursorSessionId(room.id, "");
-    room.row.cursor_session_id = next;
-    this.io.to(room.id).emit("cursor-session-updated", next);
-  }
-
-  private broadcastPresence(room: RoomState): void {
-    const list: Participant[] = [];
-    for (const [socketId, p] of room.participants) {
-      list.push({
-        socketId,
-        name: p.name,
-        color: p.color,
-        userId: p.userId,
-        isOwner: Boolean(room.row.owner_id && p.userId === room.row.owner_id),
-        isDriver: socketId === room.driverSocketId,
-      });
-    }
-    this.io.to(room.id).emit("presence", list);
-  }
-
   private toRoomInfo(row: db.RoomRow, participantCount: number): RoomInfo {
+    const room = this.rooms.get(row.id);
+    const agentInfos: AgentInfo[] | undefined = room
+      ? [...room.agents.values()].map((a) => this.toAgentInfo(a.row))
+      : undefined;
+
     return {
       id: row.id,
       name: row.name,
@@ -1478,6 +2277,7 @@ export class RoomManager {
       keyHint: row.key_hint || undefined,
       ownerId: row.owner_id || undefined,
       cursorSessionId: row.cursor_session_id || undefined,
+      agents: agentInfos,
     };
   }
 }

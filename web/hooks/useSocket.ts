@@ -1,9 +1,11 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { useAuth as useClerkAuth } from "@clerk/nextjs";
 import { getSocket, disconnectSocket, type AppSocket } from "../lib/socket";
 import type {
+  AgentConflict,
+  AgentInfo,
   AgentRunStatus,
   ChatMessage,
   CloudMeta,
@@ -17,19 +19,50 @@ interface UseSocketReturn {
   amDriver: boolean;
   mySocketId: string | null;
   messages: ChatMessage[];
+  agents: AgentInfo[];
+  statusByAgent: Record<string, AgentRunStatus>;
+  errorByAgent: Record<string, string>;
+  diffByAgent: Record<string, string>;
+  conflicts: AgentConflict[];
+  /** Legacy single-agent status (default / selected agent). */
   agentStatus: AgentRunStatus;
   agentError: string;
-  pendingRequest: { socketId: string; name: string } | null;
+  pendingRequest: {
+    socketId: string;
+    name: string;
+    agentId?: string;
+  } | null;
   lastDiff: string;
   cloudMeta: CloudMeta | null;
   modelId: string | null;
-  sendSteer: (text: string) => void;
-  requestDrive: () => void;
-  releaseDrive: () => void;
-  grantDrive: (toSocketId: string) => void;
+  sendSteer: (text: string, agentId?: string) => void;
+  requestDrive: (agentId?: string) => void;
+  releaseDrive: (agentId?: string) => void;
+  grantDrive: (toSocketId: string, agentId?: string) => void;
   leaveRoom: () => void;
   removeMember: (userId: string) => void;
   dismissDriveRequest: () => void;
+  drivingAgentIds: string[];
+}
+
+function parseAgentStatus(
+  statusOrAgentId: string,
+  detailOrStatus?: string,
+  detail?: string,
+): { agentId: string | null; status: AgentRunStatus; detail?: string } {
+  if (
+    statusOrAgentId === "idle" ||
+    statusOrAgentId === "running" ||
+    statusOrAgentId === "error"
+  ) {
+    return {
+      agentId: null,
+      status: statusOrAgentId,
+      detail: detailOrStatus,
+    };
+  }
+  const status = (detailOrStatus || "idle") as AgentRunStatus;
+  return { agentId: statusOrAgentId, status, detail };
 }
 
 export function useSocket(roomId: string, name: string): UseSocketReturn {
@@ -42,20 +75,37 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
   const [participants, setParticipants] = useState<Participant[]>([]);
   const [mySocketId, setMySocketId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [agents, setAgents] = useState<AgentInfo[]>([]);
+  const [statusByAgent, setStatusByAgent] = useState<
+    Record<string, AgentRunStatus>
+  >({});
+  const [errorByAgent, setErrorByAgent] = useState<Record<string, string>>(
+    {},
+  );
+  const [diffByAgent, setDiffByAgent] = useState<Record<string, string>>({});
+  const [conflicts, setConflicts] = useState<AgentConflict[]>([]);
   const [agentStatus, setAgentStatus] = useState<AgentRunStatus>("idle");
   const [agentError, setAgentError] = useState("");
   const [pendingRequest, setPendingRequest] = useState<{
     socketId: string;
     name: string;
+    agentId?: string;
   } | null>(null);
   const [lastDiff, setLastDiff] = useState("");
   const [cloudMeta, setCloudMeta] = useState<CloudMeta | null>(null);
   const [modelId, setModelId] = useState<string | null>(null);
   const socketRef = useRef<AppSocket | null>(null);
 
+  const drivingAgentIds = useMemo(() => {
+    if (!mySocketId) return [];
+    const me = participants.find((p) => p.socketId === mySocketId);
+    return me?.drivingAgentIds || (me?.isDriver ? agents.map((a) => a.id) : []);
+  }, [participants, mySocketId, agents]);
+
   const amDriver =
     mySocketId != null &&
-    participants.some((p) => p.socketId === mySocketId && p.isDriver);
+    (drivingAgentIds.length > 0 ||
+      participants.some((p) => p.socketId === mySocketId && p.isDriver));
 
   useEffect(() => {
     if (!roomId || !name || !isSignedIn) return;
@@ -72,8 +122,6 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
     const onDisconnect = () => setConnected(false);
     const onPresence = (p: Participant[]) => setParticipants(p);
     const onChatHistory = (history: ChatMessage[]) => {
-      // Only replace from server history once per connection lifecycle —
-      // avoids wiping in-flight UI on spurious reconnects if history is empty.
       if (gotHistory && history.length === 0) return;
       gotHistory = true;
       setMessages(history);
@@ -102,20 +150,71 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
         ),
       );
     };
-    const onAgentStatus = (status: AgentRunStatus, detail?: string) => {
-      setAgentStatus(status);
-      if (status === "error" && detail) {
-        setAgentError(detail);
-      } else if (status === "running" || status === "idle") {
-        // Keep last error visible until the next successful run starts.
-        if (status === "running") setAgentError("");
+    const onAgentStatus = (
+      statusOrAgentId: string,
+      detailOrStatus?: string,
+      detail?: string,
+    ) => {
+      const parsed = parseAgentStatus(
+        statusOrAgentId,
+        detailOrStatus,
+        detail,
+      );
+      if (parsed.agentId) {
+        setStatusByAgent((prev) => ({
+          ...prev,
+          [parsed.agentId!]: parsed.status,
+        }));
+        setAgents((prev) =>
+          prev.map((a) =>
+            a.id === parsed.agentId
+              ? {
+                  ...a,
+                  status:
+                    parsed.status === "running"
+                      ? "running"
+                      : parsed.status === "error"
+                        ? "error"
+                        : "idle",
+                }
+              : a,
+          ),
+        );
+        if (parsed.status === "error" && parsed.detail) {
+          setErrorByAgent((prev) => ({
+            ...prev,
+            [parsed.agentId!]: parsed.detail!,
+          }));
+        } else if (parsed.status === "running") {
+          setErrorByAgent((prev) => {
+            const next = { ...prev };
+            delete next[parsed.agentId!];
+            return next;
+          });
+        }
+      }
+      setAgentStatus(parsed.status);
+      if (parsed.status === "error" && parsed.detail) {
+        setAgentError(parsed.detail);
+      } else if (parsed.status === "running") {
+        setAgentError("");
       }
     };
-    const onDriveRequested = (payload: { socketId: string; name: string }) => {
-      // Always surface a new request — dismissing one must not block later ones.
+    const onAgents = (list: AgentInfo[]) => setAgents(list);
+    const onConflicts = (c: AgentConflict[]) => setConflicts(c);
+    const onDriveRequested = (payload: {
+      socketId: string;
+      name: string;
+      agentId?: string;
+    }) => {
       setPendingRequest(payload);
     };
-    const onDiffUpdate = (patch: string) => setLastDiff(patch);
+    const onDiffUpdate = (patch: string, agentId?: string) => {
+      if (agentId) {
+        setDiffByAgent((prev) => ({ ...prev, [agentId]: patch }));
+      }
+      setLastDiff(patch);
+    };
     const onCloudMeta = (meta: CloudMeta) => setCloudMeta(meta);
     const onModelUpdated = (id: string) => setModelId(id);
     const onError = (message: string) => {
@@ -127,7 +226,6 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
     };
 
     void (async () => {
-      // Ensure a token is available before the first connect attempt.
       let token: string | null = null;
       for (let i = 0; i < 10 && !cancelled; i++) {
         try {
@@ -154,6 +252,8 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
       s.on("chat-message", onChatMessage);
       s.on("chat-delta", onChatDelta);
       s.on("agent-status", onAgentStatus);
+      s.on("agents", onAgents);
+      s.on("agent-conflicts", onConflicts);
       s.on("drive-requested", onDriveRequested);
       s.on("diff-update", onDiffUpdate);
       s.on("cloud-meta", onCloudMeta);
@@ -172,6 +272,8 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
         attached.off("chat-message", onChatMessage);
         attached.off("chat-delta", onChatDelta);
         attached.off("agent-status", onAgentStatus);
+        attached.off("agents", onAgents);
+        attached.off("agent-conflicts", onConflicts);
         attached.off("drive-requested", onDriveRequested);
         attached.off("diff-update", onDiffUpdate);
         attached.off("cloud-meta", onCloudMeta);
@@ -183,39 +285,48 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
       socketRef.current = null;
       setSocket(null);
       setConnected(false);
-      // Keep messages across effect re-runs for same room; clear only via
-      // room/name change by resetting when deps change (below state is
-      // component-local and remounts LiveRoom only when name/room changes).
       setParticipants([]);
       setLastDiff("");
       setCloudMeta(null);
       setMySocketId(null);
       setAgentStatus("idle");
       setAgentError("");
+      setAgents([]);
+      setStatusByAgent({});
+      setErrorByAgent({});
+      setDiffByAgent({});
+      setConflicts([]);
     };
   }, [roomId, name, isSignedIn]);
 
-  // Clear chat when switching rooms (not on token refreshes).
   useEffect(() => {
     setMessages([]);
     setModelId(null);
     setPendingRequest(null);
   }, [roomId]);
 
-  const sendSteer = useCallback((text: string) => {
-    socketRef.current?.emit("steer-message", text);
+  const sendSteer = useCallback((text: string, agentId?: string) => {
+    if (agentId) {
+      socketRef.current?.emit("steer-message", agentId, text);
+    } else {
+      socketRef.current?.emit("steer-message", text);
+    }
   }, []);
 
-  const requestDrive = useCallback(() => {
-    socketRef.current?.emit("request-drive");
+  const requestDrive = useCallback((agentId?: string) => {
+    socketRef.current?.emit("request-drive", agentId);
   }, []);
 
-  const releaseDrive = useCallback(() => {
-    socketRef.current?.emit("release-drive");
+  const releaseDrive = useCallback((agentId?: string) => {
+    socketRef.current?.emit("release-drive", agentId);
   }, []);
 
-  const grantDrive = useCallback((toSocketId: string) => {
-    socketRef.current?.emit("grant-drive", toSocketId);
+  const grantDrive = useCallback((toSocketId: string, agentId?: string) => {
+    if (agentId) {
+      socketRef.current?.emit("grant-drive", agentId, toSocketId);
+    } else {
+      socketRef.current?.emit("grant-drive", toSocketId);
+    }
     setPendingRequest(null);
   }, []);
 
@@ -238,6 +349,11 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
     amDriver,
     mySocketId,
     messages,
+    agents,
+    statusByAgent,
+    errorByAgent,
+    diffByAgent,
+    conflicts,
     agentStatus,
     agentError,
     pendingRequest,
@@ -251,5 +367,6 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
     dismissDriveRequest,
     leaveRoom,
     removeMember,
+    drivingAgentIds,
   };
 }

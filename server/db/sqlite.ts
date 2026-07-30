@@ -1,12 +1,19 @@
 import Database from "better-sqlite3";
 import { mkdirSync } from "fs";
 import { dirname, resolve } from "path";
+import { randomBytes } from "crypto";
 import type {
+  AgentBackendKind,
   AgentRuntime,
+  AgentStatus,
   AuthMode,
   ChatMessage,
   SteerLogEntry,
 } from "../../shared/events.js";
+
+function newId(prefix = ""): string {
+  return `${prefix}${randomBytes(8).toString("hex")}`;
+}
 
 function resolveDbPath(): string {
   const configured =
@@ -140,8 +147,32 @@ db.exec(`
     updated_at INTEGER NOT NULL
   );
 
+  CREATE TABLE IF NOT EXISTS agents (
+    id TEXT PRIMARY KEY,
+    room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    backend TEXT NOT NULL DEFAULT 'cursor',
+    label TEXT NOT NULL,
+    scope_path TEXT,
+    session_id TEXT,
+    sdk_agent_id TEXT,
+    model_id TEXT NOT NULL DEFAULT 'auto',
+    status TEXT NOT NULL DEFAULT 'idle',
+    branch TEXT,
+    pr_url TEXT,
+    created_by TEXT,
+    created_at INTEGER NOT NULL,
+    sort_order INTEGER NOT NULL DEFAULT 0
+  );
+
+  CREATE TABLE IF NOT EXISTS agent_drivers (
+    agent_id TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL,
+    granted_at INTEGER NOT NULL
+  );
+
   CREATE INDEX IF NOT EXISTS idx_steer_room_ts ON steer_messages(room_id, ts);
   CREATE INDEX IF NOT EXISTS idx_messages_room_ts ON messages(room_id, ts);
+  CREATE INDEX IF NOT EXISTS idx_agents_room ON agents(room_id, sort_order);
 `);
 
 const migrations = [
@@ -159,6 +190,7 @@ const migrations = [
   `ALTER TABLE messages ADD COLUMN diff_patch TEXT`,
   `ALTER TABLE rooms ADD COLUMN owner_id TEXT`,
   `ALTER TABLE invite_links ADD COLUMN expires_at INTEGER`,
+  `ALTER TABLE messages ADD COLUMN agent_id TEXT`,
 ];
 
 for (const sql of migrations) {
@@ -214,8 +246,8 @@ const stmts = {
     ORDER BY ts DESC LIMIT ?
   `),
   insertMessage: db.prepare(`
-    INSERT INTO messages (id, room_id, role, content, sender_name, sender_color, tool_name, diff_patch, status, ts)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO messages (id, room_id, role, content, sender_name, sender_color, tool_name, diff_patch, status, ts, agent_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `),
   updateMessageContent: db.prepare(
     `UPDATE messages SET content = ?, status = ? WHERE id = ?`,
@@ -235,6 +267,40 @@ const stmts = {
     ON CONFLICT(key) DO UPDATE SET value = excluded.value
   `),
   deleteSetting: db.prepare(`DELETE FROM settings WHERE key = ?`),
+
+  insertAgent: db.prepare(`
+    INSERT INTO agents (
+      id, room_id, backend, label, scope_path, session_id, sdk_agent_id,
+      model_id, status, branch, pr_url, created_by, created_at, sort_order
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `),
+  getAgent: db.prepare(`SELECT * FROM agents WHERE id = ?`),
+  listAgents: db.prepare(`
+    SELECT * FROM agents WHERE room_id = ? ORDER BY sort_order ASC, created_at ASC
+  `),
+  updateAgentStatus: db.prepare(`UPDATE agents SET status = ? WHERE id = ?`),
+  updateAgentSessionId: db.prepare(`UPDATE agents SET session_id = ? WHERE id = ?`),
+  updateAgentSdkId: db.prepare(`UPDATE agents SET sdk_agent_id = ? WHERE id = ?`),
+  updateAgentModel: db.prepare(`UPDATE agents SET model_id = ? WHERE id = ?`),
+  updateAgentLabel: db.prepare(`UPDATE agents SET label = ? WHERE id = ?`),
+  updateAgentScope: db.prepare(`UPDATE agents SET scope_path = ? WHERE id = ?`),
+  updateAgentPr: db.prepare(`UPDATE agents SET pr_url = ?, branch = ? WHERE id = ?`),
+  deleteAgent: db.prepare(`DELETE FROM agents WHERE id = ?`),
+  setAgentDriver: db.prepare(`
+    INSERT INTO agent_drivers (agent_id, user_id, granted_at) VALUES (?, ?, ?)
+    ON CONFLICT(agent_id) DO UPDATE SET user_id = excluded.user_id, granted_at = excluded.granted_at
+  `),
+  clearAgentDriver: db.prepare(`DELETE FROM agent_drivers WHERE agent_id = ?`),
+  getAgentDrivers: db.prepare(`
+    SELECT ad.agent_id, ad.user_id, ad.granted_at
+    FROM agent_drivers ad
+    JOIN agents a ON a.id = ad.agent_id
+    WHERE a.room_id = ?
+  `),
+  backfillMessagesAgent: db.prepare(
+    `UPDATE messages SET agent_id = ? WHERE room_id = ? AND agent_id IS NULL`,
+  ),
+  countAgents: db.prepare(`SELECT COUNT(*) AS c FROM agents WHERE room_id = ?`),
 
   // Auth
   insertUser: db.prepare(`
@@ -375,6 +441,7 @@ function rowToMessage(r: {
   diff_patch?: string | null;
   status: string;
   ts: number;
+  agent_id?: string | null;
 }): ChatMessage {
   return {
     id: r.id,
@@ -387,7 +454,41 @@ function rowToMessage(r: {
     diffPatch: r.diff_patch || undefined,
     status: r.status as ChatMessage["status"],
     ts: r.ts,
+    agentId: r.agent_id || undefined,
   };
+}
+
+export interface AgentRow {
+  id: string;
+  room_id: string;
+  backend: AgentBackendKind;
+  label: string;
+  scope_path: string | null;
+  session_id: string | null;
+  sdk_agent_id: string | null;
+  model_id: string;
+  status: AgentStatus;
+  branch: string | null;
+  pr_url: string | null;
+  created_by: string | null;
+  created_at: number;
+  sort_order: number;
+}
+
+export interface CreateAgentInput {
+  id?: string;
+  roomId: string;
+  backend?: AgentBackendKind;
+  label: string;
+  scopePath?: string | null;
+  sessionId?: string | null;
+  sdkAgentId?: string | null;
+  modelId?: string;
+  status?: AgentStatus;
+  branch?: string | null;
+  prUrl?: string | null;
+  createdBy?: string | null;
+  sortOrder?: number;
 }
 
 export function createRoom(input: CreateRoomInput): RoomRow {
@@ -490,6 +591,7 @@ export function insertMessage(msg: ChatMessage): void {
     msg.diffPatch ?? null,
     msg.status,
     msg.ts,
+    msg.agentId ?? null,
   );
 }
 
@@ -522,6 +624,7 @@ export function getMessages(roomId: string, limit = 500): ChatMessage[] {
     diff_patch: string | null;
     status: string;
     ts: number;
+    agent_id: string | null;
   }>;
   // Query is newest-first (LIMIT); chat UI expects chronological order.
   return rows.map(rowToMessage).reverse();
@@ -764,3 +867,154 @@ export function getOnlineWorkers(
 export function listRoomsByUser(userId: string): RoomRow[] {
   return stmts.listRoomsByUser.all(userId, userId) as RoomRow[];
 }
+
+// --- Agents ---
+
+function rowToAgent(r: Record<string, unknown>): AgentRow {
+  return {
+    id: r.id as string,
+    room_id: r.room_id as string,
+    backend: (r.backend as AgentBackendKind) || "cursor",
+    label: r.label as string,
+    scope_path: (r.scope_path as string) ?? null,
+    session_id: (r.session_id as string) ?? null,
+    sdk_agent_id: (r.sdk_agent_id as string) ?? null,
+    model_id: (r.model_id as string) || "auto",
+    status: (r.status as AgentStatus) || "idle",
+    branch: (r.branch as string) ?? null,
+    pr_url: (r.pr_url as string) ?? null,
+    created_by: (r.created_by as string) ?? null,
+    created_at: r.created_at as number,
+    sort_order: (r.sort_order as number) ?? 0,
+  };
+}
+
+export function createAgent(input: CreateAgentInput): AgentRow {
+  const id = input.id || newId("ag_");
+  const now = Date.now();
+  const existing = stmts.listAgents.all(input.roomId) as AgentRow[];
+  const sortOrder =
+    input.sortOrder ??
+    (existing.length ? Math.max(...existing.map((a) => a.sort_order)) + 1 : 0);
+  stmts.insertAgent.run(
+    id,
+    input.roomId,
+    input.backend ?? "cursor",
+    input.label,
+    input.scopePath ?? null,
+    input.sessionId ?? null,
+    input.sdkAgentId ?? null,
+    input.modelId ?? "auto",
+    input.status ?? "idle",
+    input.branch ?? null,
+    input.prUrl ?? null,
+    input.createdBy ?? null,
+    now,
+    sortOrder,
+  );
+  return stmts.getAgent.get(id) as AgentRow;
+}
+
+export function getAgent(id: string): AgentRow | undefined {
+  const row = stmts.getAgent.get(id) as Record<string, unknown> | undefined;
+  return row ? rowToAgent(row) : undefined;
+}
+
+export function listAgents(roomId: string): AgentRow[] {
+  return (stmts.listAgents.all(roomId) as Array<Record<string, unknown>>).map(
+    rowToAgent,
+  );
+}
+
+export function updateAgentStatus(id: string, status: AgentStatus): void {
+  stmts.updateAgentStatus.run(status, id);
+}
+
+export function setAgentSessionId(
+  id: string,
+  sessionId: string | null,
+): void {
+  stmts.updateAgentSessionId.run(sessionId, id);
+}
+
+export function setAgentSdkId(id: string, sdkAgentId: string | null): void {
+  stmts.updateAgentSdkId.run(sdkAgentId, id);
+}
+
+export function setAgentModel(id: string, modelId: string): void {
+  stmts.updateAgentModel.run(modelId, id);
+}
+
+export function setAgentLabel(id: string, label: string): void {
+  stmts.updateAgentLabel.run(label, id);
+}
+
+export function setAgentScope(id: string, scopePath: string | null): void {
+  stmts.updateAgentScope.run(scopePath, id);
+}
+
+export function setAgentPr(
+  id: string,
+  prUrl: string | null,
+  branch?: string | null,
+): void {
+  const existing = getAgent(id);
+  stmts.updateAgentPr.run(
+    prUrl,
+    branch !== undefined ? branch : (existing?.branch ?? null),
+    id,
+  );
+}
+
+export function deleteAgent(id: string): void {
+  stmts.deleteAgent.run(id);
+}
+
+export function setAgentDriver(agentId: string, userId: string): void {
+  stmts.setAgentDriver.run(agentId, userId, Date.now());
+}
+
+export function clearAgentDriver(agentId: string): void {
+  stmts.clearAgentDriver.run(agentId);
+}
+
+export function getAgentDrivers(
+  roomId: string,
+): Array<{ agent_id: string; user_id: string; granted_at: number }> {
+  return stmts.getAgentDrivers.all(roomId) as Array<{
+    agent_id: string;
+    user_id: string;
+    granted_at: number;
+  }>;
+}
+
+/** One-shot backfill: every room gets a default agent. Idempotent via settings key. */
+export function migrateAgentsV1(): void {
+  if (getSetting("migration:agents_v1") === "done") return;
+  const rooms = listRooms();
+  for (const room of rooms) {
+    const count = (stmts.countAgents.get(room.id) as { c: number }).c;
+    if (count > 0) {
+      const agents = listAgents(room.id);
+      if (agents[0]) {
+        stmts.backfillMessagesAgent.run(agents[0].id, room.id);
+      }
+      continue;
+    }
+    const agent = createAgent({
+      roomId: room.id,
+      backend: "cursor",
+      label: "Agent 1",
+      sessionId: room.cursor_session_id,
+      sdkAgentId: room.cursor_agent_id,
+      modelId: room.model_id || "auto",
+      createdBy: room.owner_id,
+      sortOrder: 0,
+    });
+    stmts.backfillMessagesAgent.run(agent.id, room.id);
+  }
+  setSetting("migration:agents_v1", "done");
+}
+
+migrateAgentsV1();
+

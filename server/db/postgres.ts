@@ -1,10 +1,17 @@
 import pg from "pg";
+import { randomBytes } from "crypto";
 import type {
+  AgentBackendKind,
   AgentRuntime,
+  AgentStatus,
   AuthMode,
   ChatMessage,
   SteerLogEntry,
 } from "../../shared/events.js";
+
+function newId(prefix = ""): string {
+  return `${prefix}${randomBytes(8).toString("hex")}`;
+}
 
 const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
 
@@ -112,6 +119,29 @@ async function initSchema() {
       models_json TEXT NOT NULL,
       updated_at BIGINT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS agents (
+      id TEXT PRIMARY KEY,
+      room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+      backend TEXT NOT NULL DEFAULT 'cursor',
+      label TEXT NOT NULL,
+      scope_path TEXT,
+      session_id TEXT,
+      sdk_agent_id TEXT,
+      model_id TEXT NOT NULL DEFAULT 'auto',
+      status TEXT NOT NULL DEFAULT 'idle',
+      branch TEXT,
+      pr_url TEXT,
+      created_by TEXT,
+      created_at BIGINT NOT NULL,
+      sort_order INTEGER NOT NULL DEFAULT 0
+    );
+
+    CREATE TABLE IF NOT EXISTS agent_drivers (
+      agent_id TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
+      user_id TEXT NOT NULL,
+      granted_at BIGINT NOT NULL
+    );
   `);
 
   await pool.query(`
@@ -119,6 +149,9 @@ async function initSchema() {
   `);
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_messages_room_ts ON messages(room_id, ts);
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_agents_room ON agents(room_id, sort_order);
   `);
 
   const migrations = [
@@ -136,6 +169,7 @@ async function initSchema() {
     `ALTER TABLE messages ADD COLUMN IF NOT EXISTS diff_patch TEXT`,
     `ALTER TABLE rooms ADD COLUMN IF NOT EXISTS owner_id TEXT`,
     `ALTER TABLE invite_links ADD COLUMN IF NOT EXISTS expires_at BIGINT`,
+    `ALTER TABLE messages ADD COLUMN IF NOT EXISTS agent_id TEXT`,
   ];
 
   for (const sql of migrations) {
@@ -231,7 +265,41 @@ function rowToMessage(r: Record<string, unknown>): ChatMessage {
     diffPatch: (r.diff_patch as string) || undefined,
     status: r.status as ChatMessage["status"],
     ts: num(r.ts as string)!,
+    agentId: (r.agent_id as string) || undefined,
   };
+}
+
+export interface AgentRow {
+  id: string;
+  room_id: string;
+  backend: AgentBackendKind;
+  label: string;
+  scope_path: string | null;
+  session_id: string | null;
+  sdk_agent_id: string | null;
+  model_id: string;
+  status: AgentStatus;
+  branch: string | null;
+  pr_url: string | null;
+  created_by: string | null;
+  created_at: number;
+  sort_order: number;
+}
+
+export interface CreateAgentInput {
+  id?: string;
+  roomId: string;
+  backend?: AgentBackendKind;
+  label: string;
+  scopePath?: string | null;
+  sessionId?: string | null;
+  sdkAgentId?: string | null;
+  modelId?: string;
+  status?: AgentStatus;
+  branch?: string | null;
+  prUrl?: string | null;
+  createdBy?: string | null;
+  sortOrder?: number;
 }
 
 // Top-level await ensures schema is initialized before any exports are used
@@ -359,8 +427,8 @@ export function getSteerHistory(
 
 export function insertMessage(msg: ChatMessage): void {
   syncQuery(
-    `INSERT INTO messages (id, room_id, role, content, sender_name, sender_color, tool_name, diff_patch, status, ts)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+    `INSERT INTO messages (id, room_id, role, content, sender_name, sender_color, tool_name, diff_patch, status, ts, agent_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
     [
       msg.id,
       msg.roomId,
@@ -372,6 +440,7 @@ export function insertMessage(msg: ChatMessage): void {
       msg.diffPatch ?? null,
       msg.status,
       msg.ts,
+      msg.agentId ?? null,
     ],
   );
 }
@@ -755,6 +824,193 @@ export function listRoomsByUser(userId: string): RoomRow[] {
     [userId, userId],
   ).map(pgRowToRoom);
 }
+
+// --- Agents ---
+
+function rowToAgent(r: Record<string, unknown>): AgentRow {
+  return {
+    id: r.id as string,
+    room_id: r.room_id as string,
+    backend: (r.backend as AgentBackendKind) || "cursor",
+    label: r.label as string,
+    scope_path: (r.scope_path as string) ?? null,
+    session_id: (r.session_id as string) ?? null,
+    sdk_agent_id: (r.sdk_agent_id as string) ?? null,
+    model_id: (r.model_id as string) || "auto",
+    status: (r.status as AgentStatus) || "idle",
+    branch: (r.branch as string) ?? null,
+    pr_url: (r.pr_url as string) ?? null,
+    created_by: (r.created_by as string) ?? null,
+    created_at: num(r.created_at as string)!,
+    sort_order: num(r.sort_order as string) ?? 0,
+  };
+}
+
+export function createAgent(input: CreateAgentInput): AgentRow {
+  const id = input.id || newId("ag_");
+  const now = Date.now();
+  const existing = listAgents(input.roomId);
+  const sortOrder =
+    input.sortOrder ??
+    (existing.length ? Math.max(...existing.map((a) => a.sort_order)) + 1 : 0);
+  const rows = syncQuery<Record<string, unknown>>(
+    `INSERT INTO agents (
+      id, room_id, backend, label, scope_path, session_id, sdk_agent_id,
+      model_id, status, branch, pr_url, created_by, created_at, sort_order
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+    RETURNING *`,
+    [
+      id,
+      input.roomId,
+      input.backend ?? "cursor",
+      input.label,
+      input.scopePath ?? null,
+      input.sessionId ?? null,
+      input.sdkAgentId ?? null,
+      input.modelId ?? "auto",
+      input.status ?? "idle",
+      input.branch ?? null,
+      input.prUrl ?? null,
+      input.createdBy ?? null,
+      now,
+      sortOrder,
+    ],
+  );
+  return rowToAgent(rows[0]);
+}
+
+export function getAgent(id: string): AgentRow | undefined {
+  const rows = syncQuery<Record<string, unknown>>(
+    `SELECT * FROM agents WHERE id = $1`,
+    [id],
+  );
+  return rows.length ? rowToAgent(rows[0]) : undefined;
+}
+
+export function listAgents(roomId: string): AgentRow[] {
+  return syncQuery<Record<string, unknown>>(
+    `SELECT * FROM agents WHERE room_id = $1 ORDER BY sort_order ASC, created_at ASC`,
+    [roomId],
+  ).map(rowToAgent);
+}
+
+export function updateAgentStatus(id: string, status: AgentStatus): void {
+  syncQuery(`UPDATE agents SET status = $1 WHERE id = $2`, [status, id]);
+}
+
+export function setAgentSessionId(
+  id: string,
+  sessionId: string | null,
+): void {
+  syncQuery(`UPDATE agents SET session_id = $1 WHERE id = $2`, [
+    sessionId,
+    id,
+  ]);
+}
+
+export function setAgentSdkId(id: string, sdkAgentId: string | null): void {
+  syncQuery(`UPDATE agents SET sdk_agent_id = $1 WHERE id = $2`, [
+    sdkAgentId,
+    id,
+  ]);
+}
+
+export function setAgentModel(id: string, modelId: string): void {
+  syncQuery(`UPDATE agents SET model_id = $1 WHERE id = $2`, [modelId, id]);
+}
+
+export function setAgentLabel(id: string, label: string): void {
+  syncQuery(`UPDATE agents SET label = $1 WHERE id = $2`, [label, id]);
+}
+
+export function setAgentScope(id: string, scopePath: string | null): void {
+  syncQuery(`UPDATE agents SET scope_path = $1 WHERE id = $2`, [
+    scopePath,
+    id,
+  ]);
+}
+
+export function setAgentPr(
+  id: string,
+  prUrl: string | null,
+  branch?: string | null,
+): void {
+  const existing = getAgent(id);
+  syncQuery(`UPDATE agents SET pr_url = $1, branch = $2 WHERE id = $3`, [
+    prUrl,
+    branch !== undefined ? branch : (existing?.branch ?? null),
+    id,
+  ]);
+}
+
+export function deleteAgent(id: string): void {
+  syncQuery(`DELETE FROM agents WHERE id = $1`, [id]);
+}
+
+export function setAgentDriver(agentId: string, userId: string): void {
+  syncQuery(
+    `INSERT INTO agent_drivers (agent_id, user_id, granted_at) VALUES ($1,$2,$3)
+     ON CONFLICT(agent_id) DO UPDATE SET user_id = excluded.user_id, granted_at = excluded.granted_at`,
+    [agentId, userId, Date.now()],
+  );
+}
+
+export function clearAgentDriver(agentId: string): void {
+  syncQuery(`DELETE FROM agent_drivers WHERE agent_id = $1`, [agentId]);
+}
+
+export function getAgentDrivers(
+  roomId: string,
+): Array<{ agent_id: string; user_id: string; granted_at: number }> {
+  const rows = syncQuery<{
+    agent_id: string;
+    user_id: string;
+    granted_at: string;
+  }>(
+    `SELECT ad.agent_id, ad.user_id, ad.granted_at
+     FROM agent_drivers ad
+     JOIN agents a ON a.id = ad.agent_id
+     WHERE a.room_id = $1`,
+    [roomId],
+  );
+  return rows.map((r) => ({
+    agent_id: r.agent_id,
+    user_id: r.user_id,
+    granted_at: num(r.granted_at)!,
+  }));
+}
+
+export function migrateAgentsV1(): void {
+  if (getSetting("migration:agents_v1") === "done") return;
+  const rooms = listRooms();
+  for (const room of rooms) {
+    const agents = listAgents(room.id);
+    if (agents.length > 0) {
+      syncQuery(
+        `UPDATE messages SET agent_id = $1 WHERE room_id = $2 AND agent_id IS NULL`,
+        [agents[0].id, room.id],
+      );
+      continue;
+    }
+    const agent = createAgent({
+      roomId: room.id,
+      backend: "cursor",
+      label: "Agent 1",
+      sessionId: room.cursor_session_id,
+      sdkAgentId: room.cursor_agent_id,
+      modelId: room.model_id || "auto",
+      createdBy: room.owner_id,
+      sortOrder: 0,
+    });
+    syncQuery(
+      `UPDATE messages SET agent_id = $1 WHERE room_id = $2 AND agent_id IS NULL`,
+      [agent.id, room.id],
+    );
+  }
+  setSetting("migration:agents_v1", "done");
+}
+
+migrateAgentsV1();
 
 // ---------------------------------------------------------------------------
 // Synchronous wrapper around pg Pool.

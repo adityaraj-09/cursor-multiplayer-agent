@@ -395,10 +395,17 @@ export async function stopRoom(id: string): Promise<void> {
   }
 }
 
-export async function abortRoomRun(id: string): Promise<void> {
+export async function abortRoomRun(
+  id: string,
+  agentId?: string,
+): Promise<void> {
   const res = await fetch(`${API_BASE}/rooms/${id}/abort`, {
     method: "POST",
-    headers: await authHeaders(),
+    headers: {
+      "Content-Type": "application/json",
+      ...(await authHeaders()),
+    },
+    body: JSON.stringify(agentId ? { agentId } : {}),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
@@ -440,6 +447,7 @@ export async function updateRoomModel(
 export async function updateRoomCursorSession(
   roomId: string,
   cursorSessionId: string | null,
+  agentId?: string,
 ): Promise<RoomInfo> {
   const res = await fetch(`${API_BASE}/rooms/${roomId}/cursor-session`, {
     method: "PATCH",
@@ -447,7 +455,7 @@ export async function updateRoomCursorSession(
       "Content-Type": "application/json",
       ...(await authHeaders()),
     },
-    body: JSON.stringify({ cursorSessionId }),
+    body: JSON.stringify({ cursorSessionId, agentId }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
@@ -455,3 +463,97 @@ export async function updateRoomCursorSession(
   }
   return res.json();
 }
+
+export async function fetchRoomAgents(
+  roomId: string,
+): Promise<import("../../shared/events").AgentInfo[]> {
+  const res = await fetch(`${API_BASE}/rooms/${roomId}/agents`, {
+    headers: await authHeaders(),
+  });
+  if (!res.ok) throw new Error("Failed to fetch agents");
+  return res.json();
+}
+
+export async function addRoomAgent(
+  roomId: string,
+  data: {
+    label: string;
+    backend?: string;
+    scopePath?: string;
+    modelId?: string;
+  },
+): Promise<import("../../shared/events").AgentInfo> {
+  const res = await fetch(`${API_BASE}/rooms/${roomId}/agents`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(await authHeaders()),
+    },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Failed to add agent");
+  }
+  return res.json();
+}
+
+export async function updateRoomAgent(
+  roomId: string,
+  agentId: string,
+  data: {
+    label?: string;
+    scopePath?: string | null;
+    modelId?: string;
+    cursorSessionId?: string | null;
+  },
+): Promise<import("../../shared/events").AgentInfo> {
+  const res = await fetch(`${API_BASE}/rooms/${roomId}/agents/${agentId}`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+      ...(await authHeaders()),
+    },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Failed to update agent");
+  }
+  return res.json();
+}
+
+export async function stopRoomAgent(
+  roomId: string,
+  agentId: string,
+): Promise<void> {
+  const res = await fetch(
+    `${API_BASE}/rooms/${roomId}/agents/${agentId}/stop`,
+    {
+      method: "POST",
+      headers: await authHeaders(),
+    },
+  );
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Failed to stop agent");
+  }
+}
+
+export async function abortRoomAgent(
+  roomId: string,
+  agentId: string,
+): Promise<void> {
+  const res = await fetch(
+    `${API_BASE}/rooms/${roomId}/agents/${agentId}/abort`,
+    {
+      method: "POST",
+      headers: await authHeaders(),
+    },
+  );
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Failed to abort agent");
+  }
+}
+

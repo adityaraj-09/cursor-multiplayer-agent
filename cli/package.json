@@ -1,10 +1,10 @@
 {
   "name": "@oblivihon/steer",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "CLI worker for Steer — run local Cursor agents for multiplayer sessions",
   "type": "module",
   "bin": {
-    "steer": "./dist/index.js"
+    "steer": "./dist/cli/src/index.js"
   },
   "files": [
     "dist",

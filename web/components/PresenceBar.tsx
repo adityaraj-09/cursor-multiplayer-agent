@@ -38,7 +38,13 @@ export default function PresenceBar({
                   : ""
               }`}
               style={{ backgroundColor: p.color }}
-              title={`${p.name}${p.isOwner ? " · host" : ""}${p.isDriver ? " · driving" : ""}${p.socketId === mySocketId ? " · you" : ""}`}
+              title={`${p.name}${p.isOwner ? " · host" : ""}${
+                p.drivingAgentIds?.length
+                  ? ` · driving ${p.drivingAgentIds.length} agent(s)`
+                  : p.isDriver
+                    ? " · driving"
+                    : ""
+              }${p.socketId === mySocketId ? " · you" : ""}`}
             >
               {p.name.charAt(0).toUpperCase()}
             </div>
@@ -46,7 +52,11 @@ export default function PresenceBar({
               <div>
                 {p.name}
                 {p.isOwner ? " · host" : ""}
-                {p.isDriver ? " · driving" : ""}
+                {p.drivingAgentIds?.length
+                  ? ` · driving ${p.drivingAgentIds.length}`
+                  : p.isDriver
+                    ? " · driving"
+                    : ""}
                 {p.socketId === mySocketId ? " · you" : ""}
               </div>
               {canRemove && (

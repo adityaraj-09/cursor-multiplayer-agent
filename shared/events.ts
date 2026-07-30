@@ -1,8 +1,12 @@
+import type { AgentBackendKind } from "./backends/types.js";
+
 export interface Participant {
   socketId: string;
   name: string;
   color: string;
   isDriver: boolean;
+  /** Agent ids this participant currently drives. */
+  drivingAgentIds?: string[];
   userId?: string;
   isOwner?: boolean;
 }
@@ -20,6 +24,35 @@ export type AgentRuntime = "local" | "cloud";
 /** cli = local Cursor login (no API key). server/byok require a Cursor API key. */
 export type AuthMode = "cli" | "server" | "byok";
 
+export type AgentStatus =
+  | "idle"
+  | "running"
+  | "waiting_input"
+  | "stopped"
+  | "error";
+
+export interface AgentInfo {
+  id: string;
+  roomId: string;
+  backend: AgentBackendKind;
+  label: string;
+  scopePath?: string;
+  sessionId?: string;
+  modelId: string;
+  status: AgentStatus;
+  createdBy?: string;
+  createdAt: number;
+  sortOrder?: number;
+  sdkAgentId?: string;
+  branch?: string;
+  prUrl?: string;
+}
+
+export interface AgentConflict {
+  paths: string[];
+  agentIds: string[];
+}
+
 export interface ChatMessage {
   id: string;
   roomId: string;
@@ -32,6 +65,8 @@ export interface ChatMessage {
   diffPatch?: string;
   status: ChatStatus;
   ts: number;
+  /** Room-level agent that produced or received this message. */
+  agentId?: string;
 }
 
 export interface CloudMeta {
@@ -60,8 +95,10 @@ export interface RoomInfo {
   keyHint?: string;
   ownerId?: string;
   inviteCode?: string;
-  /** Active Cursor CLI chat id for this Steer room (--resume). */
+  /** Active Cursor CLI chat id for the room's default agent (--resume). */
   cursorSessionId?: string;
+  /** Agents in this room (populated when available). */
+  agents?: AgentInfo[];
 }
 
 export interface UserInfo {
@@ -101,26 +138,41 @@ export interface ServerToClientEvents {
   "chat-history": (messages: ChatMessage[]) => void;
   "chat-message": (message: ChatMessage) => void;
   "chat-delta": (id: string, content: string, status?: ChatStatus) => void;
-  "agent-status": (status: AgentRunStatus, detail?: string) => void;
+  /** @deprecated Prefer agents snapshot + agent-status(agentId, …). Kept for single-agent rooms. */
+  "agent-status": (
+    statusOrAgentId: AgentRunStatus | string,
+    detailOrStatus?: string | AgentRunStatus,
+    detail?: string,
+  ) => void;
   "cloud-meta": (meta: CloudMeta) => void;
-  "model-updated": (modelId: string) => void;
-  "cursor-session-updated": (sessionId: string | null) => void;
+  "model-updated": (modelId: string, agentId?: string) => void;
+  "cursor-session-updated": (
+    sessionIdOrAgentId: string | null,
+    sessionId?: string | null,
+  ) => void;
   presence: (participants: Participant[]) => void;
-  "diff-update": (patch: string) => void;
+  /** Full-repo or per-agent concatenated patch. Second arg is agentId when multi-agent. */
+  "diff-update": (patch: string, agentId?: string) => void;
   "steer-log": (entry: SteerLogEntry) => void;
   "steer-history": (entries: SteerLogEntry[]) => void;
-  "drive-requested": (payload: { socketId: string; name: string }) => void;
-  "drive-granted": () => void;
-  "drive-released": () => void;
+  "drive-requested": (payload: {
+    socketId: string;
+    name: string;
+    agentId?: string;
+  }) => void;
+  "drive-granted": (agentId?: string) => void;
+  "drive-released": (agentId?: string) => void;
+  agents: (agents: AgentInfo[]) => void;
+  "agent-conflicts": (conflicts: AgentConflict[]) => void;
   kicked: (reason: string) => void;
   error: (message: string) => void;
 }
 
 export interface ClientToServerEvents {
-  "steer-message": (text: string) => void;
-  "request-drive": () => void;
-  "release-drive": () => void;
-  "grant-drive": (toSocketId: string) => void;
+  "steer-message": (textOrAgentId: string, text?: string) => void;
+  "request-drive": (agentId?: string) => void;
+  "release-drive": (agentId?: string) => void;
+  "grant-drive": (toSocketIdOrAgentId: string, toSocketId?: string) => void;
   "leave-room": () => void;
   "remove-member": (userId: string) => void;
 }
@@ -132,13 +184,18 @@ export interface WorkerToServerEvents {
     machineName: string;
     activeRoomId?: string | null;
     busy?: boolean;
+    /** Protocol 2+: concurrent multi-agent support. */
+    protocol?: number;
+    activeRuns?: Array<{ roomId: string; agentId: string }>;
   }) => void;
   "worker:agent-event": (data: {
     roomId: string;
+    agentId?: string;
     event: AgentStreamEventPayload;
   }) => void;
   "worker:file-diff": (data: {
     roomId: string;
+    agentId?: string;
     /** Tool call id — server maps to the chat tool message via toolMsgIds */
     callId: string;
     toolName: string;
@@ -165,12 +222,15 @@ export interface WorkerToServerEvents {
 export interface ServerToWorkerEvents {
   "worker:run-prompt": (data: {
     roomId: string;
+    agentId?: string;
     prompt: string;
     repoPath: string;
+    /** Scope-resolved working directory (defaults to repoPath). */
+    cwd?: string;
     modelId: string;
     sessionId?: string | null;
   }) => void;
-  "worker:abort": (data: { roomId: string }) => void;
+  "worker:abort": (data: { roomId: string; agentId?: string }) => void;
   "worker:pick-folder": (data: { requestId: string }) => void;
   "worker:list-models": (data: { requestId: string }) => void;
   "worker:list-sessions": (data: {
@@ -192,6 +252,8 @@ export interface AgentStreamEventPayload {
   diffPatch?: string;
   message?: string;
   result?: string;
+  parentCallId?: string;
+  status?: string;
 }
 
 export const AVATAR_COLORS = [
@@ -204,3 +266,5 @@ export const AVATAR_COLORS = [
   "#a3e635",
   "#fb7185",
 ];
+
+export type { AgentBackendKind };

@@ -460,6 +460,7 @@ app.patch("/api/rooms/:id/model", requireAuth, (req, res) => {
       id,
       String(req.body?.modelId || ""),
       req.user!.id,
+      req.body?.agentId ? String(req.body.agentId) : undefined,
     );
     res.json(room);
   } catch (err) {
@@ -485,12 +486,130 @@ app.patch("/api/rooms/:id/cursor-session", requireAuth, (req, res) => {
       id,
       sessionId,
       req.user!.id,
+      req.body?.agentId ? String(req.body.agentId) : undefined,
     );
     res.json(room);
   } catch (err) {
     res.status(400).json({
       error:
         err instanceof Error ? err.message : "Failed to update Cursor chat",
+    });
+  }
+});
+
+app.get("/api/rooms/:id/agents", requireAuth, (req, res) => {
+  const id = routeParam(req.params.id);
+  if (!roomManager.userCanAccessRoom(id, req.user!.id)) {
+    res.status(404).json({ error: "Room not found" });
+    return;
+  }
+  try {
+    res.json(roomManager.listAgentInfos(id));
+  } catch (err) {
+    res.status(400).json({
+      error: err instanceof Error ? err.message : "Failed to list agents",
+    });
+  }
+});
+
+app.post("/api/rooms/:id/agents", requireAuth, (req, res) => {
+  const id = routeParam(req.params.id);
+  if (!roomManager.userCanAccessRoom(id, req.user!.id)) {
+    res.status(404).json({ error: "Room not found" });
+    return;
+  }
+  try {
+    const agent = roomManager.addAgent(
+      id,
+      {
+        backend: req.body?.backend,
+        label: String(req.body?.label || "Agent"),
+        scopePath: req.body?.scopePath
+          ? String(req.body.scopePath)
+          : undefined,
+        modelId: req.body?.modelId ? String(req.body.modelId) : undefined,
+      },
+      req.user!.id,
+    );
+    res.status(201).json(agent);
+  } catch (err) {
+    res.status(400).json({
+      error: err instanceof Error ? err.message : "Failed to add agent",
+    });
+  }
+});
+
+app.patch("/api/rooms/:id/agents/:agentId", requireAuth, (req, res) => {
+  const id = routeParam(req.params.id);
+  const agentId = routeParam(req.params.agentId);
+  if (!roomManager.userCanAccessRoom(id, req.user!.id)) {
+    res.status(404).json({ error: "Room not found" });
+    return;
+  }
+  try {
+    if (req.body?.modelId !== undefined) {
+      roomManager.setModel(id, String(req.body.modelId), req.user!.id, agentId);
+    }
+    if (req.body?.cursorSessionId !== undefined) {
+      const raw = req.body.cursorSessionId;
+      const sessionId =
+        raw === null || raw === "" ? null : String(raw);
+      roomManager.setCursorSession(id, sessionId, req.user!.id, agentId);
+    }
+    if (req.body?.label !== undefined || req.body?.scopePath !== undefined) {
+      roomManager.updateAgentMeta(
+        id,
+        agentId,
+        {
+          label: req.body?.label ? String(req.body.label) : undefined,
+          scopePath:
+            req.body?.scopePath !== undefined
+              ? req.body.scopePath
+                ? String(req.body.scopePath)
+                : null
+              : undefined,
+        },
+        req.user!.id,
+      );
+    }
+    res.json(roomManager.listAgentInfos(id).find((a) => a.id === agentId));
+  } catch (err) {
+    res.status(400).json({
+      error: err instanceof Error ? err.message : "Failed to update agent",
+    });
+  }
+});
+
+app.post("/api/rooms/:id/agents/:agentId/stop", requireAuth, (req, res) => {
+  const id = routeParam(req.params.id);
+  const agentId = routeParam(req.params.agentId);
+  if (!roomManager.userCanAccessRoom(id, req.user!.id)) {
+    res.status(404).json({ error: "Room not found" });
+    return;
+  }
+  try {
+    roomManager.stopAgent(id, agentId, req.user!.id);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(400).json({
+      error: err instanceof Error ? err.message : "Failed to stop agent",
+    });
+  }
+});
+
+app.post("/api/rooms/:id/agents/:agentId/abort", requireAuth, (req, res) => {
+  const id = routeParam(req.params.id);
+  const agentId = routeParam(req.params.agentId);
+  if (!roomManager.userCanAccessRoom(id, req.user!.id)) {
+    res.status(404).json({ error: "Room not found" });
+    return;
+  }
+  try {
+    roomManager.abortRun(id, agentId, req.user!.id);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(400).json({
+      error: err instanceof Error ? err.message : "Failed to abort agent",
     });
   }
 });
@@ -513,6 +632,7 @@ app.post("/api/rooms/:id/stop", requireAuth, (req, res) => {
 
 /**
  * POST /api/rooms/:id/abort — cancel the in-flight agent run (room stays open).
+ * Aborts the default agent for backward compatibility.
  */
 app.post("/api/rooms/:id/abort", requireAuth, (req, res) => {
   const id = routeParam(req.params.id);
@@ -521,7 +641,11 @@ app.post("/api/rooms/:id/abort", requireAuth, (req, res) => {
     return;
   }
   try {
-    roomManager.abortRun(id, req.user!.id);
+    roomManager.abortRun(
+      id,
+      req.body?.agentId ? String(req.body.agentId) : undefined,
+      req.user!.id,
+    );
     res.json({ ok: true });
   } catch (err) {
     res.status(400).json({
@@ -612,14 +736,18 @@ io.on("connection", (socket) => {
     return;
   }
 
-  socket.on("steer-message", (text) =>
-    roomManager.handleSteerMessage(socket, text),
+  socket.on("steer-message", (textOrAgentId, text) =>
+    roomManager.handleSteerMessage(socket, textOrAgentId, text),
   );
-  socket.on("request-drive", () => roomManager.handleRequestDrive(socket));
-  socket.on("grant-drive", (toId) =>
-    roomManager.handleGrantDrive(socket, toId),
+  socket.on("request-drive", (agentId) =>
+    roomManager.handleRequestDrive(socket, agentId),
   );
-  socket.on("release-drive", () => roomManager.handleReleaseDrive(socket));
+  socket.on("grant-drive", (toSocketIdOrAgentId, toSocketId) =>
+    roomManager.handleGrantDrive(socket, toSocketIdOrAgentId, toSocketId),
+  );
+  socket.on("release-drive", (agentId) =>
+    roomManager.handleReleaseDrive(socket, agentId),
+  );
   socket.on("leave-room", () => roomManager.handleLeaveRoom(socket));
   socket.on("remove-member", (targetUserId) =>
     roomManager.handleRemoveMember(socket, targetUserId),

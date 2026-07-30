@@ -6,31 +6,52 @@ import { loadConfig } from "./config.js";
 import { pickFolder } from "./pickFolder.js";
 import { listLocalModels } from "./listModels.js";
 import {
-  runAgent,
-  abortAgent,
+  runAgentWithHandle,
+  abortRun,
+  abortAll,
   isEditTool,
   getFileDiff,
   type AgentStreamEvent,
 } from "./agent.js";
 import { listChatSessions } from "./listSessions.js";
 
+const WORKER_PROTOCOL = 2;
+const MAX_CONCURRENT = Number(process.env.STEER_MAX_CONCURRENT_AGENTS || 4);
+
 interface RunPromptPayload {
   roomId: string;
+  agentId?: string;
   prompt: string;
   repoPath: string;
+  cwd?: string;
   modelId: string;
   sessionId?: string | null;
 }
 
 interface AbortPayload {
   roomId: string;
+  agentId?: string;
 }
 
 type QueuedEmit = { event: string; payload: unknown };
 
+interface RunState {
+  roomId: string;
+  agentId: string;
+  runSeq: number;
+  editedPaths: Map<string, string>;
+  pendingCallPaths: Map<string, string>;
+  emittedTerminal: boolean;
+  abort: () => void;
+}
+
 function generateWorkerId(email: string): string {
   const raw = `${hostname()}-${email}`;
   return createHash("sha256").update(raw).digest("hex").slice(0, 16);
+}
+
+function makeRunKey(roomId: string, agentId: string): string {
+  return `${roomId}:${agentId}`;
 }
 
 export function startWorker(repoPathOverride?: string): void {
@@ -45,10 +66,10 @@ export function startWorker(repoPathOverride?: string): void {
 
   console.log(chalk.blue("Connecting to"), serverUrl);
   console.log(chalk.gray(`Worker ID: ${workerId}`));
+  console.log(chalk.gray(`Protocol: ${WORKER_PROTOCOL}`));
 
-  let activeRoomId: string | null = null;
-  let runSeq = 0;
-  /** Events produced while offline — flushed on reconnect (agent keeps running). */
+  const activeRuns = new Map<string, RunState>();
+  let runSeqCounter = 0;
   const offlineQueue: QueuedEmit[] = [];
   const MAX_QUEUE = 500;
 
@@ -81,21 +102,31 @@ export function startWorker(repoPathOverride?: string): void {
     }
   };
 
+  const listActiveRuns = () =>
+    [...activeRuns.values()].map((r) => ({
+      roomId: r.roomId,
+      agentId: r.agentId,
+    }));
+
   const announceReady = () => {
+    const runs = listActiveRuns();
     socket.emit("worker:ready", {
       workerId,
       machineName: hostname(),
-      activeRoomId,
-      busy: Boolean(activeRoomId),
+      protocol: WORKER_PROTOCOL,
+      activeRuns: runs,
+      // Legacy fields for older servers
+      activeRoomId: runs[0]?.roomId ?? null,
+      busy: runs.length > 0,
     });
   };
 
   socket.on("connect", () => {
     console.log(chalk.green("✓ Connected to server"));
-    if (activeRoomId) {
+    if (activeRuns.size > 0) {
       console.log(
         chalk.cyan(
-          `  Agent still running for room ${activeRoomId} — resuming stream`,
+          `  ${activeRuns.size} agent run(s) still going — resuming stream`,
         ),
       );
     }
@@ -105,14 +136,13 @@ export function startWorker(repoPathOverride?: string): void {
 
   socket.on("disconnect", (reason) => {
     console.log(chalk.yellow(`Disconnected: ${reason}`));
-    if (activeRoomId) {
+    if (activeRuns.size > 0) {
       console.log(
         chalk.yellow(
-          `  Agent keeps running locally for room ${activeRoomId} (will sync on reconnect)`,
+          `  ${activeRuns.size} agent(s) keep running locally (will sync on reconnect)`,
         ),
       );
     }
-    // Do NOT abortAgent() — Cursor should finish even if the socket drops.
   });
 
   socket.on("connect_error", (err) => {
@@ -124,36 +154,77 @@ export function startWorker(repoPathOverride?: string): void {
       roomId,
       prompt,
       repoPath: payloadRepoPath,
+      cwd: payloadCwd,
       modelId,
       sessionId,
     } = payload;
-    const repoPath = repoPathOverride || payloadRepoPath;
+    const agentId = payload.agentId || "default";
+    const runKey = makeRunKey(roomId, agentId);
+    const repoPath = repoPathOverride || payloadCwd || payloadRepoPath;
+    const cwd = payloadCwd || repoPath;
 
-    if (activeRoomId) {
+    if (activeRuns.has(runKey)) {
       console.log(
         chalk.yellow(
-          `  Rejecting new prompt — already running for room ${activeRoomId}`,
+          `  Rejecting new prompt — agent ${agentId} already running in room ${roomId}`,
         ),
       );
       emitOrQueue("worker:agent-event", {
         roomId,
+        agentId,
         event: {
           kind: "error",
-          message: "Worker is already running another prompt",
+          message: "This agent is already running another prompt",
         } satisfies AgentStreamEvent,
       });
       emitOrQueue("worker:agent-event", {
         roomId,
+        agentId,
         event: { kind: "done", result: "" } satisfies AgentStreamEvent,
       });
       return;
     }
 
-    const thisRun = ++runSeq;
-    activeRoomId = roomId;
+    if (activeRuns.size >= MAX_CONCURRENT) {
+      console.log(
+        chalk.yellow(
+          `  Rejecting new prompt — max concurrent agents (${MAX_CONCURRENT}) reached`,
+        ),
+      );
+      emitOrQueue("worker:agent-event", {
+        roomId,
+        agentId,
+        event: {
+          kind: "error",
+          message: `Worker is at max concurrent agents (${MAX_CONCURRENT})`,
+        } satisfies AgentStreamEvent,
+      });
+      emitOrQueue("worker:agent-event", {
+        roomId,
+        agentId,
+        event: { kind: "done", result: "" } satisfies AgentStreamEvent,
+      });
+      return;
+    }
 
-    console.log(chalk.cyan(`\n━━━ Running prompt in room ${roomId} ━━━`));
-    console.log(chalk.gray(`Repo: ${repoPath}`));
+    const thisRun = ++runSeqCounter;
+    const runState: RunState = {
+      roomId,
+      agentId,
+      runSeq: thisRun,
+      editedPaths: new Map(),
+      pendingCallPaths: new Map(),
+      emittedTerminal: false,
+      abort: () => {},
+    };
+    activeRuns.set(runKey, runState);
+
+    console.log(
+      chalk.cyan(
+        `\n━━━ Running prompt in room ${roomId} / agent ${agentId} ━━━`,
+      ),
+    );
+    console.log(chalk.gray(`Cwd: ${cwd}`));
     console.log(chalk.gray(`Model: ${modelId}`));
     console.log(
       chalk.gray(
@@ -161,33 +232,32 @@ export function startWorker(repoPathOverride?: string): void {
       ),
     );
 
-    const editedPaths = new Map<string, string>(); // path → callId
-    const pendingCallPaths = new Map<string, string>(); // callId → path
-    let emittedTerminal = false;
-
     const onEvent = (event: AgentStreamEvent) => {
-      if (thisRun !== runSeq) return;
+      const current = activeRuns.get(runKey);
+      if (!current || current.runSeq !== thisRun) return;
       if (event.kind === "done" || event.kind === "error") {
-        emittedTerminal = true;
+        current.emittedTerminal = true;
       }
-      emitOrQueue("worker:agent-event", { roomId, event });
+      emitOrQueue("worker:agent-event", { roomId, agentId, event });
 
       if (event.kind === "tool_start") {
         console.log(chalk.yellow(`  ▸ ${event.name} ${event.detail}`));
         if (event.path && event.callId) {
-          pendingCallPaths.set(event.callId, event.path);
+          current.pendingCallPaths.set(event.callId, event.path);
         }
       } else if (event.kind === "tool_done") {
         console.log(chalk.green(`  ✓ ${event.name} ${event.detail}`));
         const path =
           event.path ||
-          (event.callId ? pendingCallPaths.get(event.callId) : undefined);
+          (event.callId
+            ? current.pendingCallPaths.get(event.callId)
+            : undefined);
         if (isEditTool(event.name) && path && event.callId) {
-          editedPaths.set(path, event.callId);
-          // Emit synthetic patch immediately when available (shows in chat ASAP).
+          current.editedPaths.set(path, event.callId);
           if (event.diffPatch) {
             emitOrQueue("worker:file-diff", {
               roomId,
+              agentId,
               callId: event.callId,
               toolName: event.name || "edit",
               path,
@@ -205,30 +275,47 @@ export function startWorker(repoPathOverride?: string): void {
     };
 
     const finishRun = (terminal?: AgentStreamEvent) => {
-      if (thisRun !== runSeq) return;
-      if (terminal && !emittedTerminal) {
-        emitOrQueue("worker:agent-event", { roomId, event: terminal });
-        emittedTerminal = true;
-      } else if (!emittedTerminal) {
+      const current = activeRuns.get(runKey);
+      if (!current || current.runSeq !== thisRun) return;
+      if (terminal && !current.emittedTerminal) {
         emitOrQueue("worker:agent-event", {
           roomId,
+          agentId,
+          event: terminal,
+        });
+        current.emittedTerminal = true;
+      } else if (!current.emittedTerminal) {
+        emitOrQueue("worker:agent-event", {
+          roomId,
+          agentId,
           event: { kind: "done", result: "" } satisfies AgentStreamEvent,
         });
-        emittedTerminal = true;
+        current.emittedTerminal = true;
       }
-      if (activeRoomId === roomId) activeRoomId = null;
+      activeRuns.delete(runKey);
     };
 
-    runAgent(repoPath, prompt, modelId, onEvent, sessionId)
+    const handle = runAgentWithHandle(
+      cwd,
+      prompt,
+      modelId,
+      onEvent,
+      sessionId,
+      runKey,
+    );
+    runState.abort = handle.abort;
+
+    handle.promise
       .then(async () => {
-        if (thisRun !== runSeq) return;
-        // Upgrade to real git diffs after the run settles.
-        for (const [filePath, callId] of editedPaths) {
+        const current = activeRuns.get(runKey);
+        if (!current || current.runSeq !== thisRun) return;
+        for (const [filePath, callId] of current.editedPaths) {
           try {
-            const patch = await getFileDiff(repoPath, filePath);
+            const patch = await getFileDiff(cwd, filePath);
             if (patch) {
               emitOrQueue("worker:file-diff", {
                 roomId,
+                agentId,
                 callId,
                 toolName: "edit",
                 path: filePath,
@@ -242,20 +329,43 @@ export function startWorker(repoPathOverride?: string): void {
         finishRun({ kind: "done", result: "" });
       })
       .catch((err) => {
-        if (thisRun !== runSeq) return;
+        const current = activeRuns.get(runKey);
+        if (!current || current.runSeq !== thisRun) return;
         const message = (err as Error).message || "Agent error";
         console.error(chalk.red(`Agent error: ${message}`));
         finishRun({ kind: "error", message });
         emitOrQueue("worker:agent-event", {
           roomId,
+          agentId,
           event: { kind: "done", result: "" } satisfies AgentStreamEvent,
         });
       });
   });
 
-  socket.on("worker:abort", (_payload: AbortPayload) => {
-    console.log(chalk.yellow("  ⚠ Abort requested"));
-    abortAgent();
+  socket.on("worker:abort", (payload: AbortPayload) => {
+    const agentId = payload.agentId;
+    if (agentId) {
+      const runKey = makeRunKey(payload.roomId, agentId);
+      console.log(
+        chalk.yellow(`  ⚠ Abort requested for ${payload.roomId}/${agentId}`),
+      );
+      const run = activeRuns.get(runKey);
+      run?.abort();
+      abortRun(runKey);
+      activeRuns.delete(runKey);
+    } else {
+      // Legacy: abort all runs for the room
+      console.log(
+        chalk.yellow(`  ⚠ Abort requested for room ${payload.roomId}`),
+      );
+      for (const [key, run] of [...activeRuns.entries()]) {
+        if (run.roomId === payload.roomId) {
+          run.abort();
+          abortRun(key);
+          activeRuns.delete(key);
+        }
+      }
+    }
   });
 
   socket.on(
@@ -332,13 +442,13 @@ export function startWorker(repoPathOverride?: string): void {
 
   process.on("SIGINT", () => {
     console.log(chalk.gray("\nShutting down worker…"));
-    abortAgent();
+    abortAll();
     socket.disconnect();
     process.exit(0);
   });
 
   process.on("SIGTERM", () => {
-    abortAgent();
+    abortAll();
     socket.disconnect();
     process.exit(0);
   });

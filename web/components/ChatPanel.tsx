@@ -8,6 +8,9 @@ import InlineDiff from "./InlineDiff";
 interface ChatPanelProps {
   messages: ChatMessage[];
   agentStatus: AgentRunStatus;
+  agents?: Array<{ id: string; label: string }>;
+  filterAgentId?: string | null;
+  onFilterAgentChange?: (agentId: string | null) => void;
 }
 
 type ChatItem =
@@ -40,10 +43,26 @@ function groupMessages(messages: ChatMessage[]): ChatItem[] {
   return items;
 }
 
-export default function ChatPanel({ messages, agentStatus }: ChatPanelProps) {
+export default function ChatPanel({
+  messages,
+  agentStatus,
+  agents = [],
+  filterAgentId = null,
+  onFilterAgentChange,
+}: ChatPanelProps) {
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollerRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
+
+  const agentLabel = (id?: string) =>
+    agents.find((a) => a.id === id)?.label || (id ? id.slice(0, 6) : undefined);
+
+  const filtered =
+    filterAgentId && agents.length > 1
+      ? messages.filter(
+          (m) => !m.agentId || m.agentId === filterAgentId,
+        )
+      : messages;
 
   useEffect(() => {
     const el = scrollerRef.current;
@@ -60,9 +79,9 @@ export default function ChatPanel({ messages, agentStatus }: ChatPanelProps) {
     if (stickToBottom.current) {
       bottomRef.current?.scrollIntoView({ behavior: "smooth" });
     }
-  }, [messages, agentStatus]);
+  }, [filtered, agentStatus]);
 
-  if (messages.length === 0) {
+  if (filtered.length === 0) {
     return (
       <div className="flex-1 min-h-0 flex flex-col items-center justify-center gap-2 px-4 sm:px-6">
         <div className="text-[#e4e4e4] text-[14px]">No messages yet</div>
@@ -74,34 +93,80 @@ export default function ChatPanel({ messages, agentStatus }: ChatPanelProps) {
     );
   }
 
-  const items = groupMessages(messages);
+  const items = groupMessages(filtered);
+  const showFilter = agents.length > 1 && onFilterAgentChange;
 
   return (
-    <div
-      ref={scrollerRef}
-      className="flex-1 min-h-0 overflow-y-auto overscroll-contain"
-    >
-      <div className="max-w-3xl mx-auto px-3 sm:px-4 py-3 sm:py-4 space-y-3 sm:space-y-4">
-        {items.map((item) =>
-          item.type === "tools" ? (
-            <ToolCallGroup key={item.key} messages={item.messages} />
-          ) : (
-            <MessageBubble key={item.message.id} message={item.message} />
-          ),
-        )}
-        {agentStatus === "running" && (
-          <div className="flex items-center gap-2 text-[12px] text-[#6e6e6e] px-1">
-            <span className="inline-block w-1.5 h-1.5 rounded-full bg-[#4d9fff] animate-pulse" />
-            Agent is working…
-          </div>
-        )}
-        <div ref={bottomRef} />
+    <div className="flex-1 min-h-0 flex flex-col">
+      {showFilter && (
+        <div className="flex items-center gap-1 px-3 py-1.5 border-b border-[#2b2b2b] shrink-0">
+          <button
+            type="button"
+            onClick={() => onFilterAgentChange(null)}
+            className={`h-6 px-2 rounded text-[11px] ${
+              !filterAgentId
+                ? "bg-[#252525] text-[#e4e4e4]"
+                : "text-[#6e6e6e] hover:text-[#e4e4e4]"
+            }`}
+          >
+            All agents
+          </button>
+          {agents.map((a) => (
+            <button
+              key={a.id}
+              type="button"
+              onClick={() => onFilterAgentChange(a.id)}
+              className={`h-6 px-2 rounded text-[11px] ${
+                filterAgentId === a.id
+                  ? "bg-[#252525] text-[#e4e4e4]"
+                  : "text-[#6e6e6e] hover:text-[#e4e4e4]"
+              }`}
+            >
+              {a.label}
+            </button>
+          ))}
+        </div>
+      )}
+      <div
+        ref={scrollerRef}
+        className="flex-1 min-h-0 overflow-y-auto overscroll-contain"
+      >
+        <div className="max-w-3xl mx-auto px-3 sm:px-4 py-3 sm:py-4 space-y-3 sm:space-y-4">
+          {items.map((item) =>
+            item.type === "tools" ? (
+              <ToolCallGroup
+                key={item.key}
+                messages={item.messages}
+                agentLabel={agentLabel(item.messages[0]?.agentId)}
+              />
+            ) : (
+              <MessageBubble
+                key={item.message.id}
+                message={item.message}
+                agentLabel={agentLabel(item.message.agentId)}
+              />
+            ),
+          )}
+          {agentStatus === "running" && (
+            <div className="flex items-center gap-2 text-[12px] text-[#6e6e6e] px-1">
+              <span className="inline-block w-1.5 h-1.5 rounded-full bg-[#4d9fff] animate-pulse" />
+              Agent is working…
+            </div>
+          )}
+          <div ref={bottomRef} />
+        </div>
       </div>
     </div>
   );
 }
 
-function ToolCallGroup({ messages }: { messages: ChatMessage[] }) {
+function ToolCallGroup({
+  messages,
+  agentLabel,
+}: {
+  messages: ChatMessage[];
+  agentLabel?: string;
+}) {
   const anyStreaming = messages.some((m) => m.status === "streaming");
   const anyDiff = messages.some((m) => Boolean(m.diffPatch));
   const [open, setOpen] = useState(anyStreaming || anyDiff);
@@ -131,6 +196,11 @@ function ToolCallGroup({ messages }: { messages: ChatMessage[] }) {
         <span className="text-[11px] uppercase tracking-wide text-[#6e6e6e]">
           Tools
         </span>
+        {agentLabel && (
+          <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#252525] text-[#a0a0a0]">
+            {agentLabel}
+          </span>
+        )}
         <span className="text-[12px] text-[#a0a0a0] truncate min-w-0 flex-1">
           {label}
         </span>
@@ -237,7 +307,13 @@ function Chevron({
   );
 }
 
-function MessageBubble({ message }: { message: ChatMessage }) {
+function MessageBubble({
+  message,
+  agentLabel,
+}: {
+  message: ChatMessage;
+  agentLabel?: string;
+}) {
   if (message.role === "user") {
     return (
       <div className="flex justify-end">
@@ -253,6 +329,11 @@ function MessageBubble({ message }: { message: ChatMessage }) {
             >
               {message.senderName || "User"}
             </span>
+            {agentLabel && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#1a1a1a] text-[#6e6e6e]">
+                → {agentLabel}
+              </span>
+            )}
             <span className="text-[10px] text-[#4a4a4a] font-mono">
               {formatTime(message.ts)}
             </span>
@@ -269,7 +350,9 @@ function MessageBubble({ message }: { message: ChatMessage }) {
     <div className="flex justify-start">
       <div className="max-w-[95%] sm:max-w-[90%] rounded-2xl rounded-bl-md bg-[#1a1a1a] border border-[#2b2b2b] px-3 sm:px-3.5 py-2 sm:py-2.5">
         <div className="flex items-center gap-2 mb-1">
-          <span className="text-[11px] font-medium text-[#a0a0a0]">Agent</span>
+          <span className="text-[11px] font-medium text-[#a0a0a0]">
+            {agentLabel || "Agent"}
+          </span>
           <span className="text-[10px] text-[#4a4a4a] font-mono">
             {formatTime(message.ts)}
           </span>

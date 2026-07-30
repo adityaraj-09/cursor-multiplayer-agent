@@ -13,6 +13,7 @@ interface SidePanelProps {
   /** Mobile bottom-sheet mode */
   mobile?: boolean;
   onClose?: () => void;
+  agentId?: string | null;
 }
 
 export default function SidePanel({
@@ -23,6 +24,7 @@ export default function SidePanel({
   prUrl,
   mobile = false,
   onClose,
+  agentId = null,
 }: SidePanelProps) {
   const fileCount = lastDiff
     ? (lastDiff.match(/^diff --git /gm) || []).length
@@ -84,7 +86,12 @@ export default function SidePanel({
             </div>
           </div>
         ) : (
-          <DiffViewer socket={socket} initialPatch={lastDiff} hideHeader />
+          <DiffViewer
+            socket={socket}
+            initialPatch={lastDiff}
+            hideHeader
+            agentId={agentId}
+          />
         )}
       </div>
     </>

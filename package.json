@@ -12,6 +12,8 @@
     "start": "node dist/server/index.js",
     "start:server": "node dist/server/index.js",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "postinstall": "chmod +x node_modules/.pnpm/node-pty@*/node_modules/node-pty/prebuilds/darwin-*/spawn-helper 2>/dev/null || true",
     "smoke:pty": "tsx scripts/smoke-pty.ts"
   },
@@ -39,6 +41,7 @@
     "@types/pg": "^8.20.0",
     "concurrently": "^10.0.4",
     "tsx": "^4.19.0",
-    "typescript": "^5.7.0"
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
   }
 }

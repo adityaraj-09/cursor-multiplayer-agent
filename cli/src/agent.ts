@@ -4,163 +4,46 @@ import { existsSync } from "fs";
 import { resolve, relative, isAbsolute } from "path";
 import { execFile } from "child_process";
 import { promisify } from "util";
+import {
+  cursorAgentBackend,
+  isEditTool,
+  type NormalizedAgentEvent,
+} from "../../shared/backends/index.js";
 
 const execFileAsync = promisify(execFile);
 
-// ── Stream event types ──────────────────────────────────────────────
+export type AgentStreamEvent = NormalizedAgentEvent;
+export { isEditTool };
 
-export type AgentStreamEvent =
-  | { kind: "session"; sessionId: string }
-  | { kind: "assistant_delta"; text: string }
-  | { kind: "assistant_final"; text: string }
-  | {
-      kind: "tool_start";
-      callId: string;
-      name: string;
-      detail: string;
-      path?: string;
-    }
-  | {
-      kind: "tool_done";
-      callId: string;
-      name: string;
-      detail: string;
-      path?: string;
-      diffPatch?: string;
-    }
-  | { kind: "error"; message: string }
-  | { kind: "done"; result: string };
+// ── Concurrent child registry ────────────────────────────────────────
 
-// ── Helpers (from server/agentRunner.ts) ─────────────────────────────
+const activeChildren = new Map<string, ChildProcess>();
 
-function extractText(message: unknown): string {
-  if (!message || typeof message !== "object") return "";
-  const content = (message as { content?: unknown }).content;
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-  return content
-    .map((part) => {
-      if (part && typeof part === "object" && "text" in part) {
-        return String((part as { text: unknown }).text ?? "");
-      }
-      return "";
-    })
-    .join("");
-}
-
-function toolInfo(toolCall: Record<string, unknown> | undefined): {
-  name: string;
-  detail: string;
-  path?: string;
-  args?: Record<string, unknown>;
-} {
-  if (!toolCall) return { name: "tool", detail: "" };
-  const key = Object.keys(toolCall).find(
-    (k) =>
-      k.endsWith("ToolCall") ||
-      (!["hookAdditionalContexts", "toolCallId", "startedAtMs", "completedAtMs"].includes(k) &&
-        typeof toolCall[k] === "object"),
-  );
-  const name = key ? key.replace(/ToolCall$/, "") : "tool";
-  const body = key ? (toolCall[key] as Record<string, unknown>) : undefined;
-  const args =
-    body?.args && typeof body.args === "object"
-      ? (body.args as Record<string, unknown>)
-      : undefined;
-  let detail = "";
-  let path: string | undefined;
-  if (args) {
-    for (const k of ["path", "filePath", "file_path", "target_file", "targetFile"]) {
-      if (typeof args[k] === "string" && String(args[k]).trim()) {
-        path = String(args[k]).trim();
-        break;
-      }
-    }
-    detail =
-      String(args.command ?? args.globPattern ?? path ?? args.targetDirectory ?? "") ||
-      JSON.stringify(args).slice(0, 120);
+export function abortRun(runKey: string): void {
+  const child = activeChildren.get(runKey);
+  if (child) {
+    child.kill("SIGTERM");
+    activeChildren.delete(runKey);
   }
-  return { name, detail, path, args };
 }
 
-function buildUnifiedDiff(filePath: string, before: string, after: string): string {
-  const path = filePath.replace(/\\/g, "/").replace(/^\.\//, "") || "file";
-  if (before === after) return "";
-  const oldLines = before.length ? before.replace(/\n$/, "").split("\n") : [];
-  const newLines = after.length ? after.replace(/\n$/, "").split("\n") : [];
-  const deleted = after.length === 0 && before.length > 0;
-  const created = before.length === 0 && after.length > 0;
-  const hunk: string[] = [
-    `@@ -${created ? 0 : 1},${oldLines.length} +${deleted ? 0 : 1},${newLines.length} @@`,
-  ];
-  for (const line of oldLines) hunk.push(`-${line}`);
-  for (const line of newLines) hunk.push(`+${line}`);
-  return [
-    `diff --git a/${path} b/${path}`,
-    deleted ? `deleted file mode 100644` : "",
-    created ? `new file mode 100644` : "",
-    created ? `--- /dev/null` : `--- a/${path}`,
-    deleted ? `+++ /dev/null` : `+++ b/${path}`,
-    ...hunk,
-  ]
-    .filter((l) => l !== "")
-    .join("\n");
-}
-
-function diffFromToolArgs(
-  toolName: string,
-  args?: Record<string, unknown>,
-): string {
-  if (!args) return "";
-  const path =
-    (typeof args.path === "string" && args.path) ||
-    (typeof args.file_path === "string" && args.file_path) ||
-    (typeof args.target_file === "string" && args.target_file) ||
-    "file";
-  const name = toolName.replace(/ToolCall$/i, "").toLowerCase();
-  const oldStr =
-    (typeof args.old_string === "string" && args.old_string) ||
-    (typeof args.oldString === "string" && args.oldString) ||
-    undefined;
-  const newStr =
-    (typeof args.new_string === "string" && args.new_string) ||
-    (typeof args.newString === "string" && args.newString) ||
-    undefined;
-  if (typeof oldStr === "string" && typeof newStr === "string") {
-    return buildUnifiedDiff(path, oldStr, newStr);
+export function abortAll(): void {
+  for (const [key, child] of activeChildren) {
+    child.kill("SIGTERM");
+    activeChildren.delete(key);
   }
-  const contents =
-    (typeof args.contents === "string" && args.contents) ||
-    (typeof args.content === "string" && args.content) ||
-    undefined;
-  if (
-    typeof contents === "string" &&
-    /^(write|create|updatefile|writefile)/i.test(name)
-  ) {
-    return buildUnifiedDiff(path, "", contents);
-  }
-  if (typeof args.patch === "string" && /diff --git|@@ /.test(args.patch)) {
-    return args.patch.trim();
-  }
-  return "";
 }
 
-// ── Edit-tool detection (from server/gitDiff.ts) ─────────────────────
-
-const EDIT_TOOL_RE =
-  /^(write|edit|strreplace|searchreplace|delete|applypatch|editnotebook|create|updatefile|deletefile|writefile)/i;
-
-export function isEditTool(name: string): boolean {
-  return EDIT_TOOL_RE.test(name.replace(/ToolCall$/i, ""));
+/** @deprecated Use abortRun(runKey) or abortAll(). */
+export function abortAgent(runKey?: string): void {
+  if (runKey) abortRun(runKey);
+  else abortAll();
 }
 
-// ── Agent runner ─────────────────────────────────────────────────────
-
-let activeChild: ChildProcess | null = null;
-
-export function abortAgent(): void {
-  activeChild?.kill("SIGTERM");
-  activeChild = null;
+export interface RunHandle {
+  runKey: string;
+  abort: () => void;
+  promise: Promise<void>;
 }
 
 export function runAgent(
@@ -169,127 +52,80 @@ export function runAgent(
   modelId: string,
   onEvent: (event: AgentStreamEvent) => void,
   sessionId?: string | null,
+  runKey = `run_${Date.now()}`,
 ): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const args = [
-      "agent",
-      "--print",
-      "--output-format",
-      "stream-json",
-      "--stream-partial-output",
-      "--force",
-      "--trust",
-    ];
-    if (modelId && modelId !== "auto") {
-      args.push("--model", modelId);
-    }
-    if (sessionId) {
-      args.push("--resume", sessionId);
-    }
-    args.push(prompt);
+  return runAgentWithHandle(
+    repoPath,
+    prompt,
+    modelId,
+    onEvent,
+    sessionId,
+    runKey,
+  ).promise;
+}
 
-    const child = spawn("cursor", args, {
+export function runAgentWithHandle(
+  repoPath: string,
+  prompt: string,
+  modelId: string,
+  onEvent: (event: AgentStreamEvent) => void,
+  sessionId?: string | null,
+  runKey = `run_${Date.now()}`,
+): RunHandle {
+  const promise = new Promise<void>((resolvePromise, reject) => {
+    const args = cursorAgentBackend.buildArgs({
+      prompt,
+      modelId,
+      sessionId,
+    });
+
+    const child = spawn(cursorAgentBackend.command, args, {
       cwd: repoPath,
       env: process.env as NodeJS.ProcessEnv,
       stdio: ["ignore", "pipe", "pipe"],
     });
-    activeChild = child;
+    activeChildren.set(runKey, child);
 
     let stderr = "";
     let settled = false;
-    let assistantBuf = "";
-    let gotTerminalEvent = false;
+    const ctx = {
+      assistantBuf: { value: "" },
+      gotTerminalEvent: { value: false },
+      stderr: "",
+    };
 
     const finish = (err?: Error) => {
       if (settled) return;
       settled = true;
-      activeChild = null;
+      if (activeChildren.get(runKey) === child) {
+        activeChildren.delete(runKey);
+      }
       if (err) reject(err);
-      else resolve();
+      else resolvePromise();
     };
 
     child.stderr.on("data", (chunk: Buffer) => {
       stderr += chunk.toString();
+      ctx.stderr = stderr;
     });
 
     const rl = createInterface({ input: child.stdout });
     rl.on("line", (line) => {
       const trimmed = line.trim();
       if (!trimmed) return;
-      let ev: Record<string, unknown>;
+      let ev: unknown;
       try {
-        ev = JSON.parse(trimmed) as Record<string, unknown>;
+        ev = JSON.parse(trimmed);
       } catch {
         return;
       }
-
-      const type = ev.type as string;
-
-      if (type === "system" && ev.subtype === "init" && ev.session_id) {
-        onEvent({ kind: "session", sessionId: String(ev.session_id) });
-        return;
-      }
-
-      if (type === "assistant") {
-        const text = extractText(ev.message);
-        if (!text) return;
-        if ("timestamp_ms" in ev) {
-          assistantBuf += text;
-          onEvent({ kind: "assistant_delta", text: assistantBuf });
-        } else {
-          assistantBuf = text;
-          onEvent({ kind: "assistant_final", text });
-        }
-        return;
-      }
-
-      if (type === "tool_call") {
-        const callId = String(ev.call_id ?? "");
-        const info = toolInfo(ev.tool_call as Record<string, unknown>);
-        if (ev.subtype === "started") {
-          onEvent({
-            kind: "tool_start",
-            callId,
-            name: info.name,
-            detail: info.detail,
-            path: info.path,
-          });
-        } else if (ev.subtype === "completed") {
-          const diffPatch =
-            isEditTool(info.name) && info.args
-              ? diffFromToolArgs(info.name, info.args)
-              : undefined;
-          onEvent({
-            kind: "tool_done",
-            callId,
-            name: info.name,
-            detail: info.detail,
-            path: info.path,
-            diffPatch: diffPatch || undefined,
-          });
-        }
-        return;
-      }
-
-      if (type === "result") {
-        gotTerminalEvent = true;
-        if (ev.session_id) {
-          onEvent({ kind: "session", sessionId: String(ev.session_id) });
-        }
-        if (ev.is_error) {
-          const msg = String(
-            ev.result != null && ev.result !== "" ? ev.result : stderr || "Agent error",
-          );
-          onEvent({ kind: "error", message: msg });
-        } else {
-          const result = String(ev.result ?? assistantBuf);
-          onEvent({ kind: "done", result });
-        }
+      for (const event of cursorAgentBackend.parseLine(ev, ctx)) {
+        onEvent(event);
       }
     });
 
     child.on("error", (err) => {
-      if (!gotTerminalEvent) {
+      if (!ctx.gotTerminalEvent.value) {
         onEvent({ kind: "error", message: err.message });
       }
       finish(err);
@@ -298,22 +134,29 @@ export function runAgent(
     child.on("close", (code) => {
       if (settled) return;
       if (code === 0) {
-        if (!gotTerminalEvent && assistantBuf) {
-          onEvent({ kind: "done", result: assistantBuf });
+        if (!ctx.gotTerminalEvent.value && ctx.assistantBuf.value) {
+          onEvent({ kind: "done", result: ctx.assistantBuf.value });
         }
         finish();
       } else {
-        const msg = stderr.trim() || `Agent exited with code ${code ?? "unknown"}`;
-        if (!gotTerminalEvent) {
+        const msg =
+          stderr.trim() || `Agent exited with code ${code ?? "unknown"}`;
+        if (!ctx.gotTerminalEvent.value) {
           onEvent({ kind: "error", message: msg });
         }
         finish(new Error(msg));
       }
     });
   });
+
+  return {
+    runKey,
+    abort: () => abortRun(runKey),
+    promise,
+  };
 }
 
-// ── File diff (from server/gitDiff.ts) ───────────────────────────────
+// ── File diff ────────────────────────────────────────────────────────
 
 function resolveInRepo(repoPath: string, filePath: string): string | null {
   const abs = isAbsolute(filePath) ? filePath : resolve(repoPath, filePath);
@@ -348,7 +191,10 @@ async function isTracked(repoPath: string, rel: string): Promise<boolean> {
   }
 }
 
-export async function getFileDiff(repoPath: string, filePath: string): Promise<string> {
+export async function getFileDiff(
+  repoPath: string,
+  filePath: string,
+): Promise<string> {
   const rel = resolveInRepo(repoPath, filePath);
   if (!rel) return "";
 
@@ -359,7 +205,13 @@ export async function getFileDiff(repoPath: string, filePath: string): Promise<s
   if (!patch) patch = await runGit(repoPath, ["diff", "--cached", "--", rel]);
 
   if (!patch && existsSync(abs) && !(await isTracked(repoPath, rel))) {
-    patch = await runGit(repoPath, ["diff", "--no-index", "--", "/dev/null", rel]);
+    patch = await runGit(repoPath, [
+      "diff",
+      "--no-index",
+      "--",
+      "/dev/null",
+      rel,
+    ]);
   }
 
   return patch.trim();

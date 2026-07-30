@@ -7,6 +7,8 @@ interface DiffViewerProps {
   socket: AppSocket | null;
   initialPatch?: string;
   hideHeader?: boolean;
+  /** When set, only apply diff-update events for this agent. */
+  agentId?: string | null;
 }
 
 interface FileDiff {
@@ -30,6 +32,7 @@ export default function DiffViewer({
   socket,
   initialPatch = "",
   hideHeader = false,
+  agentId = null,
 }: DiffViewerProps) {
   const [patch, setPatch] = useState(initialPatch);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
@@ -40,12 +43,16 @@ export default function DiffViewer({
 
   useEffect(() => {
     if (!socket) return;
-    const handler = (p: string) => setPatch(p);
+    const handler = (p: string, eventAgentId?: string) => {
+      if (agentId && eventAgentId && eventAgentId !== agentId) return;
+      if (agentId && !eventAgentId) return;
+      setPatch(p);
+    };
     socket.on("diff-update", handler);
     return () => {
       socket.off("diff-update", handler);
     };
-  }, [socket]);
+  }, [socket, agentId]);
 
   const files = useMemo(() => splitPatch(patch), [patch]);
 

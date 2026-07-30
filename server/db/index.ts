@@ -1,4 +1,4 @@
-export type { RoomRow, CreateRoomInput } from "./sqlite.js";
+export type { RoomRow, CreateRoomInput, AgentRow, CreateAgentInput } from "./sqlite.js";
 
 const url = process.env.DATABASE_URL ?? "";
 const usePostgres = url.startsWith("postgres");
@@ -55,3 +55,20 @@ export const registerWorker = backend.registerWorker;
 export const updateWorkerStatus = backend.updateWorkerStatus;
 export const getOnlineWorkers = backend.getOnlineWorkers;
 export const listRoomsByUser = backend.listRoomsByUser;
+
+// Agents
+export const createAgent = backend.createAgent;
+export const getAgent = backend.getAgent;
+export const listAgents = backend.listAgents;
+export const updateAgentStatus = backend.updateAgentStatus;
+export const setAgentSessionId = backend.setAgentSessionId;
+export const setAgentSdkId = backend.setAgentSdkId;
+export const setAgentModel = backend.setAgentModel;
+export const setAgentLabel = backend.setAgentLabel;
+export const setAgentScope = backend.setAgentScope;
+export const setAgentPr = backend.setAgentPr;
+export const deleteAgent = backend.deleteAgent;
+export const setAgentDriver = backend.setAgentDriver;
+export const clearAgentDriver = backend.clearAgentDriver;
+export const getAgentDrivers = backend.getAgentDrivers;
+export const migrateAgentsV1 = backend.migrateAgentsV1;

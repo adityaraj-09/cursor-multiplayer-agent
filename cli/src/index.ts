@@ -23,7 +23,7 @@ function prompt(question: string): Promise<string> {
 program
   .name("steer")
   .description("CLI worker for Steer — run local Cursor agents")
-  .version("0.2.0");
+  .version("0.4.0");
 
 program
   .command("login")

@@ -7,9 +7,11 @@ import { useSocket } from "../../../hooks/useSocket";
 import { useAuth } from "../../../components/AuthProvider";
 import {
   abortRoomRun,
+  addRoomAgent,
   fetchOrJoinRoom,
   fetchRoomModels,
   stopRoom,
+  stopRoomAgent,
   updateRoomCursorSession,
   updateRoomModel,
 } from "../../../lib/api";
@@ -25,6 +27,9 @@ import SteerInput from "../../../components/SteerInput";
 import CursorSessionPicker from "../../../components/CursorSessionPicker";
 import DriverControls from "../../../components/DriverControls";
 import InvitePanel from "../../../components/InvitePanel";
+import AgentTabs from "../../../components/AgentTabs";
+import AddAgentDialog from "../../../components/AddAgentDialog";
+import ConflictBanner from "../../../components/ConflictBanner";
 import type { ModelInfo, RoomInfo } from "../../../../shared/events";
 
 export default function RoomPage() {
@@ -196,6 +201,10 @@ function LiveRoom({
     amDriver,
     mySocketId,
     messages,
+    agents,
+    statusByAgent,
+    diffByAgent,
+    conflicts,
     agentStatus,
     agentError,
     pendingRequest,
@@ -209,6 +218,7 @@ function LiveRoom({
     leaveRoom,
     removeMember,
     dismissDriveRequest,
+    drivingAgentIds,
   } = useSocket(roomId, userName);
 
   const { user } = useAuth();
@@ -226,18 +236,58 @@ function LiveRoom({
   const [savingModel, setSavingModel] = useState(false);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [changesOpen, setChangesOpen] = useState(false);
+  const [addAgentOpen, setAddAgentOpen] = useState(false);
   const [cursorSessionError, setCursorSessionError] = useState("");
   const [savingCursorSession, setSavingCursorSession] = useState(false);
   const [actionError, setActionError] = useState("");
   const [stopping, setStopping] = useState(false);
   const [aborting, setAborting] = useState(false);
+  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+  const [chatFilterAgentId, setChatFilterAgentId] = useState<string | null>(
+    null,
+  );
+
+  // Auto-select first agent when agents arrive
+  useEffect(() => {
+    if (!agents.length) return;
+    if (
+      !selectedAgentId ||
+      !agents.some((a) => a.id === selectedAgentId)
+    ) {
+      const first =
+        agents.find((a) => a.status !== "stopped") || agents[0];
+      setSelectedAgentId(first.id);
+      if (agents.length > 1) setChatFilterAgentId(first.id);
+    }
+  }, [agents, selectedAgentId]);
+
+  const selectedAgent =
+    agents.find((a) => a.id === selectedAgentId) || agents[0] || null;
+  const selectedStatus: typeof agentStatus =
+    (selectedAgentId && statusByAgent[selectedAgentId]) ||
+    (selectedAgent?.status === "running"
+      ? "running"
+      : selectedAgent?.status === "error"
+        ? "error"
+        : agentStatus);
+  const selectedDiff =
+    (selectedAgentId && diffByAgent[selectedAgentId]) || lastDiff;
+  const amDrivingSelected =
+    Boolean(selectedAgentId && drivingAgentIds.includes(selectedAgentId)) ||
+    (agents.length <= 1 && (amDriver || amHost));
 
   useEffect(() => {
     if (!socket || !roomInfo) return;
-    const onCursorSession = (sessionId: string | null) => {
+    const onCursorSession = (
+      sessionIdOrAgentId: string | null,
+      sessionId?: string | null,
+    ) => {
+      // New: (agentId, sessionId); legacy: (sessionId)
+      const next =
+        sessionId !== undefined ? sessionId : sessionIdOrAgentId;
       onRoomInfo({
         ...roomInfo,
-        cursorSessionId: sessionId ?? undefined,
+        cursorSessionId: next ?? undefined,
       });
     };
     socket.on("cursor-session-updated", onCursorSession);
@@ -293,11 +343,16 @@ function LiveRoom({
 
   const handleCursorSessionChange = useCallback(
     async (next: string | null) => {
-      if (next === (roomInfo?.cursorSessionId || null)) return;
+      if (next === (selectedAgent?.sessionId || roomInfo?.cursorSessionId || null))
+        return;
       setSavingCursorSession(true);
       setCursorSessionError("");
       try {
-        const updated = await updateRoomCursorSession(roomId, next);
+        const updated = await updateRoomCursorSession(
+          roomId,
+          next,
+          selectedAgentId || undefined,
+        );
         onRoomInfo(updated);
       } catch (err) {
         setCursorSessionError(
@@ -307,13 +362,22 @@ function LiveRoom({
         setSavingCursorSession(false);
       }
     },
-    [roomInfo?.cursorSessionId, onRoomInfo, roomId],
+    [
+      selectedAgent?.sessionId,
+      roomInfo?.cursorSessionId,
+      selectedAgentId,
+      onRoomInfo,
+      roomId,
+    ],
   );
 
   const handleGrantDrive = useCallback(() => {
     if (!pendingRequest) return;
-    grantDrive(pendingRequest.socketId);
-  }, [pendingRequest, grantDrive]);
+    grantDrive(
+      pendingRequest.socketId,
+      pendingRequest.agentId || selectedAgentId || undefined,
+    );
+  }, [pendingRequest, grantDrive, selectedAgentId]);
 
   const handleStopSession = useCallback(async () => {
     if (
@@ -340,7 +404,7 @@ function LiveRoom({
     setAborting(true);
     setActionError("");
     try {
-      await abortRoomRun(roomId);
+      await abortRoomRun(roomId, selectedAgentId || undefined);
     } catch (err) {
       setActionError(
         err instanceof Error ? err.message : "Failed to abort run",
@@ -348,10 +412,38 @@ function LiveRoom({
     } finally {
       setAborting(false);
     }
-  }, [roomId]);
+  }, [roomId, selectedAgentId]);
 
-  const fileCount = lastDiff
-    ? (lastDiff.match(/^diff --git /gm) || []).length
+  const handleAddAgent = useCallback(
+    async (data: {
+      label: string;
+      backend: "cursor" | "claude-code";
+      scopePath?: string;
+      modelId?: string;
+    }) => {
+      const agent = await addRoomAgent(roomId, data);
+      setSelectedAgentId(agent.id);
+      setChatFilterAgentId(agent.id);
+    },
+    [roomId],
+  );
+
+  const handleStopAgent = useCallback(
+    async (agentId: string) => {
+      if (!window.confirm("Stop this agent?")) return;
+      try {
+        await stopRoomAgent(roomId, agentId);
+      } catch (err) {
+        setActionError(
+          err instanceof Error ? err.message : "Failed to stop agent",
+        );
+      }
+    },
+    [roomId],
+  );
+
+  const fileCount = selectedDiff
+    ? (selectedDiff.match(/^diff --git /gm) || []).length
     : 0;
 
   return (
@@ -380,7 +472,7 @@ function LiveRoom({
             }`}
             title={connected ? "Connected" : "Disconnected"}
           />
-          {agentStatus === "running" && (
+          {selectedStatus === "running" && (
             <span className="text-[11px] text-[#4d9fff] hidden xs:inline sm:inline">
               Running
             </span>
@@ -402,7 +494,7 @@ function LiveRoom({
           >
             Invite
           </button>
-          {agentStatus === "running" && (
+          {selectedStatus === "running" && (
             <button
               type="button"
               onClick={() => void handleAbortRun()}
@@ -445,40 +537,77 @@ function LiveRoom({
           />
           <div className="hidden sm:block w-px h-4 bg-[#2b2b2b]" />
           <span className="text-[11px] text-[#6e6e6e] hidden md:inline">
-            {amHost ? "Host" : amDriver ? "Driving" : "Joined"}
+            {amHost ? "Host" : amDrivingSelected ? "Driving" : "Joined"}
           </span>
           <DriverControls
-            amDriver={amDriver || amHost}
-            pendingRequest={pendingRequest?.name ?? null}
-            onRequestDrive={requestDrive}
-            onReleaseDrive={releaseDrive}
+            amDriver={amDrivingSelected || amHost}
+            pendingRequest={
+              !pendingRequest?.agentId ||
+              pendingRequest.agentId === selectedAgentId
+                ? (pendingRequest?.name ?? null)
+                : null
+            }
+            onRequestDrive={() =>
+              requestDrive(selectedAgentId || undefined)
+            }
+            onReleaseDrive={() =>
+              releaseDrive(selectedAgentId || undefined)
+            }
             onGrantDrive={handleGrantDrive}
             onDismissRequest={dismissDriveRequest}
           />
         </div>
       </header>
 
+      <AgentTabs
+        agents={agents}
+        selectedAgentId={selectedAgentId}
+        onSelect={(id) => {
+          setSelectedAgentId(id);
+          if (agents.length > 1) setChatFilterAgentId(id);
+        }}
+        statusByAgent={statusByAgent}
+        participants={participants}
+        amHost={amHost}
+        onAddAgent={() => setAddAgentOpen(true)}
+        onStopAgent={(id) => void handleStopAgent(id)}
+      />
+
+      <ConflictBanner
+        conflicts={conflicts}
+        agents={agents}
+        currentAgentId={selectedAgentId}
+      />
+
       <main className="flex flex-1 min-h-0 min-w-0 overflow-hidden">
         <div className="flex-1 flex flex-col min-h-0 min-w-0 overflow-hidden">
-          <ChatPanel messages={messages} agentStatus={agentStatus} />
+          <ChatPanel
+            messages={messages}
+            agentStatus={selectedStatus}
+            agents={agents}
+            filterAgentId={chatFilterAgentId}
+            onFilterAgentChange={setChatFilterAgentId}
+          />
         </div>
 
         <SidePanel
           socket={socket}
-          lastDiff={lastDiff}
+          lastDiff={selectedDiff}
           runtime={runtime}
           cloudMeta={cloudMeta}
-          prUrl={roomInfo?.prUrl}
+          prUrl={selectedAgent?.prUrl || roomInfo?.prUrl}
+          agentId={selectedAgentId}
         />
       </main>
 
       {changesOpen && (
         <SidePanel
           socket={socket}
-          lastDiff={lastDiff}
+          lastDiff={selectedDiff}
           runtime={runtime}
           cloudMeta={cloudMeta}
-          prUrl={roomInfo?.prUrl}
+          prUrl={selectedAgent?.prUrl || roomInfo?.prUrl}
+          agentId={selectedAgentId}
           mobile
           onClose={() => setChangesOpen(false)}
         />
@@ -489,6 +618,15 @@ function LiveRoom({
         open={inviteOpen}
         onClose={() => setInviteOpen(false)}
         canManage={amHost}
+      />
+
+      <AddAgentDialog
+        open={addAgentOpen}
+        onClose={() => setAddAgentOpen(false)}
+        onSubmit={handleAddAgent}
+        models={models}
+        defaultModelId={modelId}
+        runtime={runtime}
       />
 
       <footer className="border-t border-[#2b2b2b] bg-[#1a1a1a] shrink-0 pb-[env(safe-area-inset-bottom)]">
@@ -502,24 +640,26 @@ function LiveRoom({
             <CursorSessionPicker
               roomId={roomId}
               repoPath={roomInfo.repoPath}
-              cursorSessionId={roomInfo.cursorSessionId}
-              disabled={agentStatus === "running" || savingCursorSession}
+              cursorSessionId={
+                selectedAgent?.sessionId || roomInfo.cursorSessionId
+              }
+              disabled={selectedStatus === "running" || savingCursorSession}
               canChange={amHost}
               onSessionChange={(id) => void handleCursorSessionChange(id)}
             />
             <p className="text-[10px] text-[#6e6e6e] mt-1 px-0.5">
-              {roomInfo.cursorSessionId
-                ? "Next message resumes this Steer room’s Cursor chat."
+              {selectedAgent?.sessionId || roomInfo.cursorSessionId
+                ? "Next message resumes this agent’s Cursor chat."
                 : "First message starts a new Cursor chat; reopening this Steer session resumes it."}
             </p>
           </div>
         )}
         <SteerInput
-          onSend={sendSteer}
-          agentBusy={agentStatus === "running"}
+          onSend={(text) => sendSteer(text, selectedAgentId || undefined)}
+          agentBusy={selectedStatus === "running"}
           connected={connected}
           models={models}
-          modelId={modelId}
+          modelId={selectedAgent?.modelId || modelId}
           onModelChange={(id) => void handleModelChange(id)}
           modelDisabled={!amHost || savingModel}
           modelLockReason={
@@ -529,7 +669,11 @@ function LiveRoom({
                 ? "Saving…"
                 : undefined
           }
-          placeholder="Message the agent…"
+          placeholder={
+            selectedAgent
+              ? `Message ${selectedAgent.label}…`
+              : "Message the agent…"
+          }
         />
       </footer>
     </div>
