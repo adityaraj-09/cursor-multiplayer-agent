@@ -26,6 +26,7 @@ export type AgentStreamEvent =
       name: string;
       detail: string;
       path?: string;
+      diffPatch?: string;
     }
   | { kind: "error"; message: string }
   | { kind: "done"; result: string };
@@ -51,6 +52,7 @@ function toolInfo(toolCall: Record<string, unknown> | undefined): {
   name: string;
   detail: string;
   path?: string;
+  args?: Record<string, unknown>;
 } {
   if (!toolCall) return { name: "tool", detail: "" };
   const key = Object.keys(toolCall).find(
@@ -78,7 +80,69 @@ function toolInfo(toolCall: Record<string, unknown> | undefined): {
       String(args.command ?? args.globPattern ?? path ?? args.targetDirectory ?? "") ||
       JSON.stringify(args).slice(0, 120);
   }
-  return { name, detail, path };
+  return { name, detail, path, args };
+}
+
+function buildUnifiedDiff(filePath: string, before: string, after: string): string {
+  const path = filePath.replace(/\\/g, "/").replace(/^\.\//, "") || "file";
+  if (before === after) return "";
+  const oldLines = before.length ? before.replace(/\n$/, "").split("\n") : [];
+  const newLines = after.length ? after.replace(/\n$/, "").split("\n") : [];
+  const deleted = after.length === 0 && before.length > 0;
+  const created = before.length === 0 && after.length > 0;
+  const hunk: string[] = [
+    `@@ -${created ? 0 : 1},${oldLines.length} +${deleted ? 0 : 1},${newLines.length} @@`,
+  ];
+  for (const line of oldLines) hunk.push(`-${line}`);
+  for (const line of newLines) hunk.push(`+${line}`);
+  return [
+    `diff --git a/${path} b/${path}`,
+    deleted ? `deleted file mode 100644` : "",
+    created ? `new file mode 100644` : "",
+    created ? `--- /dev/null` : `--- a/${path}`,
+    deleted ? `+++ /dev/null` : `+++ b/${path}`,
+    ...hunk,
+  ]
+    .filter((l) => l !== "")
+    .join("\n");
+}
+
+function diffFromToolArgs(
+  toolName: string,
+  args?: Record<string, unknown>,
+): string {
+  if (!args) return "";
+  const path =
+    (typeof args.path === "string" && args.path) ||
+    (typeof args.file_path === "string" && args.file_path) ||
+    (typeof args.target_file === "string" && args.target_file) ||
+    "file";
+  const name = toolName.replace(/ToolCall$/i, "").toLowerCase();
+  const oldStr =
+    (typeof args.old_string === "string" && args.old_string) ||
+    (typeof args.oldString === "string" && args.oldString) ||
+    undefined;
+  const newStr =
+    (typeof args.new_string === "string" && args.new_string) ||
+    (typeof args.newString === "string" && args.newString) ||
+    undefined;
+  if (typeof oldStr === "string" && typeof newStr === "string") {
+    return buildUnifiedDiff(path, oldStr, newStr);
+  }
+  const contents =
+    (typeof args.contents === "string" && args.contents) ||
+    (typeof args.content === "string" && args.content) ||
+    undefined;
+  if (
+    typeof contents === "string" &&
+    /^(write|create|updatefile|writefile)/i.test(name)
+  ) {
+    return buildUnifiedDiff(path, "", contents);
+  }
+  if (typeof args.patch === "string" && /diff --git|@@ /.test(args.patch)) {
+    return args.patch.trim();
+  }
+  return "";
 }
 
 // ── Edit-tool detection (from server/gitDiff.ts) ─────────────────────
@@ -191,12 +255,17 @@ export function runAgent(
             path: info.path,
           });
         } else if (ev.subtype === "completed") {
+          const diffPatch =
+            isEditTool(info.name) && info.args
+              ? diffFromToolArgs(info.name, info.args)
+              : undefined;
           onEvent({
             kind: "tool_done",
             callId,
             name: info.name,
             detail: info.detail,
             path: info.path,
+            diffPatch: diffPatch || undefined,
           });
         }
         return;

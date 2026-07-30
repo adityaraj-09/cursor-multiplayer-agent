@@ -7,6 +7,7 @@ import {
   type SDKMessage,
 } from "@cursor/sdk";
 import type { AgentRuntime } from "../shared/events.js";
+import { diffFromToolArgs, isEditTool } from "./gitDiff.js";
 
 export interface RunGitInfo {
   branches: Array<{
@@ -33,6 +34,8 @@ export type SdkStreamEvent =
       name: string;
       detail: string;
       path?: string;
+      /** Synthetic or tool-provided unified diff for chat display. */
+      diffPatch?: string;
     }
   | { kind: "error"; message: string }
   | { kind: "done"; result: string; git?: RunGitInfo };
@@ -260,6 +263,10 @@ export class SdkAgentSession {
         if (event.type === "tool_call") {
           const detail = toolDetail(event.args);
           const path = toolPath(event.args);
+          const args =
+            event.args && typeof event.args === "object"
+              ? (event.args as Record<string, unknown>)
+              : undefined;
           if (event.status === "running") {
             item.onEvent({
               kind: "tool_start",
@@ -269,12 +276,17 @@ export class SdkAgentSession {
               path,
             });
           } else {
+            const diffPatch =
+              isEditTool(event.name) && args
+                ? diffFromToolArgs(event.name, args)
+                : undefined;
             item.onEvent({
               kind: "tool_done",
               callId: event.call_id,
               name: event.name,
               detail: detail || (event.status === "error" ? "error" : "done"),
               path,
+              diffPatch: diffPatch || undefined,
             });
           }
         }

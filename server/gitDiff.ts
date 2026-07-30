@@ -106,3 +106,104 @@ export async function getFileDiff(
 
   return patch.trim();
 }
+
+/** Build a minimal unified diff from before/after text (no repo required). */
+export function buildUnifiedDiff(
+  filePath: string,
+  before: string,
+  after: string,
+): string {
+  const path = filePath.replace(/\\/g, "/").replace(/^\.\//, "") || "file";
+  if (before === after) return "";
+
+  const oldLines = before.length ? before.replace(/\n$/, "").split("\n") : [];
+  const newLines = after.length ? after.replace(/\n$/, "").split("\n") : [];
+  const deleted = after.length === 0 && before.length > 0;
+  const created = before.length === 0 && after.length > 0;
+
+  const hunk: string[] = [
+    `@@ -${created ? 0 : 1},${oldLines.length} +${deleted ? 0 : 1},${newLines.length} @@`,
+  ];
+  for (const line of oldLines) hunk.push(`-${line}`);
+  for (const line of newLines) hunk.push(`+${line}`);
+
+  return [
+    `diff --git a/${path} b/${path}`,
+    deleted ? `deleted file mode 100644` : "",
+    created ? `new file mode 100644` : "",
+    created ? `--- /dev/null` : `--- a/${path}`,
+    deleted ? `+++ /dev/null` : `+++ b/${path}`,
+    ...hunk,
+  ]
+    .filter((line) => line !== "")
+    .join("\n");
+}
+
+function argString(
+  args: Record<string, unknown>,
+  keys: string[],
+): string | undefined {
+  for (const k of keys) {
+    const v = args[k];
+    if (typeof v === "string") return v;
+  }
+  return undefined;
+}
+
+/**
+ * Synthesize a unified diff from edit-tool arguments (works for cloud agents
+ * where we can't read a local git working tree).
+ */
+export function diffFromToolArgs(
+  toolName: string,
+  args?: Record<string, unknown> | null,
+): string {
+  if (!args || typeof args !== "object") return "";
+  const path =
+    extractToolPath("", args) ||
+    argString(args, ["path", "file_path", "target_file"]) ||
+    "file";
+  const name = toolName.replace(/ToolCall$/i, "").toLowerCase();
+
+  const oldStr = argString(args, [
+    "old_string",
+    "oldString",
+    "old_str",
+    "OldString",
+  ]);
+  const newStr = argString(args, [
+    "new_string",
+    "newString",
+    "new_str",
+    "NewString",
+  ]);
+  if (typeof oldStr === "string" && typeof newStr === "string") {
+    return buildUnifiedDiff(path, oldStr, newStr);
+  }
+
+  const contents = argString(args, [
+    "contents",
+    "content",
+    "new_contents",
+    "newContents",
+    "text",
+  ]);
+  if (
+    typeof contents === "string" &&
+    /^(write|create|updatefile|writefile|editnotebook)/i.test(name)
+  ) {
+    return buildUnifiedDiff(path, "", contents);
+  }
+
+  if (/^delete/i.test(name)) {
+    return buildUnifiedDiff(path, `/* deleted: ${path} */\n`, "");
+  }
+
+  // ApplyPatch-style: some tools send a ready-made patch
+  const patch = argString(args, ["patch", "diff", "unifiedDiff", "unified_diff"]);
+  if (typeof patch === "string" && /diff --git|@@ /.test(patch)) {
+    return patch.trim();
+  }
+
+  return "";
+}
