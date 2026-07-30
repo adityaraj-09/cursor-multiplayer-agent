@@ -344,5 +344,6 @@ export async function listModelsForKey(apiKey: string) {
 
 export async function listReposForKey(apiKey: string) {
   const repos = await Cursor.repositories.list({ apiKey });
-  return repos.map((r) => ({ url: r.url }));
+  // Cursor returns repos oldest-first; reverse so the latest connected repo is first in the UI.
+  return repos.map((r) => ({ url: r.url })).reverse();
 }
