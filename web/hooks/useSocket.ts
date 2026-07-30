@@ -18,6 +18,7 @@ interface UseSocketReturn {
   mySocketId: string | null;
   messages: ChatMessage[];
   agentStatus: AgentRunStatus;
+  agentError: string;
   pendingRequest: { socketId: string; name: string } | null;
   lastDiff: string;
   cloudMeta: CloudMeta | null;
@@ -42,6 +43,7 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
   const [mySocketId, setMySocketId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [agentStatus, setAgentStatus] = useState<AgentRunStatus>("idle");
+  const [agentError, setAgentError] = useState("");
   const [pendingRequest, setPendingRequest] = useState<{
     socketId: string;
     name: string;
@@ -100,7 +102,15 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
         ),
       );
     };
-    const onAgentStatus = (status: AgentRunStatus) => setAgentStatus(status);
+    const onAgentStatus = (status: AgentRunStatus, detail?: string) => {
+      setAgentStatus(status);
+      if (status === "error" && detail) {
+        setAgentError(detail);
+      } else if (status === "running" || status === "idle") {
+        // Keep last error visible until the next successful run starts.
+        if (status === "running") setAgentError("");
+      }
+    };
     const onDriveRequested = (payload: { socketId: string; name: string }) => {
       // Always surface a new request — dismissing one must not block later ones.
       setPendingRequest(payload);
@@ -117,7 +127,7 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
     };
 
     void (async () => {
-      // Retry briefly — Clerk getToken can be empty right after sign-in redirect.
+      // Ensure a token is available before the first connect attempt.
       let token: string | null = null;
       for (let i = 0; i < 10 && !cancelled; i++) {
         try {
@@ -130,7 +140,7 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
       }
       if (cancelled || !token) return;
 
-      const s = getSocket(roomId, name, token);
+      const s = getSocket(roomId, name, () => getTokenRef.current());
       attached = s;
       socketRef.current = s;
       setSocket(s);
@@ -181,6 +191,7 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
       setCloudMeta(null);
       setMySocketId(null);
       setAgentStatus("idle");
+      setAgentError("");
     };
   }, [roomId, name, isSignedIn]);
 
@@ -228,6 +239,7 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
     mySocketId,
     messages,
     agentStatus,
+    agentError,
     pendingRequest,
     lastDiff,
     cloudMeta,

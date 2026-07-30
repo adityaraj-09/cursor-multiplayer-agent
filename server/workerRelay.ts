@@ -122,13 +122,21 @@ export class WorkerRelay {
         );
 
         // Re-bind rooms that were mid-run when this worker dropped (agent kept going).
+        // Only allow reclaiming rooms owned by this worker's user.
         if (info.activeRoomId) {
-          this.roomToWorker.set(info.activeRoomId, conn.workerId);
-          conn.busy = true;
-          this.clearRoomGrace(info.activeRoomId);
-          console.log(
-            `[WorkerRelay] Resumed room ${info.activeRoomId} on reconnected worker`,
-          );
+          const room = db.getRoom(info.activeRoomId);
+          if (room && room.owner_id === userId) {
+            this.roomToWorker.set(info.activeRoomId, conn.workerId);
+            conn.busy = true;
+            this.clearRoomGrace(info.activeRoomId);
+            console.log(
+              `[WorkerRelay] Resumed room ${info.activeRoomId} on reconnected worker`,
+            );
+          } else {
+            console.warn(
+              `[WorkerRelay] Ignoring activeRoomId ${info.activeRoomId} — not owned by user ${userId}`,
+            );
+          }
         }
       });
 
@@ -139,11 +147,16 @@ export class WorkerRelay {
           | string
           | undefined;
         if (wId && this.workers.has(wId)) {
-          this.roomToWorker.set(data.roomId, wId);
-          const w = this.workers.get(wId);
-          if (w) w.busy = data.event?.kind !== "done";
-          if (data.event?.kind === "done" || data.event?.kind === "error") {
-            // keep busy until done handled by room manager release
+          const room = db.getRoom(data.roomId);
+          if (room && room.owner_id === userId) {
+            this.roomToWorker.set(data.roomId, wId);
+            const w = this.workers.get(wId);
+            if (w) w.busy = data.event?.kind !== "done";
+          } else if (!room || room.owner_id !== userId) {
+            console.warn(
+              `[WorkerRelay] Dropping agent-event for room ${data.roomId} — ownership mismatch`,
+            );
+            return;
           }
         }
         const cb = this.eventListeners.get(data.roomId);
@@ -310,14 +323,6 @@ export class WorkerRelay {
   findWorkerForUser(userId: string): WorkerConnection | null {
     for (const w of this.workers.values()) {
       if (w.userId === userId && !w.busy) return w;
-    }
-    return null;
-  }
-
-  /** First free worker (legacy rooms with no owner_id). */
-  findFirstFreeWorker(): WorkerConnection | null {
-    for (const w of this.workers.values()) {
-      if (!w.busy) return w;
     }
     return null;
   }

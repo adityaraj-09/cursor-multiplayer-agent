@@ -87,7 +87,8 @@ async function initSchema() {
       created_by TEXT NOT NULL REFERENCES users(id),
       created_at BIGINT NOT NULL,
       max_uses INTEGER,
-      use_count INTEGER NOT NULL DEFAULT 0
+      use_count INTEGER NOT NULL DEFAULT 0,
+      expires_at BIGINT
     );
 
     CREATE TABLE IF NOT EXISTS workers (
@@ -134,6 +135,7 @@ async function initSchema() {
     `ALTER TABLE rooms ADD COLUMN IF NOT EXISTS key_hint TEXT`,
     `ALTER TABLE messages ADD COLUMN IF NOT EXISTS diff_patch TEXT`,
     `ALTER TABLE rooms ADD COLUMN IF NOT EXISTS owner_id TEXT`,
+    `ALTER TABLE invite_links ADD COLUMN IF NOT EXISTS expires_at BIGINT`,
   ];
 
   for (const sql of migrations) {
@@ -635,39 +637,25 @@ export function createInviteLink(
   roomId: string,
   createdBy: string,
   maxUses: number | null,
+  expiresAt: number | null = null,
 ): void {
   syncQuery(
-    `INSERT INTO invite_links (code, room_id, created_by, created_at, max_uses, use_count) VALUES ($1,$2,$3,$4,$5,0)`,
-    [code, roomId, createdBy, Date.now(), maxUses],
+    `INSERT INTO invite_links (code, room_id, created_by, created_at, max_uses, use_count, expires_at) VALUES ($1,$2,$3,$4,$5,0,$6)`,
+    [code, roomId, createdBy, Date.now(), maxUses, expiresAt],
   );
 }
 
-export function getInviteLink(
-  code: string,
-): { code: string; room_id: string; created_by: string; created_at: number; max_uses: number | null; use_count: number } | undefined {
-  const rows = syncQuery<{
-    code: string;
-    room_id: string;
-    created_by: string;
-    created_at: string;
-    max_uses: number | null;
-    use_count: number;
-  }>(`SELECT * FROM invite_links WHERE code = $1`, [code]);
-  if (!rows.length) return undefined;
-  const r = rows[0];
-  return { ...r, created_at: num(r.created_at)! };
-}
-
-export function listInviteLinks(
-  roomId: string,
-): Array<{
+export type InviteLinkRow = {
   code: string;
   room_id: string;
   created_by: string;
   created_at: number;
   max_uses: number | null;
   use_count: number;
-}> {
+  expires_at: number | null;
+};
+
+export function getInviteLink(code: string): InviteLinkRow | undefined {
   const rows = syncQuery<{
     code: string;
     room_id: string;
@@ -675,26 +663,59 @@ export function listInviteLinks(
     created_at: string;
     max_uses: number | null;
     use_count: number;
+    expires_at: string | null;
+  }>(`SELECT * FROM invite_links WHERE code = $1`, [code]);
+  if (!rows.length) return undefined;
+  const r = rows[0];
+  return {
+    ...r,
+    created_at: num(r.created_at)!,
+    expires_at: num(r.expires_at),
+  };
+}
+
+export function listInviteLinks(roomId: string): InviteLinkRow[] {
+  const rows = syncQuery<{
+    code: string;
+    room_id: string;
+    created_by: string;
+    created_at: string;
+    max_uses: number | null;
+    use_count: number;
+    expires_at: string | null;
   }>(
     `SELECT * FROM invite_links WHERE room_id = $1 ORDER BY created_at DESC`,
     [roomId],
   );
-  return rows.map((r) => ({ ...r, created_at: num(r.created_at)! }));
+  return rows.map((r) => ({
+    ...r,
+    created_at: num(r.created_at)!,
+    expires_at: num(r.expires_at),
+  }));
 }
 
 export function deleteInviteLink(code: string): boolean {
-  // syncQuery doesn't expose rowCount consistently — check existence first
   const existing = getInviteLink(code);
   if (!existing) return false;
   syncQuery(`DELETE FROM invite_links WHERE code = $1`, [code]);
   return true;
 }
 
-export function useInviteLink(code: string): void {
+/** Atomically increment use_count if under maxUses and not expired. */
+export function useInviteLink(code: string): boolean {
+  const before = getInviteLink(code);
+  if (!before) return false;
+  if (before.expires_at !== null && before.expires_at <= Date.now()) return false;
+  if (before.max_uses !== null && before.use_count >= before.max_uses) return false;
   syncQuery(
-    `UPDATE invite_links SET use_count = use_count + 1 WHERE code = $1`,
-    [code],
+    `UPDATE invite_links SET use_count = use_count + 1
+     WHERE code = $1
+       AND (max_uses IS NULL OR use_count < max_uses)
+       AND (expires_at IS NULL OR expires_at > $2)`,
+    [code, Date.now()],
   );
+  const after = getInviteLink(code);
+  return Boolean(after && after.use_count === before.use_count + 1);
 }
 
 export function registerWorker(

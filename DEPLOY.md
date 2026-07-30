@@ -85,11 +85,14 @@ The app will be available at `http://localhost:3001` (web) and `http://localhost
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `DATABASE_URL` | prod | `postgres://user:pass@host:5432/db` — omit for SQLite (dev only) |
-| `AUTH_SECRET` | prod | Random string for CLI session tokens. Generate with `openssl rand -hex 32` |
+| `AUTH_SECRET` | no | Legacy deploy var (CLI tokens are random hex + SHA-256) |
+| `ADMIN_USER_IDS` | no | Comma-separated Clerk user IDs that may manage the shared server key |
 | `CLERK_SECRET_KEY` | yes | From Clerk dashboard |
 | `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | yes | From Clerk dashboard |
 | `KEY_ENCRYPTION_SECRET` | if BYOK | 64-char hex for encrypting stored API keys. `openssl rand -hex 32` |
 | `CURSOR_API_KEY` | if Cloud | Shared server Cursor API key for Cloud runtime |
+| `REDIS_URL` | multi-instance | Enables Socket.IO Redis adapter automatically |
+| `INVITE_TTL_MS` | no | Invite link lifetime in ms (default 7 days) |
 | `NEXT_PUBLIC_SOCKET_URL` | prod | Public URL where the API is reachable, e.g. `https://api.example.com` |
 | `PORT` | no | API server port (default: 3000) |
 | `DEFAULT_MODEL` | no | Default model ID (default: `auto`) |
@@ -125,22 +128,8 @@ For Postgres on Fly: `fly postgres create` then `fly postgres attach`.
 
 By default, Socket.IO state is in-memory and tied to a single process. If you scale to multiple API instances:
 
-1. **Install the Redis adapter**:
-   ```bash
-   pnpm add @socket.io/redis-adapter redis
-   ```
-2. **Configure in `server/index.ts`**:
-   ```typescript
-   import { createAdapter } from "@socket.io/redis-adapter";
-   import { createClient } from "redis";
-
-   const pub = createClient({ url: process.env.REDIS_URL });
-   const sub = pub.duplicate();
-   await pub.connect();
-   await sub.connect();
-   io.adapter(createAdapter(pub, sub));
-   ```
-3. **Enable sticky sessions** in your load balancer (required for WebSocket upgrades).
+1. Set `REDIS_URL` (e.g. `redis://…`). The API attaches `@socket.io/redis-adapter` on boot.
+2. **Enable sticky sessions** in your load balancer (required for WebSocket upgrades).
    - Fly.io: use `fly-force-instance-id` header or single-instance.
    - nginx: `ip_hash` or `sticky cookie`.
 

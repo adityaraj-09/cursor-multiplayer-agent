@@ -62,8 +62,8 @@ export default function SessionsDashboard() {
 
   if (authLoading) {
     return (
-      <div className="min-h-screen bg-white flex items-center justify-center">
-        <p className="text-[13px] text-[#191919]/45">Loading…</p>
+      <div className="min-h-screen bg-[#141414] flex items-center justify-center">
+        <p className="text-[13px] text-[#6e6e6e]">Loading…</p>
       </div>
     );
   }

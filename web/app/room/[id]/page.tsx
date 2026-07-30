@@ -197,6 +197,7 @@ function LiveRoom({
     mySocketId,
     messages,
     agentStatus,
+    agentError,
     pendingRequest,
     lastDiff,
     cloudMeta,
@@ -487,12 +488,13 @@ function LiveRoom({
         roomId={roomId}
         open={inviteOpen}
         onClose={() => setInviteOpen(false)}
+        canManage={amHost}
       />
 
       <footer className="border-t border-[#2b2b2b] bg-[#1a1a1a] shrink-0 pb-[env(safe-area-inset-bottom)]">
-        {(modelError || cursorSessionError || actionError) && (
+        {(modelError || cursorSessionError || actionError || agentError) && (
           <p className="px-3 pt-2 text-[11px] text-[#f07070]">
-            {actionError || modelError || cursorSessionError}
+            {actionError || agentError || modelError || cursorSessionError}
           </p>
         )}
         {runtime === "local" && roomInfo?.authMode === "cli" && roomInfo.repoPath && (

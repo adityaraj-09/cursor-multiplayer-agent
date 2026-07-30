@@ -132,6 +132,7 @@ export type InviteLinkInfo = {
   createdAt: number;
   maxUses: number | null;
   useCount: number;
+  expiresAt: number | null;
 };
 
 export async function listInviteLinks(
@@ -253,6 +254,7 @@ export async function fetchAuthStatus(): Promise<{
   byokAvailable: boolean;
   userByokConfigured: boolean;
   userByokHint: string | null;
+  canManageServerKey: boolean;
 }> {
   const res = await fetch(`${API_BASE}/auth/status`, {
     headers: await authHeaders(),

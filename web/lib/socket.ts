@@ -14,12 +14,15 @@ const SOCKET_URL =
 let socketInstance: AppSocket | null = null;
 let currentKey: string | null = null;
 
+/**
+ * @param getToken Called on connect and every reconnect so Clerk JWTs stay fresh.
+ */
 export function getSocket(
   roomId: string,
   name: string,
-  token?: string | null,
+  getToken?: () => Promise<string | null>,
 ): AppSocket {
-  const key = `${roomId}:${name}:${token ? "auth" : "anon"}`;
+  const key = `${roomId}:${name}:${getToken ? "auth" : "anon"}`;
 
   if (socketInstance && currentKey === key && socketInstance.connected) {
     return socketInstance;
@@ -33,7 +36,15 @@ export function getSocket(
   currentKey = key;
   socketInstance = io(SOCKET_URL, {
     query: { roomId, name },
-    auth: token ? { token } : {},
+    auth: (cb) => {
+      if (!getToken) {
+        cb({});
+        return;
+      }
+      void getToken()
+        .then((token) => cb(token ? { token } : {}))
+        .catch(() => cb({}));
+    },
     transports: ["websocket"],
     path: "/socket.io/",
     reconnection: true,

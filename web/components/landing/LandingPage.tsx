@@ -10,22 +10,18 @@ const CAPABILITIES = [
   {
     title: "Watch together",
     body: "Everyone in the room sees the same agent stream, tool calls, and diffs — live.",
-    detail: "Terminal stream, chat, presence, and file changes stay in one shared surface.",
   },
   {
     title: "Redirect freely",
     body: "Anyone can message the agent. Steering stays attributed, so the room remains clear.",
-    detail: "Prompts are credited to people, not dropped in as anonymous interruptions.",
   },
   {
     title: "Hand off control",
     body: "Request, grant, or release the driver seat without leaving the session or losing context.",
-    detail: "The host keeps authority while the right teammate can take over at the right moment.",
   },
   {
     title: "Pick up later",
     body: "Rooms and chat history persist. Resume Cursor sessions and return to the same work.",
-    detail: "Durable sessions preserve decisions, diffs, and the agent conversation.",
   },
 ] as const;
 
@@ -146,15 +142,15 @@ function RoomDiagram() {
 }
 
 function WorkflowDiagram() {
-  const labels = ["Create", "Invite", "Steer", "Ship"];
+  const labels = ["Create", "Invite", "Steer"];
   return (
     <div className="relative rounded-[2rem] border border-[#191919]/10 bg-[#FAFAF8] p-6 sm:p-8 overflow-hidden">
       <div className="absolute -top-20 -right-20 w-64 h-64 rounded-full bg-[#191919]/[0.04]" />
-      <svg viewBox="0 0 640 250" className="relative z-10 w-full h-auto" aria-hidden>
-        <path className="landing-draw" d="M92 126 C190 34, 286 218, 392 126 S530 68, 570 126" fill="none" stroke="#191919" strokeOpacity="0.22" strokeWidth="2.5" strokeLinecap="round" />
+      <svg viewBox="0 0 520 220" className="relative z-10 w-full h-auto" aria-hidden>
+        <path className="landing-draw" d="M90 120 C170 40, 260 200, 350 120 S440 70, 460 120" fill="none" stroke="#191919" strokeOpacity="0.22" strokeWidth="2.5" strokeLinecap="round" />
         {labels.map((label, index) => {
-          const x = 86 + index * 154;
-          const y = index % 2 === 0 ? 126 : 84;
+          const x = 90 + index * 160;
+          const y = index % 2 === 0 ? 120 : 84;
           return (
             <g key={label} className="landing-rise" style={{ animationDelay: `${index * 90}ms` }}>
               <circle cx={x} cy={y} r="38" fill={index === 2 ? "#191919" : "#FFFFFF"} stroke="#191919" strokeOpacity="0.14" />
@@ -200,7 +196,7 @@ function RuntimeDiagram() {
 }
 
 export default function LandingPage() {
-  const { user, loading } = useAuth();
+  const { user } = useAuth();
   const signedIn = Boolean(user);
   const primaryHref = signedIn ? "/dashboard" : "/login?redirect=/dashboard";
   const createHref = signedIn ? "/create" : "/login?redirect=/create";
@@ -213,7 +209,7 @@ export default function LandingPage() {
             Steer
           </Link>
           <nav className="flex items-center gap-1 sm:gap-3">
-            <Link href={signedIn ? "/dashboard" : "/login"} className="h-9 px-3 sm:px-3.5 rounded-full text-[13px] font-medium text-[#191919]/75 hover:text-[#191919] transition-colors">
+            <Link href={signedIn ? "/dashboard" : "/login?redirect=/dashboard"} className="h-9 px-3 sm:px-3.5 rounded-full text-[13px] font-medium text-[#191919]/75 hover:text-[#191919] transition-colors">
               {signedIn ? "Dashboard" : "Sign in"}
             </Link>
             <Link href={createHref} className="group inline-flex h-9 items-center gap-1.5 rounded-full bg-[#191919] px-3.5 sm:px-4 text-[13px] font-medium text-white hover:bg-black transition-colors">
@@ -228,8 +224,7 @@ export default function LandingPage() {
         <BoomerangVideoBg />
         <div className="relative z-10 h-full mx-auto max-w-6xl px-5 sm:px-8 flex flex-col justify-end pb-14 sm:pb-20 pt-24">
           <div className="max-w-2xl landing-fade">
-            <p className="landing-serif text-[48px] sm:text-[64px] md:text-[72px] leading-[0.98] tracking-tight text-[#191919]">Steer</p>
-            <h1 className="mt-4 sm:mt-5 landing-serif text-[28px] sm:text-[40px] md:text-[44px] leading-[1.12] tracking-tight text-[#191919]">Build lasting relationships</h1>
+            <h1 className="landing-serif text-[48px] sm:text-[64px] md:text-[72px] leading-[0.98] tracking-tight text-[#191919]">Steer</h1>
             <p className="mt-4 sm:mt-5 text-[15px] sm:text-[17px] leading-relaxed text-[#191919]/70 max-w-lg font-light">
               Shared live Cursor agent sessions — so your team can watch, redirect, and hand off control like a document, not a screen share.
             </p>
@@ -237,9 +232,6 @@ export default function LandingPage() {
               <CtaLink href={createHref}>Start a session</CtaLink>
               <CtaLink href={primaryHref} variant="secondary">{signedIn ? "Open dashboard" : "Sign in"}</CtaLink>
             </div>
-            {!loading && signedIn && (
-              <p className="mt-4 text-[12px] text-[#191919]/50">Signed in as {user?.name}. You can still browse the landing anytime.</p>
-            )}
           </div>
         </div>
       </section>
@@ -261,14 +253,12 @@ export default function LandingPage() {
             <p className="text-[11px] sm:text-[12px] font-medium tracking-[0.16em] uppercase text-[#191919]/45">Product</p>
             <h2 className="mt-3 landing-serif text-[32px] sm:text-[40px] leading-[1.12] tracking-tight">Everything the room needs. Nothing it doesn’t.</h2>
           </div>
-          <div className="mt-14 sm:mt-16 grid gap-6 sm:grid-cols-2">
+          <div className="mt-14 sm:mt-16 grid gap-10 sm:grid-cols-2">
             {CAPABILITIES.map((item, i) => (
-              <div key={item.title} className="group relative min-w-0 overflow-hidden rounded-[1.75rem] border border-[#191919]/10 bg-white p-6 sm:p-7 landing-rise transition-transform duration-300 hover:-translate-y-1" style={{ animationDelay: `${i * 60}ms` }}>
-                <div className="absolute -right-8 -top-8 h-28 w-28 rounded-full bg-[#191919]/[0.04] transition-transform duration-300 group-hover:scale-125" />
-                <div className="mb-8 flex h-10 w-10 items-center justify-center rounded-full bg-[#191919] text-white text-[13px] font-medium">0{i + 1}</div>
-                <h3 className="landing-serif text-[22px] sm:text-[24px] tracking-tight">{item.title}</h3>
+              <div key={item.title} className="min-w-0 landing-rise" style={{ animationDelay: `${i * 60}ms` }}>
+                <p className="text-[12px] font-medium tracking-[0.14em] text-[#191919]/40">0{i + 1}</p>
+                <h3 className="mt-3 landing-serif text-[22px] sm:text-[24px] tracking-tight">{item.title}</h3>
                 <p className="mt-3 text-[14px] sm:text-[15px] leading-relaxed text-[#191919]/65 font-light max-w-md">{item.body}</p>
-                <p className="mt-6 border-t border-[#191919]/10 pt-4 text-[12px] leading-relaxed text-[#191919]/45">{item.detail}</p>
               </div>
             ))}
           </div>
@@ -324,19 +314,11 @@ export default function LandingPage() {
             <p className="text-[11px] sm:text-[12px] font-medium tracking-[0.16em] uppercase text-[#191919]/45">Who it’s for</p>
             <h2 className="mt-3 landing-serif text-[32px] sm:text-[40px] leading-[1.12] tracking-tight">Built for people who ship together</h2>
           </div>
-          <div className="mt-14 sm:mt-16 grid gap-6 md:grid-cols-3">
+          <div className="mt-14 sm:mt-16 grid gap-10 md:grid-cols-3">
             {AUDIENCES.map((item) => (
-              <div key={item.title} className="min-w-0 rounded-[1.5rem] border border-[#191919]/10 bg-white p-6 transition-colors hover:bg-[#FAFAF8]">
+              <div key={item.title} className="min-w-0">
                 <h3 className="landing-serif text-[22px] sm:text-[24px] tracking-tight">{item.title}</h3>
                 <p className="mt-3 text-[14px] sm:text-[15px] leading-relaxed text-[#191919]/65 font-light">{item.body}</p>
-              </div>
-            ))}
-          </div>
-          <div className="mt-16 grid grid-cols-2 gap-4 sm:grid-cols-4">
-            {[["Live", "agent stream"], ["Shared", "diff review"], ["Durable", "room history"], ["Fast", "handoffs"]].map(([value, label]) => (
-              <div key={value} className="rounded-[1.25rem] border border-[#191919]/10 bg-[#FAFAF8] p-5">
-                <p className="landing-serif text-[26px] tracking-tight">{value}</p>
-                <p className="mt-1 text-[12px] text-[#191919]/45">{label}</p>
               </div>
             ))}
           </div>
@@ -358,7 +340,7 @@ export default function LandingPage() {
           <span className="landing-serif text-[18px] text-[#191919]">Steer</span>
           <p className="text-[12px] text-[#191919]/45">Multiplayer Cursor agent sessions</p>
           <div className="flex items-center gap-4 text-[12px]">
-            <Link href={signedIn ? "/dashboard" : "/login"} className="text-[#191919]/55 hover:text-[#191919] transition-colors">{signedIn ? "Dashboard" : "Sign in"}</Link>
+            <Link href={signedIn ? "/dashboard" : "/login?redirect=/dashboard"} className="text-[#191919]/55 hover:text-[#191919] transition-colors">{signedIn ? "Dashboard" : "Sign in"}</Link>
             <Link href={createHref} className="text-[#191919]/55 hover:text-[#191919] transition-colors">Create session</Link>
           </div>
         </div>

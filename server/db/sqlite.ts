@@ -114,7 +114,8 @@ db.exec(`
     created_by TEXT NOT NULL REFERENCES users(id),
     created_at INTEGER NOT NULL,
     max_uses INTEGER,
-    use_count INTEGER NOT NULL DEFAULT 0
+    use_count INTEGER NOT NULL DEFAULT 0,
+    expires_at INTEGER
   );
 
   CREATE TABLE IF NOT EXISTS workers (
@@ -157,6 +158,7 @@ const migrations = [
   `ALTER TABLE rooms ADD COLUMN key_hint TEXT`,
   `ALTER TABLE messages ADD COLUMN diff_patch TEXT`,
   `ALTER TABLE rooms ADD COLUMN owner_id TEXT`,
+  `ALTER TABLE invite_links ADD COLUMN expires_at INTEGER`,
 ];
 
 for (const sql of migrations) {
@@ -288,8 +290,8 @@ const stmts = {
       updated_at = excluded.updated_at
   `),
   insertInviteLink: db.prepare(`
-    INSERT INTO invite_links (code, room_id, created_by, created_at, max_uses, use_count)
-    VALUES (?, ?, ?, ?, ?, 0)
+    INSERT INTO invite_links (code, room_id, created_by, created_at, max_uses, use_count, expires_at)
+    VALUES (?, ?, ?, ?, ?, 0, ?)
   `),
   getInviteLink: db.prepare(`SELECT * FROM invite_links WHERE code = ?`),
   listInviteLinks: db.prepare(`
@@ -298,7 +300,10 @@ const stmts = {
   `),
   deleteInviteLink: db.prepare(`DELETE FROM invite_links WHERE code = ?`),
   useInviteLink: db.prepare(
-    `UPDATE invite_links SET use_count = use_count + 1 WHERE code = ?`,
+    `UPDATE invite_links SET use_count = use_count + 1
+     WHERE code = ?
+       AND (max_uses IS NULL OR use_count < max_uses)
+       AND (expires_at IS NULL OR expires_at > ?)`,
   ),
   insertWorker: db.prepare(`
     INSERT INTO workers (id, user_id, name, status, last_seen_at)
@@ -692,36 +697,34 @@ export function createInviteLink(
   roomId: string,
   createdBy: string,
   maxUses: number | null,
+  expiresAt: number | null = null,
 ): void {
-  stmts.insertInviteLink.run(code, roomId, createdBy, Date.now(), maxUses);
+  stmts.insertInviteLink.run(
+    code,
+    roomId,
+    createdBy,
+    Date.now(),
+    maxUses,
+    expiresAt,
+  );
 }
 
-export function getInviteLink(
-  code: string,
-): { code: string; room_id: string; created_by: string; created_at: number; max_uses: number | null; use_count: number } | undefined {
-  return stmts.getInviteLink.get(code) as
-    | { code: string; room_id: string; created_by: string; created_at: number; max_uses: number | null; use_count: number }
-    | undefined;
-}
-
-export function listInviteLinks(
-  roomId: string,
-): Array<{
+export type InviteLinkRow = {
   code: string;
   room_id: string;
   created_by: string;
   created_at: number;
   max_uses: number | null;
   use_count: number;
-}> {
-  return stmts.listInviteLinks.all(roomId) as Array<{
-    code: string;
-    room_id: string;
-    created_by: string;
-    created_at: number;
-    max_uses: number | null;
-    use_count: number;
-  }>;
+  expires_at: number | null;
+};
+
+export function getInviteLink(code: string): InviteLinkRow | undefined {
+  return stmts.getInviteLink.get(code) as InviteLinkRow | undefined;
+}
+
+export function listInviteLinks(roomId: string): InviteLinkRow[] {
+  return stmts.listInviteLinks.all(roomId) as InviteLinkRow[];
 }
 
 export function deleteInviteLink(code: string): boolean {
@@ -729,8 +732,10 @@ export function deleteInviteLink(code: string): boolean {
   return result.changes > 0;
 }
 
-export function useInviteLink(code: string): void {
-  stmts.useInviteLink.run(code);
+/** Atomically increment use_count if under maxUses and not expired. */
+export function useInviteLink(code: string): boolean {
+  const result = stmts.useInviteLink.run(code, Date.now());
+  return result.changes > 0;
 }
 
 export function registerWorker(

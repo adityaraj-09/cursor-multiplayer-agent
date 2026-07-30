@@ -40,7 +40,7 @@ export default function LoginPage() {
         </Suspense>
 
         <Link
-          href="/"
+          href="/dashboard"
           className="text-[12px] text-[#6e6e6e] hover:text-[#a0a0a0] transition-colors"
         >
           Back to dashboard

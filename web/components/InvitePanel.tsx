@@ -30,10 +30,12 @@ export default function InvitePanel({
   roomId,
   open,
   onClose,
+  canManage = false,
 }: {
   roomId: string;
   open: boolean;
   onClose: () => void;
+  canManage?: boolean;
 }) {
   const [invites, setInvites] = useState<InviteLinkInfo[]>([]);
   const [loading, setLoading] = useState(false);
@@ -144,26 +146,30 @@ export default function InvitePanel({
 
         <div className="px-4 py-3 border-b border-[#2b2b2b] space-y-2 shrink-0">
           <p className="text-[12px] text-[#6e6e6e]">
-            Create a link teammates can use to join this session.
+            {canManage
+              ? "Create a link teammates can use to join this session."
+              : "Active invite links for this session."}
           </p>
-          <div className="flex gap-2">
-            <input
-              type="number"
-              min={1}
-              value={maxUses}
-              onChange={(e) => setMaxUses(e.target.value)}
-              placeholder="Max uses (optional)"
-              className="flex-1 h-9 px-3 bg-[#252525] border border-[#2b2b2b] rounded-md text-[13px] text-[#e4e4e4] placeholder:text-[#6e6e6e] outline-none focus:border-[#4d9fff]"
-            />
-            <button
-              type="button"
-              onClick={() => void handleCreate()}
-              disabled={creating}
-              className="h-9 px-3 rounded-md bg-[#e4e4e4] text-[#141414] text-[12px] font-medium hover:bg-white disabled:opacity-40 shrink-0"
-            >
-              {creating ? "Creating…" : "New link"}
-            </button>
-          </div>
+          {canManage && (
+            <div className="flex gap-2">
+              <input
+                type="number"
+                min={1}
+                value={maxUses}
+                onChange={(e) => setMaxUses(e.target.value)}
+                placeholder="Max uses (optional)"
+                className="flex-1 h-9 px-3 bg-[#252525] border border-[#2b2b2b] rounded-md text-[13px] text-[#e4e4e4] placeholder:text-[#6e6e6e] outline-none focus:border-[#4d9fff]"
+              />
+              <button
+                type="button"
+                onClick={() => void handleCreate()}
+                disabled={creating}
+                className="h-9 px-3 rounded-md bg-[#e4e4e4] text-[#141414] text-[12px] font-medium hover:bg-white disabled:opacity-40 shrink-0"
+              >
+                {creating ? "Creating…" : "New link"}
+              </button>
+            </div>
+          )}
         </div>
 
         <div className="flex-1 overflow-y-auto px-4 py-3 min-h-0">
@@ -180,8 +186,10 @@ export default function InvitePanel({
             <ul className="space-y-2">
               {invites.map((invite) => {
                 const exhausted =
-                  invite.maxUses !== null &&
-                  invite.useCount >= invite.maxUses;
+                  (invite.maxUses !== null &&
+                    invite.useCount >= invite.maxUses) ||
+                  (invite.expiresAt !== null &&
+                    invite.expiresAt <= Date.now());
                 return (
                   <li
                     key={invite.code}
@@ -198,6 +206,9 @@ export default function InvitePanel({
                           {invite.maxUses === null
                             ? `${invite.useCount} uses`
                             : `${invite.useCount}/${invite.maxUses} uses`}
+                          {invite.expiresAt
+                            ? ` · expires ${formatWhen(invite.expiresAt)}`
+                            : ""}
                           {exhausted ? " · expired" : ""}
                         </p>
                       </div>
@@ -213,7 +224,7 @@ export default function InvitePanel({
                         <button
                           type="button"
                           onClick={() => void handleRevoke(invite.code)}
-                          disabled={revoking === invite.code}
+                          disabled={!canManage || revoking === invite.code}
                           className="h-7 px-2 rounded-md text-[11px] text-[#f07070] hover:text-[#ff8a8a] border border-[#3c2b2b] disabled:opacity-40"
                         >
                           {revoking === invite.code ? "…" : "Revoke"}

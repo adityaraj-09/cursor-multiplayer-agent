@@ -1,11 +1,13 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
 export const HERO_VIDEO_SRC =
   "https://d8j0ntlcm91z4.cloudfront.net/user_38xzZboKViGWJOttwIXH07lWA1P/hf_20260715_090628_7052d8a6-a094-4341-a4a2-ad58493a67a9.mp4";
 
-const MAX_CAPTURE_WIDTH = 960;
+const MAX_CAPTURE_WIDTH_DESKTOP = 720;
+const MAX_CAPTURE_WIDTH_MOBILE = 480;
+const MAX_FRAMES = 72;
 
 type VideoWithFrameCallback = HTMLVideoElement & {
   requestVideoFrameCallback?: (
@@ -16,8 +18,8 @@ type VideoWithFrameCallback = HTMLVideoElement & {
 
 /**
  * Absolute full-bleed hero background.
- * Plays the source once while capturing frames, then ping-pongs those frames
- * on a canvas (boomerang) — no native video loop.
+ * Desktop: plays once while capturing frames, then ping-pongs on canvas.
+ * Mobile / reduced-motion: native muted loop (or still frame) — no frame buffer.
  */
 export default function BoomerangVideoBg({
   src = HERO_VIDEO_SRC,
@@ -26,6 +28,7 @@ export default function BoomerangVideoBg({
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [ready, setReady] = useState(false);
 
   useEffect(() => {
     const video = videoRef.current as VideoWithFrameCallback | null;
@@ -44,6 +47,13 @@ export default function BoomerangVideoBg({
     const reduceMotion = window.matchMedia(
       "(prefers-reduced-motion: reduce)",
     ).matches;
+    const lightMode =
+      reduceMotion ||
+      window.matchMedia("(max-width: 768px)").matches ||
+      window.matchMedia("(pointer: coarse)").matches;
+    const maxWidth = lightMode
+      ? MAX_CAPTURE_WIDTH_MOBILE
+      : MAX_CAPTURE_WIDTH_DESKTOP;
 
     const stopRvfc = () => {
       if (rvfcHandle != null && video.cancelVideoFrameCallback) {
@@ -55,7 +65,7 @@ export default function BoomerangVideoBg({
     const captureSize = () => {
       const vw = video.videoWidth || 1280;
       const vh = video.videoHeight || 720;
-      const scale = Math.min(1, MAX_CAPTURE_WIDTH / Math.max(vw, 1));
+      const scale = Math.min(1, maxWidth / Math.max(vw, 1));
       return {
         w: Math.max(1, Math.round(vw * scale)),
         h: Math.max(1, Math.round(vh * scale)),
@@ -69,11 +79,30 @@ export default function BoomerangVideoBg({
       }
     };
 
+    const markReady = () => {
+      if (!cancelled) setReady(true);
+    };
+
+    const startNativeLoopFallback = () => {
+      if (cancelled) return;
+      video.loop = true;
+      video.style.opacity = "1";
+      canvas.style.opacity = "0";
+      markReady();
+      void video.play().catch(() => {});
+    };
+
     const captureFrame = (mediaTime: number) => {
       if (cancelled || !capturing) return;
-      // Deduplicate by currentTime / mediaTime
       if (!(mediaTime > lastCapturedTime)) return;
       if (!video.videoWidth || !video.videoHeight) return;
+      if (frames.length >= MAX_FRAMES) {
+        capturing = false;
+        stopRvfc();
+        video.pause();
+        playBoomerang();
+        return;
+      }
 
       lastCapturedTime = mediaTime;
       const { w, h } = captureSize();
@@ -87,11 +116,10 @@ export default function BoomerangVideoBg({
 
       try {
         frameCtx.drawImage(video, 0, 0, w, h);
-        // Also paint live to the display canvas while capturing
         ctx.drawImage(frame, 0, 0, w, h);
         frames.push(frame);
+        markReady();
       } catch {
-        // Tainted canvas / CORS — abort capture path
         capturing = false;
         stopRvfc();
         startNativeLoopFallback();
@@ -124,10 +152,11 @@ export default function BoomerangVideoBg({
       let index = 0;
       let direction: 1 | -1 = 1;
       let lastTs = 0;
-      const frameMs = 1000 / 30;
+      const frameMs = 1000 / 24;
 
       video.style.opacity = "0";
       canvas.style.opacity = "1";
+      markReady();
 
       const tick = (ts: number) => {
         if (cancelled) return;
@@ -154,14 +183,6 @@ export default function BoomerangVideoBg({
       rafHandle = requestAnimationFrame(tick);
     };
 
-    const startNativeLoopFallback = () => {
-      if (cancelled) return;
-      video.loop = true;
-      video.style.opacity = "1";
-      canvas.style.opacity = "0";
-      void video.play().catch(() => {});
-    };
-
     const onLoaded = () => {
       if (cancelled) return;
 
@@ -170,10 +191,16 @@ export default function BoomerangVideoBg({
         try {
           video.currentTime = Math.min(0.1, video.duration || 0.1);
         } catch {
-          // ignore seek errors
+          // ignore
         }
         video.style.opacity = "1";
         canvas.style.opacity = "0";
+        markReady();
+        return;
+      }
+
+      if (lightMode) {
+        startNativeLoopFallback();
         return;
       }
 
@@ -187,11 +214,14 @@ export default function BoomerangVideoBg({
 
       const start = () => {
         if (cancelled) return;
-        void video.play().then(() => {
-          if (!cancelled) scheduleCapture();
-        }).catch(() => {
-          startNativeLoopFallback();
-        });
+        void video
+          .play()
+          .then(() => {
+            if (!cancelled) scheduleCapture();
+          })
+          .catch(() => {
+            startNativeLoopFallback();
+          });
       };
 
       try {
@@ -237,13 +267,19 @@ export default function BoomerangVideoBg({
 
   return (
     <div className="absolute inset-0 z-0 overflow-hidden" aria-hidden>
+      {/* Static gradient poster while video boots */}
+      <div
+        className={`absolute inset-0 bg-[radial-gradient(ellipse_at_30%_20%,#e8e6e1_0%,#f7f5f0_45%,#ffffff_100%)] transition-opacity duration-500 ${
+          ready ? "opacity-0" : "opacity-100"
+        }`}
+      />
       <div className="absolute inset-0 scale-[1.15] origin-top overflow-hidden">
         <video
           ref={videoRef}
           src={src}
           muted
           playsInline
-          preload="auto"
+          preload="metadata"
           crossOrigin="anonymous"
           className="w-full h-full object-cover object-top"
         />
