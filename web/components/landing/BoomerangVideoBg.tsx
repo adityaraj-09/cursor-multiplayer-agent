@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from "react";
 
-const VIDEO_SRC =
+export const HERO_VIDEO_SRC =
   "https://d8j0ntlcm91z4.cloudfront.net/user_38xzZboKViGWJOttwIXH07lWA1P/hf_20260715_090628_7052d8a6-a094-4341-a4a2-ad58493a67a9.mp4";
 
 const MAX_CAPTURE_WIDTH = 960;
@@ -15,15 +15,15 @@ type VideoWithFrameCallback = HTMLVideoElement & {
 };
 
 /**
- * Full-bleed background that plays the source once while capturing frames,
- * then ping-pongs those frames on a canvas (boomerang loop).
+ * Absolute full-bleed hero background.
+ * Plays the source once while capturing frames, then ping-pongs those frames
+ * on a canvas (boomerang) — no native video loop.
  */
 export default function BoomerangVideoBg({
-  src = VIDEO_SRC,
+  src = HERO_VIDEO_SRC,
 }: {
   src?: string;
 }) {
-  const wrapRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -37,54 +37,64 @@ export default function BoomerangVideoBg({
 
     let cancelled = false;
     let capturing = false;
-    let frameHandle: number | null = null;
+    let rvfcHandle: number | null = null;
     let rafHandle = 0;
     let lastCapturedTime = -1;
-    const frames: ImageBitmap[] = [];
-    const reduceMotion =
-      typeof window !== "undefined" &&
-      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const frames: HTMLCanvasElement[] = [];
+    const reduceMotion = window.matchMedia(
+      "(prefers-reduced-motion: reduce)",
+    ).matches;
 
-    const clearFrames = () => {
-      for (const f of frames) f.close();
-      frames.length = 0;
+    const stopRvfc = () => {
+      if (rvfcHandle != null && video.cancelVideoFrameCallback) {
+        video.cancelVideoFrameCallback(rvfcHandle);
+        rvfcHandle = null;
+      }
     };
 
-    const sizeCanvas = (vw: number, vh: number) => {
+    const captureSize = () => {
+      const vw = video.videoWidth || 1280;
+      const vh = video.videoHeight || 720;
       const scale = Math.min(1, MAX_CAPTURE_WIDTH / Math.max(vw, 1));
-      const w = Math.max(1, Math.round(vw * scale));
-      const h = Math.max(1, Math.round(vh * scale));
+      return {
+        w: Math.max(1, Math.round(vw * scale)),
+        h: Math.max(1, Math.round(vh * scale)),
+      };
+    };
+
+    const ensureDisplayCanvas = (w: number, h: number) => {
       if (canvas.width !== w || canvas.height !== h) {
         canvas.width = w;
         canvas.height = h;
       }
-      return { w, h };
     };
 
-    const captureFrame = async (mediaTime: number) => {
+    const captureFrame = (mediaTime: number) => {
       if (cancelled || !capturing) return;
-      if (mediaTime <= lastCapturedTime) return;
+      // Deduplicate by currentTime / mediaTime
+      if (!(mediaTime > lastCapturedTime)) return;
       if (!video.videoWidth || !video.videoHeight) return;
 
       lastCapturedTime = mediaTime;
-      const { w, h } = sizeCanvas(video.videoWidth, video.videoHeight);
+      const { w, h } = captureSize();
+      ensureDisplayCanvas(w, h);
 
-      const offscreen = document.createElement("canvas");
-      offscreen.width = w;
-      offscreen.height = h;
-      const offCtx = offscreen.getContext("2d", { alpha: false });
-      if (!offCtx) return;
-      offCtx.drawImage(video, 0, 0, w, h);
+      const frame = document.createElement("canvas");
+      frame.width = w;
+      frame.height = h;
+      const frameCtx = frame.getContext("2d", { alpha: false });
+      if (!frameCtx) return;
 
       try {
-        const bitmap = await createImageBitmap(offscreen);
-        if (cancelled) {
-          bitmap.close();
-          return;
-        }
-        frames.push(bitmap);
+        frameCtx.drawImage(video, 0, 0, w, h);
+        // Also paint live to the display canvas while capturing
+        ctx.drawImage(frame, 0, 0, w, h);
+        frames.push(frame);
       } catch {
-        // createImageBitmap can fail on tainted canvas — fall back below
+        // Tainted canvas / CORS — abort capture path
+        capturing = false;
+        stopRvfc();
+        startNativeLoopFallback();
       }
     };
 
@@ -92,28 +102,32 @@ export default function BoomerangVideoBg({
       if (cancelled || !capturing) return;
 
       if (typeof video.requestVideoFrameCallback === "function") {
-        frameHandle = video.requestVideoFrameCallback((_now, meta) => {
-          void captureFrame(meta.mediaTime).then(() => {
-            if (capturing && !cancelled) scheduleCapture();
-          });
+        rvfcHandle = video.requestVideoFrameCallback((_now, meta) => {
+          captureFrame(meta.mediaTime);
+          if (capturing && !cancelled) scheduleCapture();
         });
         return;
       }
 
       rafHandle = requestAnimationFrame(() => {
-        void captureFrame(video.currentTime).then(() => {
-          if (capturing && !cancelled) scheduleCapture();
-        });
+        captureFrame(video.currentTime);
+        if (capturing && !cancelled) scheduleCapture();
       });
     };
 
     const playBoomerang = () => {
-      if (cancelled || frames.length === 0) return;
+      if (cancelled || frames.length < 2) {
+        startNativeLoopFallback();
+        return;
+      }
 
       let index = 0;
       let direction: 1 | -1 = 1;
       let lastTs = 0;
       const frameMs = 1000 / 30;
+
+      video.style.opacity = "0";
+      canvas.style.opacity = "1";
 
       const tick = (ts: number) => {
         if (cancelled) return;
@@ -122,7 +136,8 @@ export default function BoomerangVideoBg({
           lastTs = ts;
           const frame = frames[index];
           if (frame) {
-            ctx.drawImage(frame, 0, 0, canvas.width, canvas.height);
+            ensureDisplayCanvas(frame.width, frame.height);
+            ctx.drawImage(frame, 0, 0);
           }
           index += direction;
           if (index >= frames.length - 1) {
@@ -136,12 +151,11 @@ export default function BoomerangVideoBg({
         rafHandle = requestAnimationFrame(tick);
       };
 
-      video.style.opacity = "0";
-      canvas.style.opacity = "1";
       rafHandle = requestAnimationFrame(tick);
     };
 
     const startNativeLoopFallback = () => {
+      if (cancelled) return;
       video.loop = true;
       video.style.opacity = "1";
       canvas.style.opacity = "0";
@@ -150,32 +164,54 @@ export default function BoomerangVideoBg({
 
     const onLoaded = () => {
       if (cancelled) return;
+
+      if (reduceMotion) {
+        video.pause();
+        try {
+          video.currentTime = Math.min(0.1, video.duration || 0.1);
+        } catch {
+          // ignore seek errors
+        }
+        video.style.opacity = "1";
+        canvas.style.opacity = "0";
+        return;
+      }
+
       capturing = true;
       lastCapturedTime = -1;
-      clearFrames();
+      frames.length = 0;
       video.loop = false;
-      video.currentTime = 0;
-      void video.play().catch(() => {
-        startNativeLoopFallback();
-      });
-      scheduleCapture();
+      video.muted = true;
+      video.style.opacity = "0";
+      canvas.style.opacity = "1";
+
+      const start = () => {
+        if (cancelled) return;
+        void video.play().then(() => {
+          if (!cancelled) scheduleCapture();
+        }).catch(() => {
+          startNativeLoopFallback();
+        });
+      };
+
+      try {
+        video.currentTime = 0;
+      } catch {
+        // ignore
+      }
+      start();
     };
 
     const onEnded = () => {
       capturing = false;
-      if (frameHandle != null && video.cancelVideoFrameCallback) {
-        video.cancelVideoFrameCallback(frameHandle);
-        frameHandle = null;
-      }
-      if (frames.length >= 2) {
-        playBoomerang();
-      } else {
-        startNativeLoopFallback();
-      }
+      stopRvfc();
+      cancelAnimationFrame(rafHandle);
+      playBoomerang();
     };
 
     const onError = () => {
       capturing = false;
+      stopRvfc();
       startNativeLoopFallback();
     };
 
@@ -184,28 +220,23 @@ export default function BoomerangVideoBg({
     video.addEventListener("error", onError);
 
     if (video.readyState >= 2) onLoaded();
+    else void video.load();
 
     return () => {
       cancelled = true;
       capturing = false;
+      stopRvfc();
+      cancelAnimationFrame(rafHandle);
       video.removeEventListener("loadeddata", onLoaded);
       video.removeEventListener("ended", onEnded);
       video.removeEventListener("error", onError);
-      if (frameHandle != null && video.cancelVideoFrameCallback) {
-        video.cancelVideoFrameCallback(frameHandle);
-      }
-      cancelAnimationFrame(rafHandle);
       video.pause();
-      clearFrames();
+      frames.length = 0;
     };
   }, [src]);
 
   return (
-    <div
-      ref={wrapRef}
-      className="absolute inset-0 z-0 overflow-hidden"
-      aria-hidden
-    >
+    <div className="absolute inset-0 z-0 overflow-hidden" aria-hidden>
       <div className="absolute inset-0 scale-[1.15] origin-top overflow-hidden">
         <video
           ref={videoRef}
@@ -214,16 +245,15 @@ export default function BoomerangVideoBg({
           playsInline
           preload="auto"
           crossOrigin="anonymous"
-          className="absolute inset-0 w-full h-full object-cover object-top"
+          className="w-full h-full object-cover object-top"
         />
         <canvas
           ref={canvasRef}
-          className="absolute inset-0 w-full h-full opacity-0"
+          className="absolute inset-0 w-full h-full object-cover object-top opacity-0"
         />
       </div>
-      {/* Soft scrim so hero type stays readable without hiding the film */}
-      <div className="absolute inset-0 bg-gradient-to-t from-white via-white/55 to-white/20" />
-      <div className="absolute inset-0 bg-gradient-to-r from-white/70 via-white/25 to-transparent" />
+      <div className="absolute inset-0 bg-gradient-to-t from-white via-white/50 to-white/15 pointer-events-none" />
+      <div className="absolute inset-0 bg-gradient-to-r from-white/75 via-white/30 to-transparent pointer-events-none" />
     </div>
   );
 }

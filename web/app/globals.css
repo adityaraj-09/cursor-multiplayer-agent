@@ -59,6 +59,10 @@ body {
   animation: landing-fade-up 0.7s ease both;
 }
 
+.landing-rise {
+  animation: landing-fade-up 0.55s ease both;
+}
+
 @keyframes landing-fade-up {
   from {
     opacity: 0;
@@ -71,7 +75,8 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .landing-fade {
+  .landing-fade,
+  .landing-rise {
     animation: none;
   }
 }

@@ -5,9 +5,9 @@ import { steerClerkAppearance } from "../lib/clerkAppearance";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Steer — Shared live agent sessions",
+  title: "Build Lasting Relationships — Steer",
   description:
-    "Multiplayer Cursor agent rooms. Watch, redirect, and hand off control together.",
+    "Shared live Cursor agent sessions. Watch, redirect, and hand off control together.",
 };
 
 export const viewport: Viewport = {
