@@ -463,7 +463,7 @@ function LiveRoom({
     : 0;
 
   return (
-    <div className="h-[100dvh] flex flex-col bg-[#141414] overflow-hidden">
+    <div className="room-shell fixed inset-0 h-[100dvh] max-h-[100dvh] w-full flex flex-col bg-[#141414] overflow-hidden overscroll-none">
       <header className="flex items-center justify-between gap-2 px-2 sm:px-3 h-11 sm:h-10 border-b border-[#2b2b2b] bg-[#1a1a1a] shrink-0 pt-[env(safe-area-inset-top)]">
         <div className="flex items-center gap-1.5 sm:gap-2.5 min-w-0 flex-1">
           <Link
@@ -599,7 +599,7 @@ function LiveRoom({
         onForceRelease={handleForceRelease}
       />
 
-      <main className="flex flex-1 min-h-0 min-w-0 overflow-hidden">
+      <main className="flex flex-1 min-h-0 min-w-0 overflow-hidden overscroll-none">
         <div className="flex-1 flex flex-col min-h-0 min-w-0 overflow-hidden">
           <ChatPanel
             messages={messages}
@@ -650,7 +650,7 @@ function LiveRoom({
         runtime={runtime}
       />
 
-      <footer className="border-t border-[#2b2b2b] bg-[#1a1a1a] shrink-0 pb-[env(safe-area-inset-bottom)]">
+      <footer className="relative z-10 border-t border-[#2b2b2b] bg-[#1a1a1a] shrink-0 overflow-hidden pb-[env(safe-area-inset-bottom)]">
         {(modelError || cursorSessionError || actionError || agentError) && (
           <p className="px-3 pt-2 text-[11px] text-[#f07070]">
             {actionError || agentError || modelError || cursorSessionError}
