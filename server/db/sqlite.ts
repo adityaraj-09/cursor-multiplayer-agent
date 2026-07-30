@@ -170,6 +170,16 @@ db.exec(`
     granted_at INTEGER NOT NULL
   );
 
+  CREATE TABLE IF NOT EXISTS file_locks (
+    room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    path TEXT NOT NULL,
+    agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    call_id TEXT,
+    acquired_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    PRIMARY KEY (room_id, path)
+  );
+
   CREATE INDEX IF NOT EXISTS idx_steer_room_ts ON steer_messages(room_id, ts);
   CREATE INDEX IF NOT EXISTS idx_messages_room_ts ON messages(room_id, ts);
   CREATE INDEX IF NOT EXISTS idx_agents_room ON agents(room_id, sort_order);
@@ -207,6 +217,22 @@ try {
       cache_key TEXT PRIMARY KEY,
       models_json TEXT NOT NULL,
       updated_at INTEGER NOT NULL
+    );
+  `);
+} catch {
+  // ignore
+}
+
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS file_locks (
+      room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+      path TEXT NOT NULL,
+      agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+      call_id TEXT,
+      acquired_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL,
+      PRIMARY KEY (room_id, path)
     );
   `);
 } catch {
@@ -301,6 +327,38 @@ const stmts = {
     `UPDATE messages SET agent_id = ? WHERE room_id = ? AND agent_id IS NULL`,
   ),
   countAgents: db.prepare(`SELECT COUNT(*) AS c FROM agents WHERE room_id = ?`),
+
+  upsertFileLock: db.prepare(`
+    INSERT INTO file_locks (room_id, path, agent_id, call_id, acquired_at, expires_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(room_id, path) DO UPDATE SET
+      agent_id = excluded.agent_id,
+      call_id = excluded.call_id,
+      acquired_at = excluded.acquired_at,
+      expires_at = excluded.expires_at
+  `),
+  getFileLock: db.prepare(
+    `SELECT * FROM file_locks WHERE room_id = ? AND path = ?`,
+  ),
+  listFileLocks: db.prepare(
+    `SELECT * FROM file_locks WHERE room_id = ? ORDER BY path ASC`,
+  ),
+  listAllFileLocks: db.prepare(`SELECT * FROM file_locks`),
+  deleteFileLock: db.prepare(
+    `DELETE FROM file_locks WHERE room_id = ? AND path = ?`,
+  ),
+  deleteFileLocksForAgent: db.prepare(
+    `DELETE FROM file_locks WHERE room_id = ? AND agent_id = ?`,
+  ),
+  deleteFileLocksForRoom: db.prepare(
+    `DELETE FROM file_locks WHERE room_id = ?`,
+  ),
+  deleteExpiredFileLocks: db.prepare(
+    `DELETE FROM file_locks WHERE expires_at <= ?`,
+  ),
+  deleteExpiredFileLocksForRoom: db.prepare(
+    `DELETE FROM file_locks WHERE room_id = ? AND expires_at <= ?`,
+  ),
 
   // Auth
   insertUser: db.prepare(`
@@ -989,6 +1047,77 @@ export function getAgentDrivers(
 }
 
 /** One-shot backfill: every room gets a default agent. Idempotent via settings key. */
+export interface FileLockRow {
+  room_id: string;
+  path: string;
+  agent_id: string;
+  call_id: string | null;
+  acquired_at: number;
+  expires_at: number;
+}
+
+export interface UpsertFileLockInput {
+  roomId: string;
+  path: string;
+  agentId: string;
+  callId?: string | null;
+  acquiredAt: number;
+  expiresAt: number;
+}
+
+export function upsertFileLock(input: UpsertFileLockInput): void {
+  stmts.upsertFileLock.run(
+    input.roomId,
+    input.path,
+    input.agentId,
+    input.callId ?? null,
+    input.acquiredAt,
+    input.expiresAt,
+  );
+}
+
+export function getFileLock(
+  roomId: string,
+  path: string,
+): FileLockRow | undefined {
+  return stmts.getFileLock.get(roomId, path) as FileLockRow | undefined;
+}
+
+export function listFileLocks(roomId: string): FileLockRow[] {
+  return stmts.listFileLocks.all(roomId) as FileLockRow[];
+}
+
+export function listAllFileLocks(): FileLockRow[] {
+  return stmts.listAllFileLocks.all() as FileLockRow[];
+}
+
+export function deleteFileLock(roomId: string, path: string): void {
+  stmts.deleteFileLock.run(roomId, path);
+}
+
+export function deleteFileLocksForAgent(
+  roomId: string,
+  agentId: string,
+): number {
+  const info = stmts.deleteFileLocksForAgent.run(roomId, agentId);
+  return info.changes;
+}
+
+export function deleteFileLocksForRoom(roomId: string): void {
+  stmts.deleteFileLocksForRoom.run(roomId);
+}
+
+export function deleteExpiredFileLocks(now: number): void {
+  stmts.deleteExpiredFileLocks.run(now);
+}
+
+export function deleteExpiredFileLocksForRoom(
+  roomId: string,
+  now: number,
+): void {
+  stmts.deleteExpiredFileLocksForRoom.run(roomId, now);
+}
+
 export function migrateAgentsV1(): void {
   if (getSetting("migration:agents_v1") === "done") return;
   const rooms = listRooms();

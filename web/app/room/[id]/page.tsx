@@ -10,6 +10,7 @@ import {
   addRoomAgent,
   fetchOrJoinRoom,
   fetchRoomModels,
+  forceReleaseFileLock,
   stopRoom,
   stopRoomAgent,
   updateRoomCursorSession,
@@ -29,7 +30,7 @@ import DriverControls from "../../../components/DriverControls";
 import InvitePanel from "../../../components/InvitePanel";
 import AgentTabs from "../../../components/AgentTabs";
 import AddAgentDialog from "../../../components/AddAgentDialog";
-import ConflictBanner from "../../../components/ConflictBanner";
+import LockPanel from "../../../components/LockPanel";
 import type { ModelInfo, RoomInfo } from "../../../../shared/events";
 
 export default function RoomPage() {
@@ -205,6 +206,8 @@ function LiveRoom({
     statusByAgent,
     diffByAgent,
     conflicts,
+    fileLocks,
+    lastBlocked,
     agentStatus,
     agentError,
     pendingRequest,
@@ -442,6 +445,19 @@ function LiveRoom({
     [roomId],
   );
 
+  const handleForceRelease = useCallback(
+    async (path: string) => {
+      try {
+        await forceReleaseFileLock(roomId, path);
+      } catch (err) {
+        setActionError(
+          err instanceof Error ? err.message : "Failed to release lock",
+        );
+      }
+    },
+    [roomId],
+  );
+
   const fileCount = selectedDiff
     ? (selectedDiff.match(/^diff --git /gm) || []).length
     : 0;
@@ -573,10 +589,14 @@ function LiveRoom({
         onStopAgent={(id) => void handleStopAgent(id)}
       />
 
-      <ConflictBanner
+      <LockPanel
         conflicts={conflicts}
+        fileLocks={fileLocks}
         agents={agents}
         currentAgentId={selectedAgentId}
+        amHost={amHost}
+        lastBlocked={lastBlocked}
+        onForceRelease={handleForceRelease}
       />
 
       <main className="flex flex-1 min-h-0 min-w-0 overflow-hidden">
@@ -623,6 +643,7 @@ function LiveRoom({
       <AddAgentDialog
         open={addAgentOpen}
         onClose={() => setAddAgentOpen(false)}
+        roomId={roomId}
         onSubmit={handleAddAgent}
         models={models}
         defaultModelId={modelId}
