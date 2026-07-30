@@ -117,7 +117,17 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
     };
 
     void (async () => {
-      const token = await getTokenRef.current();
+      // Retry briefly — Clerk getToken can be empty right after sign-in redirect.
+      let token: string | null = null;
+      for (let i = 0; i < 10 && !cancelled; i++) {
+        try {
+          token = (await getTokenRef.current()) || null;
+        } catch {
+          token = null;
+        }
+        if (token) break;
+        await new Promise((r) => setTimeout(r, 75 * Math.min(i + 1, 4)));
+      }
       if (cancelled || !token) return;
 
       const s = getSocket(roomId, name, token);

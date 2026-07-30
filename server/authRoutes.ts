@@ -117,10 +117,95 @@ router.post("/worker-token", requireAuth, (req, res) => {
   res.json({ workerId, token });
 });
 
+/** GET /api/auth/my — rooms for current user (before /:id routes) */
+router.get("/my", requireAuth, (req, res) => {
+  if (!req.user) {
+    res.status(401).json({ error: "Authentication required" });
+    return;
+  }
+  const rooms = db.listRoomsByUser(req.user.id);
+  res.json(rooms);
+});
+
+/** DELETE /api/auth/invite/:code — revoke an invite link */
+router.delete("/invite/:code", requireAuth, (req, res) => {
+  if (!req.user) {
+    res.status(401).json({ error: "Authentication required" });
+    return;
+  }
+  const inviteCode = String(req.params.code);
+  const invite = db.getInviteLink(inviteCode);
+  if (!invite) {
+    res.status(404).json({ error: "Invite link not found" });
+    return;
+  }
+  const room = db.getRoom(invite.room_id);
+  if (!room) {
+    res.status(404).json({ error: "Room not found" });
+    return;
+  }
+  if (
+    room.owner_id !== req.user.id &&
+    !db.isRoomMember(invite.room_id, req.user.id)
+  ) {
+    res.status(403).json({ error: "Not allowed to revoke this invite" });
+    return;
+  }
+
+  db.deleteInviteLink(inviteCode);
+  res.json({ ok: true });
+});
+
+/**
+ * POST /api/auth/invite/:code/join — join room via invite.
+ * Registered before /:id/* so "invite" is never treated as a room id.
+ */
+router.post("/invite/:code/join", requireAuth, (req, res) => {
+  if (!req.user) {
+    res.status(401).json({ error: "Authentication required" });
+    return;
+  }
+  const inviteCode = String(req.params.code || "").trim();
+  if (!inviteCode) {
+    res.status(400).json({ error: "Invite code is required" });
+    return;
+  }
+  const invite = db.getInviteLink(inviteCode);
+  if (!invite) {
+    res.status(404).json({ error: "Invalid invite link" });
+    return;
+  }
+
+  const room = db.getRoom(invite.room_id);
+  if (!room || room.status !== "active") {
+    res.status(404).json({ error: "Room not found or no longer active" });
+    return;
+  }
+
+  // Already a member/owner — don't burn maxUses on retries (e.g. after auth race).
+  if (
+    room.owner_id === req.user.id ||
+    db.isRoomMember(invite.room_id, req.user.id)
+  ) {
+    res.json({ roomId: invite.room_id });
+    return;
+  }
+
+  if (invite.max_uses !== null && invite.use_count >= invite.max_uses) {
+    res.status(410).json({ error: "Invite link has expired" });
+    return;
+  }
+
+  db.useInviteLink(inviteCode);
+  db.addRoomMember(invite.room_id, req.user.id, "member");
+
+  res.json({ roomId: invite.room_id });
+});
+
 /** POST /api/auth/:id/invite — create invite link */
 router.post("/:id/invite", requireAuth, (req, res) => {
   if (!req.user) {
-    res.status(401).json({ error: "Auth required" });
+    res.status(401).json({ error: "Authentication required" });
     return;
   }
   const roomId = String(req.params.id);
@@ -156,7 +241,7 @@ router.post("/:id/invite", requireAuth, (req, res) => {
 /** GET /api/auth/:id/invites — list invite links for a room */
 router.get("/:id/invites", requireAuth, (req, res) => {
   if (!req.user) {
-    res.status(401).json({ error: "Auth required" });
+    res.status(401).json({ error: "Authentication required" });
     return;
   }
   const roomId = String(req.params.id);
@@ -182,68 +267,6 @@ router.get("/:id/invites", requireAuth, (req, res) => {
     useCount: row.use_count,
   }));
   res.json({ invites });
-});
-
-/** DELETE /api/auth/invite/:code — revoke an invite link */
-router.delete("/invite/:code", requireAuth, (req, res) => {
-  if (!req.user) {
-    res.status(401).json({ error: "Auth required" });
-    return;
-  }
-  const inviteCode = String(req.params.code);
-  const invite = db.getInviteLink(inviteCode);
-  if (!invite) {
-    res.status(404).json({ error: "Invite link not found" });
-    return;
-  }
-  const room = db.getRoom(invite.room_id);
-  if (!room) {
-    res.status(404).json({ error: "Room not found" });
-    return;
-  }
-  if (
-    room.owner_id !== req.user.id &&
-    !db.isRoomMember(invite.room_id, req.user.id)
-  ) {
-    res.status(403).json({ error: "Not allowed to revoke this invite" });
-    return;
-  }
-
-  db.deleteInviteLink(inviteCode);
-  res.json({ ok: true });
-});
-
-/** POST /api/auth/invite/:code/join — join room via invite */
-router.post("/invite/:code/join", requireAuth, (req, res) => {
-  if (!req.user) {
-    res.status(401).json({ error: "Auth required" });
-    return;
-  }
-  const inviteCode = String(req.params.code);
-  const invite = db.getInviteLink(inviteCode);
-  if (!invite) {
-    res.status(404).json({ error: "Invalid invite link" });
-    return;
-  }
-  if (invite.max_uses !== null && invite.use_count >= invite.max_uses) {
-    res.status(410).json({ error: "Invite link has expired" });
-    return;
-  }
-
-  db.useInviteLink(inviteCode);
-  db.addRoomMember(invite.room_id, req.user.id, "member");
-
-  res.json({ roomId: invite.room_id });
-});
-
-/** GET /api/auth/my — rooms for current user */
-router.get("/my", requireAuth, (req, res) => {
-  if (!req.user) {
-    res.status(401).json({ error: "Auth required" });
-    return;
-  }
-  const rooms = db.listRoomsByUser(req.user.id);
-  res.json(rooms);
 });
 
 export default router;

@@ -27,14 +27,37 @@ export function setTokenGetter(fn: TokenGetter): void {
   tokenGetter = fn;
 }
 
-async function authHeaders(): Promise<Record<string, string>> {
-  if (!tokenGetter) {
-    console.warn("[api] No Clerk token getter registered yet");
-    return {};
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Clerk can report signed-in before getToken() is ready (common right after
+ * redirect onto /invite/…). Retry briefly so API calls don't go out bare.
+ */
+export async function waitForAuthToken(
+  opts: { attempts?: number; intervalMs?: number } = {},
+): Promise<string | null> {
+  const attempts = opts.attempts ?? 12;
+  const intervalMs = opts.intervalMs ?? 75;
+  for (let i = 0; i < attempts; i++) {
+    if (tokenGetter) {
+      try {
+        const token = await tokenGetter();
+        if (token) return token;
+      } catch {
+        // retry
+      }
+    }
+    if (i < attempts - 1) await delay(intervalMs * Math.min(i + 1, 4));
   }
-  const token = await tokenGetter();
+  return null;
+}
+
+async function authHeaders(): Promise<Record<string, string>> {
+  const token = await waitForAuthToken();
   if (!token) {
-    console.warn("[api] Clerk getToken() returned empty — are you signed in?");
+    console.warn("[api] No Clerk auth token available for request");
     return {};
   }
   return { Authorization: `Bearer ${token}` };
@@ -65,11 +88,15 @@ export async function createPairingCode(): Promise<{
 }
 
 export async function joinViaInvite(code: string): Promise<{ roomId: string }> {
-  const res = await fetch(`${API_BASE}/auth/invite/${code}/join`, {
+  const token = await waitForAuthToken();
+  if (!token) {
+    throw new Error("Authentication required — try refreshing, then open the invite again");
+  }
+  const res = await fetch(`${API_BASE}/auth/invite/${encodeURIComponent(code)}/join`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      ...(await authHeaders()),
+      Authorization: `Bearer ${token}`,
     },
   });
   if (!res.ok) {
