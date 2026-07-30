@@ -5,8 +5,9 @@ import { steerClerkAppearance } from "../lib/clerkAppearance";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Steer",
-  description: "Multiplayer Cursor Agent sessions — Steer",
+  title: "Build Lasting Relationships — Steer",
+  description:
+    "Shared live Cursor agent sessions. Watch, redirect, and hand off control together.",
 };
 
 export const viewport: Viewport = {
@@ -32,7 +33,11 @@ export default function RootLayout({
             crossOrigin="anonymous"
           />
           <link
-            href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap"
+            href="https://db.onlinewebfonts.com/c/9d4d074c9335825a23cce178ee03b498?family=P22+Mackinac+W01+Book"
+            rel="stylesheet"
+          />
+          <link
+            href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap"
             rel="stylesheet"
           />
           <link

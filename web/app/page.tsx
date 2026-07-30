@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import RoomCard from "../components/RoomCard";
 import UserMenu from "../components/UserMenu";
+import LandingPage from "../components/landing/LandingPage";
 import { useAuth } from "../components/AuthProvider";
 import { fetchRooms } from "../lib/api";
 import type { RoomInfo } from "../../shared/events";
@@ -60,6 +61,19 @@ export default function Dashboard() {
     };
   }, [user, authLoading]);
 
+  // Marketing landing lives on the dashboard route for signed-out visitors.
+  if (!authLoading && !user) {
+    return <LandingPage />;
+  }
+
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-white flex items-center justify-center">
+        <p className="text-[13px] text-[#191919]/45">Loading…</p>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-[#141414]">
       <header className="border-b border-[#2b2b2b]">
@@ -73,30 +87,19 @@ export default function Dashboard() {
             </span>
           </div>
           <div className="flex items-center gap-1.5 sm:gap-3 shrink-0">
-            {!authLoading && user ? (
-              <>
-                <Link
-                  href="/cli-pair"
-                  className="h-7 px-2 sm:px-2.5 rounded-md text-[12px] text-[#a0a0a0] hover:text-[#e4e4e4] border border-[#2b2b2b] hover:border-[#3c3c3c] transition-colors flex items-center"
-                >
-                  Pair CLI
-                </Link>
-                <Link
-                  href="/profile"
-                  className="h-7 px-2 sm:px-2.5 rounded-md text-[12px] text-[#a0a0a0] hover:text-[#e4e4e4] border border-[#2b2b2b] hover:border-[#3c3c3c] transition-colors hidden sm:flex items-center"
-                >
-                  Profile
-                </Link>
-                <UserMenu />
-              </>
-            ) : !authLoading ? (
-              <Link
-                href="/login"
-                className="h-7 px-2.5 rounded-md text-[12px] text-[#a0a0a0] hover:text-[#e4e4e4] border border-[#2b2b2b] hover:border-[#3c3c3c] transition-colors flex items-center"
-              >
-                Sign in
-              </Link>
-            ) : null}
+            <Link
+              href="/cli-pair"
+              className="h-7 px-2 sm:px-2.5 rounded-md text-[12px] text-[#a0a0a0] hover:text-[#e4e4e4] border border-[#2b2b2b] hover:border-[#3c3c3c] transition-colors flex items-center"
+            >
+              Pair CLI
+            </Link>
+            <Link
+              href="/profile"
+              className="h-7 px-2 sm:px-2.5 rounded-md text-[12px] text-[#a0a0a0] hover:text-[#e4e4e4] border border-[#2b2b2b] hover:border-[#3c3c3c] transition-colors hidden sm:flex items-center"
+            >
+              Profile
+            </Link>
+            <UserMenu />
             <Link
               href="/create"
               className="h-8 px-2.5 sm:px-3.5 rounded-md bg-[#e4e4e4] text-[#141414] text-[13px] font-medium hover:bg-white transition-colors flex items-center"
@@ -134,20 +137,7 @@ export default function Dashboard() {
           </p>
         </div>
 
-        {!authLoading && !user ? (
-          <div className="border border-dashed border-[#2b2b2b] rounded-lg py-16 text-center">
-            <p className="text-[#a0a0a0] text-[14px] mb-1">Sign in to continue</p>
-            <p className="text-[#6e6e6e] text-[13px] mb-5">
-              Your Steer sessions are private to your account.
-            </p>
-            <Link
-              href="/login"
-              className="inline-flex h-8 px-3.5 rounded-md bg-[#e4e4e4] text-[#141414] text-[13px] font-medium hover:bg-white transition-colors items-center"
-            >
-              Sign in
-            </Link>
-          </div>
-        ) : loading || authLoading ? (
+        {loading ? (
           <div className="text-[#6e6e6e] text-[13px] py-16 text-center">
             Loading sessions…
           </div>
