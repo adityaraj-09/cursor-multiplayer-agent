@@ -63,6 +63,29 @@ body {
   animation: landing-fade-up 0.55s ease both;
 }
 
+.landing-float {
+  animation: landing-float 5s ease-in-out infinite;
+}
+
+.landing-float-delay {
+  animation: landing-float 5.6s ease-in-out 0.8s infinite;
+}
+
+.landing-float-slow {
+  animation: landing-float 7s ease-in-out 0.2s infinite;
+}
+
+.landing-pulse {
+  animation: landing-pulse 2.4s ease-in-out infinite;
+  transform-origin: center;
+}
+
+.landing-draw {
+  stroke-dasharray: 420;
+  stroke-dashoffset: 420;
+  animation: landing-draw 1.4s ease forwards;
+}
+
 @keyframes landing-fade-up {
   from {
     opacity: 0;
@@ -74,10 +97,47 @@ body {
   }
 }
 
+@keyframes landing-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-10px);
+  }
+}
+
+@keyframes landing-pulse {
+  0%,
+  100% {
+    opacity: 0.55;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.35);
+  }
+}
+
+@keyframes landing-draw {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .landing-fade,
-  .landing-rise {
+  .landing-rise,
+  .landing-float,
+  .landing-float-delay,
+  .landing-float-slow,
+  .landing-pulse,
+  .landing-draw {
     animation: none;
+  }
+
+  .landing-draw {
+    stroke-dashoffset: 0;
   }
 }
 
