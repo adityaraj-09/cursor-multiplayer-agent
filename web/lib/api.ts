@@ -81,21 +81,55 @@ export async function joinViaInvite(code: string): Promise<{ roomId: string }> {
 
 export async function createInviteLink(
   roomId: string,
-  maxUses?: number,
-): Promise<{ code: string }> {
+  maxUses?: number | null,
+): Promise<{ code: string; roomId: string; maxUses: number | null; useCount: number }> {
   const res = await fetch(`${API_BASE}/auth/${roomId}/invite`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       ...(await authHeaders()),
     },
-    body: JSON.stringify({ maxUses }),
+    body: JSON.stringify({ maxUses: maxUses ?? null }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.error || "Failed to create invite");
   }
   return res.json();
+}
+
+export type InviteLinkInfo = {
+  code: string;
+  roomId: string;
+  createdBy: string;
+  createdAt: number;
+  maxUses: number | null;
+  useCount: number;
+};
+
+export async function listInviteLinks(
+  roomId: string,
+): Promise<InviteLinkInfo[]> {
+  const res = await fetch(`${API_BASE}/auth/${roomId}/invites`, {
+    headers: await authHeaders(),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Failed to list invites");
+  }
+  const data = await res.json();
+  return data.invites ?? [];
+}
+
+export async function revokeInviteLink(code: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/auth/invite/${code}`, {
+    method: "DELETE",
+    headers: await authHeaders(),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Failed to revoke invite");
+  }
 }
 
 /** Ask the paired CLI worker to open a native folder picker. */
@@ -190,8 +224,12 @@ export async function fetchAuthStatus(): Promise<{
   serverKeyHint: string | null;
   encryptionConfigured: boolean;
   byokAvailable: boolean;
+  userByokConfigured: boolean;
+  userByokHint: string | null;
 }> {
-  const res = await fetch(`${API_BASE}/auth/status`);
+  const res = await fetch(`${API_BASE}/auth/status`, {
+    headers: await authHeaders(),
+  });
   if (!res.ok) throw new Error("Failed to fetch auth status");
   return res.json();
 }
@@ -224,6 +262,33 @@ export async function clearServerKey(): Promise<void> {
   if (!res.ok) throw new Error("Failed to clear server key");
 }
 
+export async function setByokKey(apiKey: string): Promise<{
+  userByokConfigured: boolean;
+  userByokHint: string | null;
+}> {
+  const res = await fetch(`${API_BASE}/auth/byok-key`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(await authHeaders()),
+    },
+    body: JSON.stringify({ apiKey }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Failed to save BYOK key");
+  }
+  return res.json();
+}
+
+export async function clearByokKey(): Promise<void> {
+  const res = await fetch(`${API_BASE}/auth/byok-key`, {
+    method: "DELETE",
+    headers: await authHeaders(),
+  });
+  if (!res.ok) throw new Error("Failed to clear BYOK key");
+}
+
 export async function fetchModels(opts: {
   authMode: AuthMode;
   apiKey?: string;
@@ -250,7 +315,10 @@ export async function fetchRepositories(opts: {
 }): Promise<RepoInfo[]> {
   const res = await fetch(`${API_BASE}/repositories`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      ...(await authHeaders()),
+    },
     body: JSON.stringify(opts),
   });
   if (!res.ok) {

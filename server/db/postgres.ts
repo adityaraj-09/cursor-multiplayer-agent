@@ -658,6 +658,38 @@ export function getInviteLink(
   return { ...r, created_at: num(r.created_at)! };
 }
 
+export function listInviteLinks(
+  roomId: string,
+): Array<{
+  code: string;
+  room_id: string;
+  created_by: string;
+  created_at: number;
+  max_uses: number | null;
+  use_count: number;
+}> {
+  const rows = syncQuery<{
+    code: string;
+    room_id: string;
+    created_by: string;
+    created_at: string;
+    max_uses: number | null;
+    use_count: number;
+  }>(
+    `SELECT * FROM invite_links WHERE room_id = $1 ORDER BY created_at DESC`,
+    [roomId],
+  );
+  return rows.map((r) => ({ ...r, created_at: num(r.created_at)! }));
+}
+
+export function deleteInviteLink(code: string): boolean {
+  // syncQuery doesn't expose rowCount consistently — check existence first
+  const existing = getInviteLink(code);
+  if (!existing) return false;
+  syncQuery(`DELETE FROM invite_links WHERE code = $1`, [code]);
+  return true;
+}
+
 export function useInviteLink(code: string): void {
   syncQuery(
     `UPDATE invite_links SET use_count = use_count + 1 WHERE code = $1`,

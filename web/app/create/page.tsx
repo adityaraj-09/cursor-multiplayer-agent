@@ -4,6 +4,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
+  clearByokKey,
   createRoom,
   fetchAuthStatus,
   fetchOnlineWorkers,
@@ -41,7 +42,10 @@ export default function CreateSession() {
     "env" | "stored" | "none"
   >("none");
   const [byokAvailable, setByokAvailable] = useState(false);
+  const [userByokConfigured, setUserByokConfigured] = useState(false);
+  const [userByokHint, setUserByokHint] = useState<string | null>(null);
   const [savingServerKey, setSavingServerKey] = useState(false);
+  const [clearingByok, setClearingByok] = useState(false);
   const [error, setError] = useState("");
   const [creating, setCreating] = useState(false);
   const [pickingFolder, setPickingFolder] = useState(false);
@@ -54,6 +58,8 @@ export default function CreateSession() {
         setServerKeyHint(s.serverKeyHint);
         setServerKeySource(s.serverKeySource);
         setByokAvailable(s.byokAvailable);
+        setUserByokConfigured(Boolean(s.userByokConfigured));
+        setUserByokHint(s.userByokHint ?? null);
       })
       .catch(() => {});
 
@@ -97,7 +103,10 @@ export default function CreateSession() {
     setRuntime(r);
     setRepos([]);
     if (r === "local") setAuthMode("cli");
-    else if (authMode === "cli") setAuthMode("server");
+    else if (authMode === "cli") {
+      // Prefer saved BYOK when switching to cloud if available.
+      setAuthMode(userByokConfigured ? "byok" : "server");
+    }
   };
 
   const handlePickupServerKey = async () => {
@@ -121,6 +130,29 @@ export default function CreateSession() {
     }
   };
 
+  const handleClearByok = async () => {
+    if (
+      !window.confirm(
+        "Remove your saved Cursor API key? You’ll need to paste it again for the next BYOK session.",
+      )
+    ) {
+      return;
+    }
+    setClearingByok(true);
+    setError("");
+    try {
+      await clearByokKey();
+      setUserByokConfigured(false);
+      setUserByokHint(null);
+      setApiKey("");
+      setRepos([]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to clear BYOK key");
+    } finally {
+      setClearingByok(false);
+    }
+  };
+
   // Only cloud needs a repo catalog — models default to "auto" (change in-room).
   useEffect(() => {
     let cancelled = false;
@@ -132,7 +164,8 @@ export default function CreateSession() {
       setRepos([]);
       return;
     }
-    if (authMode === "byok" && !apiKey.trim()) {
+    // BYOK: allow listing with a pasted key OR a saved account key.
+    if (authMode === "byok" && !apiKey.trim() && !userByokConfigured) {
       setRepos([]);
       return;
     }
@@ -140,7 +173,7 @@ export default function CreateSession() {
     const t = setTimeout(() => {
       fetchRepositories({
         authMode,
-        apiKey: authMode === "byok" ? apiKey.trim() : undefined,
+        apiKey: authMode === "byok" && apiKey.trim() ? apiKey.trim() : undefined,
       })
         .then((r) => {
           if (!cancelled) setRepos(r);
@@ -153,13 +186,13 @@ export default function CreateSession() {
             );
           }
         });
-    }, authMode === "byok" ? 400 : 0);
+    }, authMode === "byok" && apiKey.trim() ? 400 : 0);
 
     return () => {
       cancelled = true;
       clearTimeout(t);
     };
-  }, [authMode, apiKey, runtime, serverKeyConfigured]);
+  }, [authMode, apiKey, runtime, serverKeyConfigured, userByokConfigured]);
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -167,7 +200,7 @@ export default function CreateSession() {
       setError("Session name is required");
       return;
     }
-    if (authMode === "byok" && !apiKey.trim()) {
+    if (authMode === "byok" && !apiKey.trim() && !userByokConfigured) {
       setError("Paste your Cursor API key for BYOK");
       return;
     }
@@ -198,7 +231,9 @@ export default function CreateSession() {
         startingRef:
           runtime === "cloud" ? startingRef.trim() || "main" : undefined,
         autoCreatePR: runtime === "cloud" ? autoCreatePR : undefined,
-        apiKey: authMode === "byok" ? apiKey.trim() : undefined,
+        // Omit apiKey when reusing the saved account key — server falls back.
+        apiKey:
+          authMode === "byok" && apiKey.trim() ? apiKey.trim() : undefined,
       });
       router.push(`/room/${room.id}`);
     } catch (err: unknown) {
@@ -350,20 +385,44 @@ export default function CreateSession() {
               </div>
             )}
             {authMode === "byok" && (
-              <>
-                <input
-                  type="password"
-                  value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
-                  placeholder="cursor_…"
-                  className={`${inputClass} font-mono`}
-                  autoComplete="off"
-                />
-                <p className="text-[11px] text-[#6e6e6e] mt-1.5">
-                  Room-scoped key, encrypted at rest. Joiners share this room’s
-                  agent; usage bills this key.
-                </p>
-              </>
+              <div className="space-y-2">
+                {userByokConfigured && !apiKey.trim() ? (
+                  <p className="text-[11px] text-[#6e6e6e]">
+                    Using your saved key {userByokHint}. Paste a new key below
+                    only if you want to replace it.
+                  </p>
+                ) : (
+                  <p className="text-[11px] text-[#6e6e6e]">
+                    {userByokConfigured
+                      ? `Replacing saved key ${userByokHint}. Saved to your account for future sessions.`
+                      : "Saved to your account (encrypted) so you don’t re-paste for every cloud session."}
+                  </p>
+                )}
+                <div className="flex gap-2">
+                  <input
+                    type="password"
+                    value={apiKey}
+                    onChange={(e) => setApiKey(e.target.value)}
+                    placeholder={
+                      userByokConfigured
+                        ? "Replace saved key…"
+                        : "cursor_…"
+                    }
+                    className={`${inputClass} font-mono flex-1`}
+                    autoComplete="off"
+                  />
+                  {userByokConfigured && (
+                    <button
+                      type="button"
+                      onClick={() => void handleClearByok()}
+                      disabled={clearingByok}
+                      className="h-10 px-3 rounded-md bg-[#252525] border border-[#2b2b2b] text-[13px] text-[#a0a0a0] hover:text-[#f07070] hover:border-[#3c3c3c] disabled:opacity-40 shrink-0"
+                    >
+                      {clearingByok ? "…" : "Clear"}
+                    </button>
+                  )}
+                </div>
+              </div>
             )}
           </fieldset>
 

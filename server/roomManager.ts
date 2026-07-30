@@ -26,6 +26,7 @@ import {
   maskApiKey,
 } from "./keyCrypto.js";
 import { getServerApiKey } from "./serverKey.js";
+import { getUserByokKey, setUserByokKey } from "./userByok.js";
 import type {
   AgentRuntime,
   AuthMode,
@@ -161,14 +162,25 @@ export class RoomManager {
     let apiKey = "";
 
     if (authMode === "byok") {
-      const raw = req.apiKey?.trim();
-      if (!raw) throw new Error("apiKey is required for BYOK");
+      const pasted = req.apiKey?.trim() || "";
+      const ownerId = req.ownerId?.trim() || "";
+      // Prefer freshly pasted key; otherwise reuse the user's saved BYOK.
+      const raw = pasted || (ownerId ? getUserByokKey(ownerId) : "");
+      if (!raw) {
+        throw new Error(
+          "apiKey is required for BYOK — paste a Cursor API key (it will be saved for next time)",
+        );
+      }
       if (!encryptionConfigured()) {
         throw new Error("KEY_ENCRYPTION_SECRET is not configured on the server");
       }
       keyCiphertext = encryptApiKey(raw);
       keyHint = maskApiKey(raw);
       apiKey = raw;
+      // Persist for this user so they don't re-paste on every cloud session.
+      if (ownerId && pasted) {
+        setUserByokKey(ownerId, pasted);
+      }
     } else if (authMode === "server") {
       apiKey = getServerApiKey();
       if (!apiKey) {
