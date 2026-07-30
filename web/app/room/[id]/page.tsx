@@ -345,7 +345,7 @@ function LiveRoom({
     setActionError("");
     try {
       await stopRoom(roomId);
-      router.push("/?notice=" + encodeURIComponent("Session stopped"));
+      router.push("/dashboard?notice=" + encodeURIComponent("Session stopped"));
     } catch (err) {
       setActionError(
         err instanceof Error ? err.message : "Failed to stop session",

@@ -113,7 +113,7 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
     };
     const onKicked = (reason: string) => {
       console.warn("Kicked:", reason);
-      window.location.href = `/?notice=${encodeURIComponent(reason || "Left session")}`;
+      window.location.href = `/dashboard?notice=${encodeURIComponent(reason || "Left session")}`;
     };
 
     void (async () => {
