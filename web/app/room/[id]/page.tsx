@@ -246,9 +246,6 @@ function LiveRoom({
   const [stopping, setStopping] = useState(false);
   const [aborting, setAborting] = useState(false);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
-  const [chatFilterAgentId, setChatFilterAgentId] = useState<string | null>(
-    null,
-  );
 
   // Auto-select first agent when agents arrive
   useEffect(() => {
@@ -260,7 +257,6 @@ function LiveRoom({
       const first =
         agents.find((a) => a.status !== "stopped") || agents[0];
       setSelectedAgentId(first.id);
-      if (agents.length > 1) setChatFilterAgentId(first.id);
     }
   }, [agents, selectedAgentId]);
 
@@ -426,7 +422,6 @@ function LiveRoom({
     }) => {
       const agent = await addRoomAgent(roomId, data);
       setSelectedAgentId(agent.id);
-      setChatFilterAgentId(agent.id);
     },
     [roomId],
   );
@@ -501,7 +496,9 @@ function LiveRoom({
             onClick={() => setChangesOpen(true)}
             className="lg:hidden h-7 px-2 rounded-md text-[11px] text-[#a0a0a0] hover:text-[#e4e4e4] border border-[#2b2b2b]"
           >
-            Changes{fileCount > 0 ? ` · ${fileCount}` : ""}
+            {runtime === "cloud"
+              ? "Cloud"
+              : `Changes${fileCount > 0 ? ` · ${fileCount}` : ""}`}
           </button>
           <button
             type="button"
@@ -578,10 +575,7 @@ function LiveRoom({
       <AgentTabs
         agents={agents}
         selectedAgentId={selectedAgentId}
-        onSelect={(id) => {
-          setSelectedAgentId(id);
-          if (agents.length > 1) setChatFilterAgentId(id);
-        }}
+        onSelect={setSelectedAgentId}
         statusByAgent={statusByAgent}
         participants={participants}
         amHost={amHost}
@@ -605,8 +599,9 @@ function LiveRoom({
             messages={messages}
             agentStatus={selectedStatus}
             agents={agents}
-            filterAgentId={chatFilterAgentId}
-            onFilterAgentChange={setChatFilterAgentId}
+            filterAgentId={
+              agents.length > 1 ? selectedAgentId : null
+            }
           />
         </div>
 
