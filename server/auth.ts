@@ -62,7 +62,11 @@ async function resolveClerkUser(token: string): Promise<AuthUser | null> {
   if (!secretKey) return null;
 
 try {
-    const payload = await verifyToken(token, { secretKey });
+    const payload = await verifyToken(token, {
+      secretKey,
+      // Allow small clock drift between Clerk and the API host.
+      clockSkewInMs: 15_000,
+    });
     const clerkId = String(payload.sub || "");
     if (!clerkId) return null;
 

@@ -4,7 +4,7 @@ import {
   createContext,
   useCallback,
   useContext,
-  useEffect,
+  useLayoutEffect,
   useMemo,
   type ReactNode,
 } from "react";
@@ -35,7 +35,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const { user: clerkUser } = useUser();
   const { signOut } = useClerk();
 
-  useEffect(() => {
+  // Register before paint so invite/room effects don't race an empty getter.
+  useLayoutEffect(() => {
     setTokenGetter(async () => {
       if (!isSignedIn) return null;
       try {
