@@ -430,6 +430,7 @@ app.post("/api/rooms/:id/leave", requireAuth, (req, res) => {
     return;
   }
   db.removeRoomMember(id, req.user!.id);
+  roomManager.kickUserSockets(id, req.user!.id, "You left the session");
   res.json({ ok: true });
 });
 
@@ -453,6 +454,7 @@ app.post("/api/rooms/:id/members/remove", requireAuth, (req, res) => {
     return;
   }
   db.removeRoomMember(id, targetUserId);
+  roomManager.kickUserSockets(id, targetUserId, "Removed by the host");
   res.json({ ok: true });
 });
 

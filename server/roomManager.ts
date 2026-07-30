@@ -355,8 +355,12 @@ export class RoomManager {
     (socket.data as { userId?: string }).userId = userId;
     socket.join(roomId);
 
-    // Owner always starts as / reclaim driver when joining
-    if (room.row.owner_id === userId || !room.driverSocketId) {
+    // Only take the driver seat when vacant — never steal from an active driver
+    // on host reconnect / multi-tab join.
+    const driverStillPresent =
+      room.driverSocketId != null &&
+      room.participants.has(room.driverSocketId);
+    if (!driverStillPresent) {
       room.driverSocketId = socket.id;
     }
 
@@ -482,6 +486,18 @@ export class RoomManager {
 
     const sanitized = text.slice(0, MAX_STEER_LENGTH).trim();
     if (!sanitized) return;
+
+    // Server-side busy guard — UI disable alone is not enough with multiple clients.
+    if (room.workerRunActive || room.agent.isBusy()) {
+      socket.emit(
+        "error",
+        "Agent is still running — wait for it to finish before sending another message",
+      );
+      return;
+    }
+
+    // Claim the run slot synchronously before insert/dispatch to close races.
+    room.workerRunActive = true;
 
     const p = room.participants.get(socket.id);
     const userMsg: ChatMessage = {
@@ -680,7 +696,14 @@ export class RoomManager {
       }
     });
 
-    const unsubDiff = this.workerRelay.onFileDiff(room.id, (_roomId, msgId, toolName, path, patch) => {
+    const unsubDiff = this.workerRelay.onFileDiff(room.id, (_roomId, callId, toolName, path, patch) => {
+      const msgId = room.toolMsgIds.get(callId);
+      if (!msgId) {
+        console.warn(
+          `[RoomManager] Dropping file-diff for unknown callId=${callId} path=${path}`,
+        );
+        return;
+      }
       db.updateMessageDiff(msgId, path, "done", patch);
       this.io.to(room.id).emit("chat-message", {
         id: msgId,
@@ -766,7 +789,8 @@ export class RoomManager {
   }
 
   private async runAgent(room: RoomState, prompt: string): Promise<void> {
-    // Try dispatching to a connected CLI worker first (production local rooms)
+    // Try dispatching to a connected CLI worker first (production local rooms).
+    // On success, finishWorkerRun owns clearing workerRunActive.
     if (this.tryDispatchToWorker(room, prompt)) return;
 
     // CLI rooms whose repo isn't on this host must use the worker — don't
@@ -775,6 +799,7 @@ export class RoomManager {
       room.row.auth_mode === "cli" &&
       (!room.row.repo_path || !existsSync(room.row.repo_path))
     ) {
+      room.workerRunActive = false;
       const msg = room.row.owner_id
         ? "No online Steer worker for this account. Run `steer start` on your machine."
         : "No online Steer worker. Run `steer start`, or recreate the session while signed in.";
@@ -789,10 +814,13 @@ export class RoomManager {
       db.insertMessage(errMsg);
       this.io.to(room.id).emit("chat-message", errMsg);
       this.io.to(room.id).emit("agent-status", "error", msg);
+      this.io.to(room.id).emit("agent-status", "idle");
       return;
     }
 
     this.io.to(room.id).emit("agent-status", "running");
+    // Keep the claim from handleSteerMessage for the in-process run.
+    room.workerRunActive = true;
 
     let assistantId: string | null = null;
     let assistantContent = "";
@@ -1023,12 +1051,15 @@ export class RoomManager {
         this.persistCursorSession(room, sessionId);
       }
 
+      room.workerRunActive = false;
       this.io.to(room.id).emit("agent-status", "idle");
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       emitAssistant(message, "error");
       this.io.to(room.id).emit("agent-status", "error", message);
       this.io.to(room.id).emit("agent-status", "idle");
+    } finally {
+      room.workerRunActive = false;
     }
 
     db.updateRoomActivity(room.id);
@@ -1049,7 +1080,12 @@ export class RoomManager {
 
     room.pendingDriveRequest = { socketId: socket.id, name: p.name };
     const driverSocket = this.io.sockets.sockets.get(room.driverSocketId);
-    if (driverSocket) driverSocket.emit("drive-requested", p.name);
+    if (driverSocket) {
+      driverSocket.emit("drive-requested", {
+        socketId: socket.id,
+        name: p.name,
+      });
+    }
   }
 
   handleGrantDrive(socket: Socket, toSocketId: string): void {
@@ -1188,7 +1224,7 @@ export class RoomManager {
       throw new Error("Only the host can change the model");
     }
 
-    if (room?.agent.isBusy()) {
+    if (room?.agent.isBusy() || room?.workerRunActive) {
       throw new Error("Wait for the agent to finish before changing model");
     }
 
@@ -1244,11 +1280,59 @@ export class RoomManager {
     }
     const room = this.rooms.get(id);
     if (room) {
+      // Abort CLI worker + clear listeners before tearing down in-memory state.
+      for (const c of room.workerRunCleanups) c();
+      room.workerRunCleanups = [];
+      room.workerRunActive = false;
+      this.workerRelay?.detachRoom(id);
+
       for (const unsub of room.cleanups) unsub();
       void room.agent.dispose();
+
+      // Kick every connected client so sockets can't keep steering a ghost room.
+      for (const [sid] of [...room.participants.entries()]) {
+        const s = this.io.sockets.sockets.get(sid);
+        this.socketRooms.delete(sid);
+        if (s) {
+          s.emit("kicked", "Session stopped by the host");
+          s.leave(id);
+          s.disconnect(true);
+        }
+      }
+      room.participants.clear();
       this.rooms.delete(id);
+    } else {
+      this.workerRelay?.detachRoom(id);
     }
     db.updateRoomStatus(id, "stopped");
+  }
+
+  /**
+   * Revoke membership and disconnect every live socket for a user in a room.
+   * Used by HTTP leave / remove-member so access checks on reconnect stick.
+   */
+  kickUserSockets(
+    roomId: string,
+    userId: string,
+    reason: string,
+  ): void {
+    const room = this.rooms.get(roomId);
+    if (!room) return;
+
+    for (const [sid, p] of [...room.participants.entries()]) {
+      if (p.userId !== userId) continue;
+      const s = this.io.sockets.sockets.get(sid);
+      if (s) {
+        s.emit("kicked", reason);
+        this.leaveRoom(s);
+        s.disconnect(true);
+      } else {
+        // Stale participant entry without a live socket.
+        room.participants.delete(sid);
+        this.socketRooms.delete(sid);
+      }
+    }
+    this.broadcastPresence(room);
   }
 
   shutdown(): void {

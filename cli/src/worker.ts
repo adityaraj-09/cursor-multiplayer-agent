@@ -161,8 +161,7 @@ export function startWorker(repoPathOverride?: string): void {
       ),
     );
 
-    const editedPaths = new Set<string>();
-    let lastMsgId = "";
+    const editedPaths = new Map<string, string>(); // path → callId
     let emittedTerminal = false;
 
     const onEvent = (event: AgentStreamEvent) => {
@@ -176,9 +175,8 @@ export function startWorker(repoPathOverride?: string): void {
         console.log(chalk.yellow(`  ▸ ${event.name} ${event.detail}`));
       } else if (event.kind === "tool_done") {
         console.log(chalk.green(`  ✓ ${event.name} ${event.detail}`));
-        if (isEditTool(event.name) && event.path) {
-          editedPaths.add(event.path);
-          lastMsgId = event.callId;
+        if (isEditTool(event.name) && event.path && event.callId) {
+          editedPaths.set(event.path, event.callId);
         }
       } else if (event.kind === "assistant_final") {
         console.log(chalk.white(`  Assistant: ${event.text.slice(0, 120)}…`));
@@ -207,13 +205,13 @@ export function startWorker(repoPathOverride?: string): void {
     runAgent(repoPath, prompt, modelId, onEvent, sessionId)
       .then(async () => {
         if (thisRun !== runSeq) return;
-        for (const filePath of editedPaths) {
+        for (const [filePath, callId] of editedPaths) {
           try {
             const patch = await getFileDiff(repoPath, filePath);
             if (patch) {
               emitOrQueue("worker:file-diff", {
                 roomId,
-                msgId: lastMsgId,
+                callId,
                 toolName: "edit",
                 path: filePath,
                 patch,

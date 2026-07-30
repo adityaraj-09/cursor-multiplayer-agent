@@ -203,6 +203,7 @@ function LiveRoom({
     grantDrive,
     leaveRoom,
     removeMember,
+    dismissDriveRequest,
   } = useSocket(roomId, userName);
 
   const { user } = useAuth();
@@ -218,7 +219,6 @@ function LiveRoom({
   );
   const [modelError, setModelError] = useState("");
   const [savingModel, setSavingModel] = useState(false);
-  const [dismissedRequest, setDismissedRequest] = useState(false);
   const [shareLabel, setShareLabel] = useState("Share");
   const [changesOpen, setChangesOpen] = useState(false);
   const [cursorSessionError, setCursorSessionError] = useState("");
@@ -303,12 +303,9 @@ function LiveRoom({
   );
 
   const handleGrantDrive = useCallback(() => {
-    const requester = participants.find((p) => p.name === pendingRequest);
-    if (requester) {
-      grantDrive(requester.socketId);
-    }
-    setDismissedRequest(false);
-  }, [participants, pendingRequest, grantDrive]);
+    if (!pendingRequest) return;
+    grantDrive(pendingRequest.socketId);
+  }, [pendingRequest, grantDrive]);
 
   const handleShare = useCallback(async () => {
     const url = `${window.location.origin}/room/${roomId}`;
@@ -320,9 +317,6 @@ function LiveRoom({
       window.prompt("Copy this link:", url);
     }
   }, [roomId]);
-
-  const activePendingRequest =
-    pendingRequest && !dismissedRequest ? pendingRequest : null;
 
   const fileCount = lastDiff
     ? (lastDiff.match(/^diff --git /gm) || []).length
@@ -403,11 +397,11 @@ function LiveRoom({
           </span>
           <DriverControls
             amDriver={amDriver || amHost}
-            pendingRequest={activePendingRequest}
+            pendingRequest={pendingRequest?.name ?? null}
             onRequestDrive={requestDrive}
             onReleaseDrive={releaseDrive}
             onGrantDrive={handleGrantDrive}
-            onDismissRequest={() => setDismissedRequest(true)}
+            onDismissRequest={dismissDriveRequest}
           />
         </div>
       </header>

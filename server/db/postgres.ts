@@ -399,11 +399,12 @@ export function updateMessageDiff(
 }
 
 export function getMessages(roomId: string, limit = 500): ChatMessage[] {
+  // Newest-first so LIMIT keeps recent history; reverse for chronological UI.
   const rows = syncQuery<Record<string, unknown>>(
-    `SELECT * FROM messages WHERE room_id = $1 ORDER BY ts ASC, id ASC LIMIT $2`,
+    `SELECT * FROM messages WHERE room_id = $1 ORDER BY ts DESC, id DESC LIMIT $2`,
     [roomId, limit],
   );
-  return rows.map(rowToMessage);
+  return rows.map(rowToMessage).reverse();
 }
 
 export function deleteRoom(id: string): void {

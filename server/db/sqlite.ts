@@ -221,9 +221,10 @@ const stmts = {
   updateMessageDiff: db.prepare(
     `UPDATE messages SET content = ?, status = ?, diff_patch = ? WHERE id = ?`,
   ),
+  // Newest-first so LIMIT keeps recent history; reversed in getMessages().
   getMessages: db.prepare(`
     SELECT * FROM messages WHERE room_id = ?
-    ORDER BY ts ASC, rowid ASC LIMIT ?
+    ORDER BY ts DESC, rowid DESC LIMIT ?
   `),
   deleteRoom: db.prepare(`DELETE FROM rooms WHERE id = ?`),
   getSetting: db.prepare(`SELECT value FROM settings WHERE key = ?`),
@@ -512,7 +513,8 @@ export function getMessages(roomId: string, limit = 500): ChatMessage[] {
     status: string;
     ts: number;
   }>;
-  return rows.map(rowToMessage);
+  // Query is newest-first (LIMIT); chat UI expects chronological order.
+  return rows.map(rowToMessage).reverse();
 }
 
 export function deleteRoom(id: string): void {
