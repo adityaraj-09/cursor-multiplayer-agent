@@ -16,6 +16,8 @@ interface SteerInputProps {
   /** Host-only / saving — separate from busy lock messaging */
   modelDisabled?: boolean;
   modelLockReason?: string;
+  /** Shown in the model row when steering a named agent. */
+  agentName?: string;
 }
 
 export default function SteerInput({
@@ -28,6 +30,7 @@ export default function SteerInput({
   onModelChange,
   modelDisabled = false,
   modelLockReason,
+  agentName,
 }: SteerInputProps) {
   const [text, setText] = useState("");
 
@@ -87,7 +90,9 @@ export default function SteerInput({
       className="px-2 sm:px-3 pb-2 sm:pb-3 pt-2"
     >
       <div className="flex items-center gap-2 mb-1.5 sm:mb-2 min-h-7">
-        <label className="text-[11px] text-[#6e6e6e] shrink-0">Model</label>
+        <label className="text-[11px] text-[#6e6e6e] shrink-0">
+          {agentName ? `${agentName} model` : "Model"}
+        </label>
         <select
           value={modelId}
           onChange={(e) => onModelChange?.(e.target.value)}

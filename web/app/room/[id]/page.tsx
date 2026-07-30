@@ -246,6 +246,9 @@ function LiveRoom({
   const [stopping, setStopping] = useState(false);
   const [aborting, setAborting] = useState(false);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+  const [chatFilterAgentId, setChatFilterAgentId] = useState<string | null>(
+    null,
+  );
 
   // Auto-select first agent when agents arrive
   useEffect(() => {
@@ -262,6 +265,7 @@ function LiveRoom({
 
   const selectedAgent =
     agents.find((a) => a.id === selectedAgentId) || agents[0] || null;
+  const selectedModelId = selectedAgent?.modelId || modelId;
   const selectedStatus: typeof agentStatus =
     (selectedAgentId && statusByAgent[selectedAgentId]) ||
     (selectedAgent?.status === "running"
@@ -323,11 +327,15 @@ function LiveRoom({
 
   const handleModelChange = useCallback(
     async (next: string) => {
-      if (!next || next === modelId) return;
+      if (!selectedAgentId || !next || next === selectedModelId) return;
       setSavingModel(true);
       setModelError("");
       try {
-        const updated = await updateRoomModel(roomId, next);
+        const updated = await updateRoomModel(
+          roomId,
+          next,
+          selectedAgentId,
+        );
         onRoomInfo(updated);
       } catch (err) {
         setModelError(
@@ -337,7 +345,7 @@ function LiveRoom({
         setSavingModel(false);
       }
     },
-    [modelId, onRoomInfo, roomId],
+    [selectedAgentId, selectedModelId, onRoomInfo, roomId],
   );
 
   const handleCursorSessionChange = useCallback(
@@ -422,6 +430,7 @@ function LiveRoom({
     }) => {
       const agent = await addRoomAgent(roomId, data);
       setSelectedAgentId(agent.id);
+      setChatFilterAgentId(agent.id);
     },
     [roomId],
   );
@@ -575,9 +584,15 @@ function LiveRoom({
       <AgentTabs
         agents={agents}
         selectedAgentId={selectedAgentId}
-        onSelect={setSelectedAgentId}
+        chatFilterAgentId={chatFilterAgentId}
+        onSelectAgent={(id) => {
+          setSelectedAgentId(id);
+          setChatFilterAgentId(id);
+        }}
+        onSelectAll={() => setChatFilterAgentId(null)}
         statusByAgent={statusByAgent}
         participants={participants}
+        models={models}
         amHost={amHost}
         onAddAgent={() => setAddAgentOpen(true)}
         onStopAgent={(id) => void handleStopAgent(id)}
@@ -600,7 +615,7 @@ function LiveRoom({
             agentStatus={selectedStatus}
             agents={agents}
             filterAgentId={
-              agents.length > 1 ? selectedAgentId : null
+              agents.length > 1 ? chatFilterAgentId : null
             }
           />
         </div>
@@ -641,7 +656,7 @@ function LiveRoom({
         roomId={roomId}
         onSubmit={handleAddAgent}
         models={models}
-        defaultModelId={modelId}
+        defaultModelId={selectedModelId}
         runtime={runtime}
       />
 
@@ -675,7 +690,7 @@ function LiveRoom({
           agentBusy={selectedStatus === "running"}
           connected={connected}
           models={models}
-          modelId={selectedAgent?.modelId || modelId}
+          modelId={selectedModelId}
           onModelChange={(id) => void handleModelChange(id)}
           modelDisabled={!amHost || savingModel}
           modelLockReason={
@@ -690,6 +705,7 @@ function LiveRoom({
               ? `Message ${selectedAgent.label}…`
               : "Message the agent…"
           }
+          agentName={selectedAgent?.label}
         />
       </footer>
     </div>
