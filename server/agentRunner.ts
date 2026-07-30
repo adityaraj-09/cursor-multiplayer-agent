@@ -23,6 +23,7 @@ export class AgentRunner {
   private queue: QueueItem[] = [];
   private active: ChildProcess | null = null;
   private processing = false;
+  private aborted = false;
 
   constructor(
     private repoPath: string,
@@ -57,15 +58,45 @@ export class AgentRunner {
     return this.processing || this.queue.length > 0;
   }
 
+  /** Fire-and-forget abort. Prefer abortAndWait. */
   abort(): void {
-    this.active?.kill("SIGTERM");
-    this.active = null;
+    void this.abortAndWait();
+  }
+
+  /** SIGTERM the active child and wait for it to exit (with a short timeout). */
+  async abortAndWait(): Promise<void> {
+    this.aborted = true;
     this.queue = [];
+    const child = this.active;
+    if (!child) {
+      this.processing = false;
+      return;
+    }
+
+    await new Promise<void>((resolve) => {
+      let settled = false;
+      const done = () => {
+        if (settled) return;
+        settled = true;
+        resolve();
+      };
+      child.once("close", done);
+      child.once("error", done);
+      try {
+        child.kill("SIGTERM");
+      } catch {
+        done();
+        return;
+      }
+      setTimeout(done, 2000);
+    });
+
+    this.active = null;
     this.processing = false;
   }
 
   async dispose(): Promise<void> {
-    this.abort();
+    await this.abortAndWait();
   }
 
   run(
@@ -84,11 +115,16 @@ export class AgentRunner {
     if (!item) return;
 
     this.processing = true;
+    this.aborted = false;
     try {
       await this.execute(item);
       item.resolve();
     } catch (err) {
-      item.reject(err instanceof Error ? err : new Error(String(err)));
+      if (this.aborted) {
+        item.resolve();
+      } else {
+        item.reject(err instanceof Error ? err : new Error(String(err)));
+      }
     } finally {
       this.processing = false;
       this.active = null;
@@ -133,6 +169,7 @@ export class AgentRunner {
 
       const rl = createInterface({ input: child.stdout });
       rl.on("line", (line) => {
+        if (this.aborted) return;
         const trimmed = line.trim();
         if (!trimmed) return;
         let ev: unknown;
@@ -151,6 +188,10 @@ export class AgentRunner {
       });
 
       child.on("error", (err) => {
+        if (this.aborted) {
+          finish();
+          return;
+        }
         if (!ctx.gotTerminalEvent.value) {
           item.onEvent({ kind: "error", message: err.message });
         }
@@ -159,6 +200,10 @@ export class AgentRunner {
 
       child.on("close", (code) => {
         if (settled) return;
+        if (this.aborted) {
+          finish();
+          return;
+        }
         if (code === 0) {
           if (!ctx.gotTerminalEvent.value && ctx.assistantBuf.value) {
             item.onEvent({ kind: "done", result: ctx.assistantBuf.value });

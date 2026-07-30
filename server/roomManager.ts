@@ -88,6 +88,11 @@ interface AgentState {
   pendingDriveRequest: { socketId: string; name: string } | null;
   filePatches: Map<string, string>;
   touchedPaths: Set<string>;
+  /**
+   * Incremented at the start of each run and on abort.
+   * In-flight runAgent / worker handlers ignore events when this no longer matches.
+   */
+  runGeneration: number;
 }
 
 interface RoomState {
@@ -502,6 +507,7 @@ export class RoomManager {
         pendingDriveRequest: null,
         filePatches: new Map(),
         touchedPaths: new Set(),
+        runGeneration: 0,
       });
     }
 
@@ -1101,6 +1107,7 @@ export class RoomManager {
     for (const c of agent.workerRunCleanups) c();
     agent.workerRunCleanups = [];
     agent.workerRunActive = true;
+    const generation = ++agent.runGeneration;
 
     this.emitAgentStatus(room, agent.row.id, "running");
 
@@ -1113,6 +1120,8 @@ export class RoomManager {
     agent.toolMsgIds.clear();
     agent.toolPaths.clear();
 
+    const isCurrent = () => agent.runGeneration === generation;
+
     const finishWorkerRun = (
       status: "idle" | "error" = "idle",
       detail?: string,
@@ -1121,6 +1130,14 @@ export class RoomManager {
       finished = true;
       agent.workerRunActive = false;
       closeAssistant(status === "error" ? "error" : "done");
+
+      // Aborted — abortRun already finalized messages and set idle.
+      if (!isCurrent()) {
+        this.workerRelay?.releaseRun(room.id, agent.row.id);
+        for (const c of agent.workerRunCleanups) c();
+        agent.workerRunCleanups = [];
+        return;
+      }
 
       db.updateAgentStatus(agent.row.id, status === "error" ? "error" : "idle");
       agent.row.status = status === "error" ? "error" : "idle";
@@ -1208,6 +1225,7 @@ export class RoomManager {
       room.id,
       agent.row.id,
       (_roomId, _agentId, event) => {
+        if (!isCurrent()) return;
         switch (event.kind) {
           case "session":
             if (event.sessionId) {
@@ -1324,6 +1342,7 @@ export class RoomManager {
       room.id,
       agent.row.id,
       (_roomId, _agentId, callId, toolName, path, patch) => {
+        if (!isCurrent()) return;
         const msgId = agent.toolMsgIds.get(callId);
         if (!msgId) {
           console.warn(
@@ -1477,6 +1496,7 @@ export class RoomManager {
 
     this.emitAgentStatus(room, agent.row.id, "running");
     agent.workerRunActive = true;
+    const generation = ++agent.runGeneration;
 
     let assistantId: string | null = null;
     let assistantContent = "";
@@ -1486,6 +1506,8 @@ export class RoomManager {
     agent.toolMsgIds.clear();
     agent.toolPaths.clear();
 
+    const isCurrent = () => agent.runGeneration === generation;
+
     const attachFileDiff = async (
       msgId: string,
       toolName: string,
@@ -1493,12 +1515,14 @@ export class RoomManager {
       pathHint?: string,
       alreadyHasPatch?: boolean,
     ) => {
+      if (!isCurrent()) return;
       if (room.row.runtime !== "local" || !room.row.repo_path) return;
       if (!isEditTool(toolName)) return;
       const path = pathHint || extractToolPath(detail);
       if (!path) return;
 
       await new Promise((r) => setTimeout(r, 120));
+      if (!isCurrent()) return;
       const patch = (await getFileDiff(room.row.repo_path, path)).trim();
       if (!patch) return;
       if (alreadyHasPatch) {
@@ -1618,6 +1642,7 @@ export class RoomManager {
       }
 
       await agent.backend.run(prompt, (event) => {
+        if (!isCurrent()) return;
         switch (event.kind) {
           case "session":
             this.persistAgentSession(room, agent, event.sessionId);
@@ -1766,6 +1791,9 @@ export class RoomManager {
         }
       });
 
+      // Aborted while running — abortRun already finalized UI state.
+      if (!isCurrent()) return;
+
       const latestId = agent.backend.getAgentId();
       if (latestId && latestId !== agent.row.sdk_agent_id) {
         db.setAgentSdkId(agent.row.id, latestId);
@@ -1785,12 +1813,19 @@ export class RoomManager {
       agent.workerRunActive = false;
       this.emitAgentStatus(room, agent.row.id, "idle");
     } catch (err) {
+      if (!isCurrent()) return;
       const message = err instanceof Error ? err.message : String(err);
       emitAssistant(message, "error");
       this.emitAgentStatus(room, agent.row.id, "error", message);
       this.emitAgentStatus(room, agent.row.id, "idle");
     } finally {
-      agent.workerRunActive = false;
+      if (isCurrent()) {
+        agent.workerRunActive = false;
+      } else {
+        // Ensure open bubbles are closed even if abort raced with local state.
+        closeAssistant("done");
+        agent.workerRunActive = false;
+      }
     }
 
     db.updateRoomActivity(room.id);
@@ -2048,6 +2083,7 @@ export class RoomManager {
       pendingDriveRequest: null,
       filePatches: new Map(),
       touchedPaths: new Set(),
+      runGeneration: 0,
     };
 
     room.agents.set(agentRow.id, agentState);
@@ -2057,7 +2093,11 @@ export class RoomManager {
     return this.toAgentInfo(agentRow);
   }
 
-  stopAgent(roomId: string, agentId: string, actorUserId?: string): void {
+  async stopAgent(
+    roomId: string,
+    agentId: string,
+    actorUserId?: string,
+  ): Promise<void> {
     const room = this.rooms.get(roomId);
     const row = db.getRoom(roomId);
     if (!room || !row || row.status !== "active") {
@@ -2071,15 +2111,17 @@ export class RoomManager {
     if (!agent) throw new Error("Agent not found");
 
     // Abort running work
+    agent.runGeneration += 1;
     if (agent.workerRunActive) {
       this.workerRelay?.detachRun(roomId, agentId);
       for (const c of agent.workerRunCleanups) c();
       agent.workerRunCleanups = [];
     }
-    agent.backend.abort();
+    this.finalizeStreamingMessages(room, agentId);
+    await agent.backend.abortAndWait();
     agent.workerRunActive = false;
 
-    void agent.backend.dispose();
+    await agent.backend.dispose();
 
     db.updateAgentStatus(agentId, "stopped");
     agent.row.status = "stopped";
@@ -2092,10 +2134,54 @@ export class RoomManager {
   }
 
   // -----------------------------------------------------------------------
+  // finalizeStreamingMessages — close open assistant/tool bubbles on abort
+  // -----------------------------------------------------------------------
+
+  private finalizeStreamingMessages(
+    room: RoomState,
+    agentId: string,
+  ): void {
+    const messages = db.getMessages(room.id, 200);
+    for (const msg of messages) {
+      if (msg.agentId !== agentId) continue;
+      if (msg.status !== "streaming") continue;
+
+      const content =
+        msg.role === "tool" &&
+        (!msg.content || msg.content === "Running…")
+          ? "Aborted"
+          : msg.content;
+
+      db.updateMessageContent(msg.id, content, "done");
+      if (msg.role === "assistant") {
+        this.io
+          .to(room.id)
+          .emit("chat-delta", msg.id, content, "done");
+      } else {
+        this.io.to(room.id).emit("chat-message", {
+          ...msg,
+          content,
+          status: "done",
+        });
+      }
+    }
+
+    const agent = room.agents.get(agentId);
+    if (agent) {
+      agent.toolMsgIds.clear();
+      agent.toolPaths.clear();
+    }
+  }
+
+  // -----------------------------------------------------------------------
   // abortRun — per agent (compat: default agent if no agentId)
   // -----------------------------------------------------------------------
 
-  abortRun(id: string, agentId?: string, actorUserId?: string): void {
+  async abortRun(
+    id: string,
+    agentId?: string,
+    actorUserId?: string,
+  ): Promise<void> {
     const row = db.getRoom(id);
     if (!row || row.status !== "active") {
       throw new Error("Room not found");
@@ -2116,6 +2202,9 @@ export class RoomManager {
     const wasBusy = agent.workerRunActive || agent.backend.isBusy();
     if (!wasBusy) return;
 
+    // Invalidate in-flight runAgent / worker handlers before teardown.
+    agent.runGeneration += 1;
+
     if (agent.workerRunActive) {
       this.workerRelay?.abortRun(id, resolvedAgentId);
       for (const c of agent.workerRunCleanups) c();
@@ -2124,7 +2213,11 @@ export class RoomManager {
       this.workerRelay?.clearRunListeners(id, resolvedAgentId);
     }
 
-    agent.backend.abort();
+    this.finalizeStreamingMessages(room, resolvedAgentId);
+
+    // Await SDK cancel / CLI process exit before marking idle.
+    await agent.backend.abortAndWait();
+
     agent.workerRunActive = false;
     this.fileLocks.releaseAllForAgent(id, resolvedAgentId);
 

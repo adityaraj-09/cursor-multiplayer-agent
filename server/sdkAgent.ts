@@ -3,6 +3,7 @@ import {
   Cursor,
   CursorAgentError,
   type ModelSelection,
+  type Run,
   type SDKAgent,
   type SDKMessage,
 } from "@cursor/sdk";
@@ -105,6 +106,9 @@ export class SdkAgentSession {
   private agent: SDKAgent | null = null;
   private processing = false;
   private queue: QueueItem[] = [];
+  private activeRun: Run | null = null;
+  /** Bumped on each abort so in-flight execute/start can detect cancellation. */
+  private abortGeneration = 0;
 
   constructor(private config: SdkAgentConfig) {}
 
@@ -129,37 +133,35 @@ export class SdkAgentSession {
     return this.processing || this.queue.length > 0;
   }
 
-  /** Stop queued + in-flight work (best-effort for SDK runs). */
+  /** Fire-and-forget abort (stopRoom / stopAgent). Prefer abortAndWait. */
   abort(): void {
+    void this.abortAndWait();
+  }
+
+  /**
+   * Cancel queued + in-flight work and wait for the active SDK run to stop.
+   * Keeps the agent session alive so the next prompt can continue the conversation.
+   */
+  async abortAndWait(): Promise<void> {
+    this.abortGeneration += 1;
+
     const pending = this.queue.splice(0);
     for (const item of pending) {
-      try {
-        item.onEvent({ kind: "error", message: "Aborted" });
-      } catch {
-        // ignore listener errors
-      }
       item.resolve();
     }
-    this.processing = false;
 
-    const agent = this.agent;
-    this.agent = null;
-    if (!agent) return;
-    void Promise.resolve()
-      .then(async () => {
-        try {
-          await agent[Symbol.asyncDispose]();
-        } catch {
-          try {
-            agent.close();
-          } catch {
-            // ignore
-          }
+    const run = this.activeRun;
+    if (run) {
+      try {
+        if (run.supports("cancel")) {
+          await run.cancel();
         }
-      })
-      .catch(() => {
-        // ignore dispose failures on abort
-      });
+      } catch {
+        // ignore cancel failures — dispose path is separate
+      }
+    }
+
+    this.processing = false;
   }
 
   async ensureStarted(): Promise<string> {
@@ -238,16 +240,31 @@ export class SdkAgentSession {
 
   private async execute(item: QueueItem): Promise<void> {
     let assistantBuf = "";
+    const gen = this.abortGeneration;
 
     try {
       await this.ensureStarted();
+      if (gen !== this.abortGeneration) return;
       if (!this.agent) throw new Error("Agent failed to start");
 
       const run = await this.agent.send(item.prompt, {
         model: this.config.model,
       });
 
+      if (gen !== this.abortGeneration) {
+        try {
+          if (run.supports("cancel")) await run.cancel();
+        } catch {
+          // ignore
+        }
+        return;
+      }
+
+      this.activeRun = run;
+
       for await (const event of run.stream()) {
+        if (gen !== this.abortGeneration) break;
+
         if (event.type === "assistant") {
           const chunk = extractAssistantText(event);
           if (!chunk) continue;
@@ -292,7 +309,13 @@ export class SdkAgentSession {
         }
       }
 
+      if (gen !== this.abortGeneration) return;
+
       const result = await run.wait();
+      if (gen !== this.abortGeneration || result.status === "cancelled") {
+        return;
+      }
+
       if (result.status === "error") {
         const msg =
           result.error?.message || result.result || "Agent run failed";
@@ -306,6 +329,7 @@ export class SdkAgentSession {
         git: result.git,
       });
     } catch (err) {
+      if (gen !== this.abortGeneration) return;
       const message =
         err instanceof CursorAgentError
           ? err.message
@@ -314,11 +338,15 @@ export class SdkAgentSession {
             : String(err);
       item.onEvent({ kind: "error", message });
       throw err instanceof Error ? err : new Error(message);
+    } finally {
+      if (this.activeRun) this.activeRun = null;
     }
   }
 
   async dispose(): Promise<void> {
+    this.abortGeneration += 1;
     this.queue = [];
+    this.activeRun = null;
     if (!this.agent) return;
     try {
       await this.agent[Symbol.asyncDispose]();
