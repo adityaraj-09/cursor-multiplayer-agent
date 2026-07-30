@@ -49,7 +49,6 @@ export default function ChatPanel({
   agents = [],
   filterAgentId = null,
 }: ChatPanelProps) {
-  const bottomRef = useRef<HTMLDivElement>(null);
   const scrollerRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
 
@@ -75,14 +74,20 @@ export default function ChatPanel({
   }, []);
 
   useEffect(() => {
-    if (!stickToBottom.current || !scrollerRef.current) return;
-    const el = scrollerRef.current;
-    el.scrollTop = el.scrollHeight;
+    const scroller = scrollerRef.current;
+    if (!scroller || !stickToBottom.current) return;
+
+    // Keep movement inside the chat scroller. scrollIntoView() may scroll all
+    // ancestors, including the document, which shifts the header and composer.
+    const frame = requestAnimationFrame(() => {
+      scroller.scrollTop = scroller.scrollHeight;
+    });
+    return () => cancelAnimationFrame(frame);
   }, [filtered, agentStatus]);
 
   if (filtered.length === 0) {
     return (
-      <div className="flex-1 min-h-0 flex flex-col items-center justify-center gap-2 px-4 sm:px-6">
+      <div className="flex-1 min-h-0 h-full overflow-hidden flex flex-col items-center justify-center gap-2 px-4 sm:px-6">
         <div className="text-[#e4e4e4] text-[14px]">No messages yet</div>
         <div className="text-[#6e6e6e] text-[13px] text-center max-w-sm">
           Send a message below. Anyone in the room can steer the agent — replies
@@ -95,10 +100,39 @@ export default function ChatPanel({
   const items = groupMessages(filtered);
 
   return (
-    <div className="flex-1 min-h-0 flex flex-col">
+    <div className="flex-1 min-h-0 h-full overflow-hidden flex flex-col">
+      {showFilter && (
+        <div className="flex items-center gap-1 px-3 py-1.5 border-b border-[#2b2b2b] shrink-0">
+          <button
+            type="button"
+            onClick={() => onFilterAgentChange(null)}
+            className={`h-6 px-2 rounded text-[11px] ${
+              !filterAgentId
+                ? "bg-[#252525] text-[#e4e4e4]"
+                : "text-[#6e6e6e] hover:text-[#e4e4e4]"
+            }`}
+          >
+            All agents
+          </button>
+          {agents.map((a) => (
+            <button
+              key={a.id}
+              type="button"
+              onClick={() => onFilterAgentChange(a.id)}
+              className={`h-6 px-2 rounded text-[11px] ${
+                filterAgentId === a.id
+                  ? "bg-[#252525] text-[#e4e4e4]"
+                  : "text-[#6e6e6e] hover:text-[#e4e4e4]"
+              }`}
+            >
+              {a.label}
+            </button>
+          ))}
+        </div>
+      )}
       <div
         ref={scrollerRef}
-        className="flex-1 min-h-0 overflow-y-auto overscroll-contain room-chat-scroll"
+        className="room-chat-scroll flex-1 min-h-0 h-full overflow-y-auto overscroll-contain"
       >
         <div className="max-w-3xl mx-auto px-3 sm:px-4 py-3 sm:py-4 space-y-3 sm:space-y-4">
           {items.map((item) =>
@@ -122,7 +156,6 @@ export default function ChatPanel({
               Agent is working…
             </div>
           )}
-          <div ref={bottomRef} />
         </div>
       </div>
     </div>
