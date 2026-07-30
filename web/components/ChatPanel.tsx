@@ -101,35 +101,6 @@ export default function ChatPanel({
 
   return (
     <div className="flex-1 min-h-0 h-full overflow-hidden flex flex-col">
-      {showFilter && (
-        <div className="flex items-center gap-1 px-3 py-1.5 border-b border-[#2b2b2b] shrink-0">
-          <button
-            type="button"
-            onClick={() => onFilterAgentChange(null)}
-            className={`h-6 px-2 rounded text-[11px] ${
-              !filterAgentId
-                ? "bg-[#252525] text-[#e4e4e4]"
-                : "text-[#6e6e6e] hover:text-[#e4e4e4]"
-            }`}
-          >
-            All agents
-          </button>
-          {agents.map((a) => (
-            <button
-              key={a.id}
-              type="button"
-              onClick={() => onFilterAgentChange(a.id)}
-              className={`h-6 px-2 rounded text-[11px] ${
-                filterAgentId === a.id
-                  ? "bg-[#252525] text-[#e4e4e4]"
-                  : "text-[#6e6e6e] hover:text-[#e4e4e4]"
-              }`}
-            >
-              {a.label}
-            </button>
-          ))}
-        </div>
-      )}
       <div
         ref={scrollerRef}
         className="room-chat-scroll flex-1 min-h-0 h-full overflow-y-auto overscroll-contain"
