@@ -40,6 +40,29 @@ body {
   overflow-x: hidden;
 }
 
+/*
+ * Room is an app viewport, not a document. Keeping it fixed prevents mobile
+ * focus/scrollIntoView and rubber-band scrolling from moving the entire chat
+ * chrome. Only .room-chat-scroll is allowed to scroll.
+ */
+.room-shell {
+  position: fixed;
+  inset: 0;
+  height: 100dvh;
+  max-height: 100dvh;
+  width: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+.room-chat-scroll {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  overflow-anchor: none;
+  -webkit-overflow-scrolling: touch;
+}
+
 /* Marketing landing — light surface scoped to .landing */
 .landing {
   color-scheme: light;
