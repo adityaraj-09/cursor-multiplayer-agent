@@ -103,15 +103,16 @@ export default function ChatPanel({ messages, agentStatus }: ChatPanelProps) {
 
 function ToolCallGroup({ messages }: { messages: ChatMessage[] }) {
   const anyStreaming = messages.some((m) => m.status === "streaming");
-  const [open, setOpen] = useState(anyStreaming);
+  const anyDiff = messages.some((m) => Boolean(m.diffPatch));
+  const [open, setOpen] = useState(anyStreaming || anyDiff);
   const prevStreaming = useRef(anyStreaming);
 
-  // Auto-expand while tools are running; collapse when the burst finishes
-  // (unless the user already toggled — only auto-open on start of streaming).
+  // Auto-expand while tools are running, or when a diff lands.
   useEffect(() => {
     if (anyStreaming && !prevStreaming.current) setOpen(true);
+    if (anyDiff) setOpen(true);
     prevStreaming.current = anyStreaming;
-  }, [anyStreaming]);
+  }, [anyStreaming, anyDiff]);
 
   const doneCount = messages.filter((m) => m.status === "done").length;
   const label =
@@ -154,7 +155,13 @@ function ToolCallGroup({ messages }: { messages: ChatMessage[] }) {
 
 function ToolCallRow({ message }: { message: ChatMessage }) {
   const hasDiff = Boolean(message.diffPatch);
-  const [open, setOpen] = useState(message.status === "streaming");
+  const [open, setOpen] = useState(
+    message.status === "streaming" || Boolean(message.diffPatch),
+  );
+
+  useEffect(() => {
+    if (message.diffPatch) setOpen(true);
+  }, [message.diffPatch]);
 
   return (
     <div className="bg-[#161616]">
@@ -185,7 +192,7 @@ function ToolCallRow({ message }: { message: ChatMessage }) {
                   : "done"}
             </span>
             {hasDiff && (
-              <span className="text-[10px] text-[#6e6e6e]">diff</span>
+              <span className="text-[10px] text-[#4d9fff]">diff</span>
             )}
           </div>
           {!open && message.content && (
@@ -203,7 +210,7 @@ function ToolCallRow({ message }: { message: ChatMessage }) {
             </p>
           )}
           {message.diffPatch && (
-            <InlineDiff patch={message.diffPatch} defaultOpen={false} />
+            <InlineDiff patch={message.diffPatch} defaultOpen />
           )}
         </div>
       )}

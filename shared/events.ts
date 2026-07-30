@@ -188,6 +188,8 @@ export interface AgentStreamEventPayload {
   name?: string;
   detail?: string;
   path?: string;
+  /** Unified diff for edit tools (local git or synthetic from tool args). */
+  diffPatch?: string;
   message?: string;
   result?: string;
 }

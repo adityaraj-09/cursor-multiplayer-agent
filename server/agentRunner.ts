@@ -18,6 +18,7 @@ export type AgentStreamEvent =
       name: string;
       detail: string;
       path?: string;
+      diffPatch?: string;
     }
   | { kind: "error"; message: string }
   | { kind: "done"; result: string };

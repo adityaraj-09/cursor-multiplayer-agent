@@ -162,6 +162,7 @@ export function startWorker(repoPathOverride?: string): void {
     );
 
     const editedPaths = new Map<string, string>(); // path → callId
+    const pendingCallPaths = new Map<string, string>(); // callId → path
     let emittedTerminal = false;
 
     const onEvent = (event: AgentStreamEvent) => {
@@ -173,10 +174,26 @@ export function startWorker(repoPathOverride?: string): void {
 
       if (event.kind === "tool_start") {
         console.log(chalk.yellow(`  ▸ ${event.name} ${event.detail}`));
+        if (event.path && event.callId) {
+          pendingCallPaths.set(event.callId, event.path);
+        }
       } else if (event.kind === "tool_done") {
         console.log(chalk.green(`  ✓ ${event.name} ${event.detail}`));
-        if (isEditTool(event.name) && event.path && event.callId) {
-          editedPaths.set(event.path, event.callId);
+        const path =
+          event.path ||
+          (event.callId ? pendingCallPaths.get(event.callId) : undefined);
+        if (isEditTool(event.name) && path && event.callId) {
+          editedPaths.set(path, event.callId);
+          // Emit synthetic patch immediately when available (shows in chat ASAP).
+          if (event.diffPatch) {
+            emitOrQueue("worker:file-diff", {
+              roomId,
+              callId: event.callId,
+              toolName: event.name || "edit",
+              path,
+              patch: event.diffPatch,
+            });
+          }
         }
       } else if (event.kind === "assistant_final") {
         console.log(chalk.white(`  Assistant: ${event.text.slice(0, 120)}…`));
@@ -205,6 +222,7 @@ export function startWorker(repoPathOverride?: string): void {
     runAgent(repoPath, prompt, modelId, onEvent, sessionId)
       .then(async () => {
         if (thisRun !== runSeq) return;
+        // Upgrade to real git diffs after the run settles.
         for (const [filePath, callId] of editedPaths) {
           try {
             const patch = await getFileDiff(repoPath, filePath);

@@ -673,17 +673,32 @@ export class RoomManager {
         case "tool_done": {
           const id = event.callId ? room.toolMsgIds.get(event.callId) : undefined;
           if (id) {
-            const content = event.detail || "Done";
-            db.updateMessageContent(id, content, "done");
-            this.io.to(room.id).emit("chat-message", {
-              id,
-              roomId: room.id,
-              role: "tool",
-              content,
-              toolName: event.name || "tool",
-              status: "done",
-              ts: Date.now(),
-            });
+            const content = event.detail || event.path || "Done";
+            const patch = event.diffPatch?.trim() || "";
+            if (patch) {
+              db.updateMessageDiff(id, content, "done", patch);
+              this.io.to(room.id).emit("chat-message", {
+                id,
+                roomId: room.id,
+                role: "tool",
+                content,
+                toolName: event.name || "tool",
+                diffPatch: patch,
+                status: "done",
+                ts: Date.now(),
+              });
+            } else {
+              db.updateMessageContent(id, content, "done");
+              this.io.to(room.id).emit("chat-message", {
+                id,
+                roomId: room.id,
+                role: "tool",
+                content,
+                toolName: event.name || "tool",
+                status: "done",
+                ts: Date.now(),
+              });
+            }
           }
           afterTools = true;
           break;
@@ -839,6 +854,7 @@ export class RoomManager {
       toolName: string,
       detail: string,
       pathHint?: string,
+      alreadyHasPatch?: boolean,
     ) => {
       if (room.row.runtime !== "local" || !room.row.repo_path) return;
       if (!isEditTool(toolName)) return;
@@ -847,8 +863,12 @@ export class RoomManager {
 
       // Small delay so the filesystem / git index settle after the write
       await new Promise((r) => setTimeout(r, 120));
-      const patch = await getFileDiff(room.row.repo_path, path);
+      const patch = (await getFileDiff(room.row.repo_path, path)).trim();
       if (!patch) return;
+      // Skip re-emit if we already attached an identical synthetic patch.
+      if (alreadyHasPatch) {
+        // Still upgrade — git patch is usually richer than StrReplace spans.
+      }
 
       const content = detail || path;
       db.updateMessageDiff(msgId, content, "done", patch);
@@ -998,18 +1018,34 @@ export class RoomManager {
               undefined;
             if (path) room.toolPaths.set(event.callId, path);
             if (id) {
-              const content = event.detail || "Done";
-              db.updateMessageContent(id, content, "done");
-              this.io.to(room.id).emit("chat-message", {
-                id,
-                roomId: room.id,
-                role: "tool",
-                content,
-                toolName: event.name,
-                status: "done",
-                ts: Date.now(),
-              });
-              void attachFileDiff(id, event.name, content, path);
+              const content = event.detail || path || "Done";
+              const synthetic = event.diffPatch?.trim() || "";
+              if (synthetic) {
+                db.updateMessageDiff(id, content, "done", synthetic);
+                this.io.to(room.id).emit("chat-message", {
+                  id,
+                  roomId: room.id,
+                  role: "tool",
+                  content,
+                  toolName: event.name,
+                  diffPatch: synthetic,
+                  status: "done",
+                  ts: Date.now(),
+                });
+              } else {
+                db.updateMessageContent(id, content, "done");
+                this.io.to(room.id).emit("chat-message", {
+                  id,
+                  roomId: room.id,
+                  role: "tool",
+                  content,
+                  toolName: event.name,
+                  status: "done",
+                  ts: Date.now(),
+                });
+              }
+              // Local: upgrade to a real git working-tree diff when possible.
+              void attachFileDiff(id, event.name, content, path, Boolean(synthetic));
             }
             afterTools = true;
             break;
