@@ -61,6 +61,11 @@ export default function CreateSession() {
   >("none");
   const [orgCursorKeyConfigured, setOrgCursorKeyConfigured] = useState(false);
   const [orgCursorKeyHint, setOrgCursorKeyHint] = useState<string | null>(null);
+  const [orgAnthropicKeyConfigured, setOrgAnthropicKeyConfigured] =
+    useState(false);
+  const [orgAnthropicKeyHint, setOrgAnthropicKeyHint] = useState<string | null>(
+    null,
+  );
   const [byokAvailable, setByokAvailable] = useState(false);
   const [userByokConfigured, setUserByokConfigured] = useState(false);
   const [userByokHint, setUserByokHint] = useState<string | null>(null);
@@ -86,6 +91,9 @@ export default function CreateSession() {
   const teamKeyReady = inOrg
     ? orgCursorKeyConfigured || serverKeyConfigured
     : serverKeyConfigured;
+  const teamAnthropicReady = inOrg
+    ? orgAnthropicKeyConfigured || anthropicConfigured
+    : anthropicConfigured;
 
   const refreshAuth = (orgId?: string | null) =>
     fetchAuthStatus({ orgId: orgId && orgId !== "personal" ? orgId : null })
@@ -95,6 +103,8 @@ export default function CreateSession() {
         setServerKeySource(s.serverKeySource);
         setOrgCursorKeyConfigured(Boolean(s.orgCursorKeyConfigured));
         setOrgCursorKeyHint(s.orgCursorKeyHint ?? null);
+        setOrgAnthropicKeyConfigured(Boolean(s.orgAnthropicKeyConfigured));
+        setOrgAnthropicKeyHint(s.orgAnthropicKeyHint ?? null);
         setByokAvailable(s.byokAvailable);
         setUserByokConfigured(Boolean(s.userByokConfigured));
         setUserByokHint(s.userByokHint ?? null);
@@ -319,8 +329,16 @@ export default function CreateSession() {
         setError("Server is missing E2B_API_KEY — Claude Code cloud cannot start");
         return;
       }
-      if (!anthropicApiKey.trim() && !anthropicConfigured) {
-        setError("Paste your Anthropic API key for Claude Code");
+      if (
+        !anthropicApiKey.trim() &&
+        !anthropicConfigured &&
+        !(inOrg && orgAnthropicKeyConfigured)
+      ) {
+        setError(
+          inOrg
+            ? "Set a shared Anthropic key in Team settings, or paste your key"
+            : "Paste your Anthropic API key for Claude Code",
+        );
         return;
       }
     } else if (!isClaude) {
@@ -595,7 +613,23 @@ export default function CreateSession() {
                 <label className="block text-[12px] text-[#a0a0a0] mb-1.5">
                   Anthropic API key
                 </label>
-                {anthropicConfigured && !anthropicApiKey.trim() ? (
+                {inOrg &&
+                orgAnthropicKeyConfigured &&
+                !anthropicApiKey.trim() &&
+                !anthropicConfigured ? (
+                  <p className="text-[11px] text-[#6e6e6e] mb-1.5">
+                    Using team shared Anthropic key {orgAnthropicKeyHint}
+                    {activeOrg ? ` (${activeOrg.name})` : ""}. Paste a personal
+                    key below only to override. Configure in{" "}
+                    <Link
+                      href={`/org/${workspace}/settings`}
+                      className="text-[#4d9fff] hover:underline"
+                    >
+                      Team settings
+                    </Link>
+                    .
+                  </p>
+                ) : anthropicConfigured && !anthropicApiKey.trim() ? (
                   <p className="text-[11px] text-[#6e6e6e] mb-1.5">
                     Using your saved key {anthropicHint}. Paste a new key below
                     only if you want to replace it.
@@ -604,9 +638,11 @@ export default function CreateSession() {
                   <p className="text-[11px] text-[#6e6e6e] mb-1.5">
                     {anthropicConfigured
                       ? `Replacing saved key ${anthropicHint}.`
-                      : byokAvailable
-                        ? "Saved to your account (encrypted) for future Claude agents."
-                        : "Paste your Anthropic API key (sk-ant-…)."}
+                      : inOrg && !orgAnthropicKeyConfigured
+                        ? "No team Anthropic key yet — paste one or set it in Team settings."
+                        : byokAvailable
+                          ? "Saved to your account (encrypted) for future Claude agents."
+                          : "Paste your Anthropic API key (sk-ant-…)."}
                   </p>
                 )}
                 <div className="flex gap-2">
@@ -615,8 +651,8 @@ export default function CreateSession() {
                     value={anthropicApiKey}
                     onChange={(e) => setAnthropicApiKey(e.target.value)}
                     placeholder={
-                      anthropicConfigured
-                        ? "Replace saved key…"
+                      teamAnthropicReady
+                        ? "Override with personal key…"
                         : "sk-ant-…"
                     }
                     className={`${inputClass} font-mono flex-1`}

@@ -5,9 +5,13 @@ import { INVITE_TTL_MS } from "./config.js";
 import { encryptionConfigured } from "./keyCrypto.js";
 import * as db from "./db.js";
 import {
+  clearOrgAnthropicKey,
   clearOrgCursorKey,
+  orgAnthropicKeyConfigured,
+  orgAnthropicKeyHint,
   orgCursorKeyConfigured,
   orgCursorKeyHint,
+  setOrgAnthropicKey,
   setOrgCursorKey,
 } from "./orgKeys.js";
 import {
@@ -39,6 +43,8 @@ function toOrgInfo(
     memberCount: db.countOrganizationMembers(row.id),
     cursorKeyConfigured: orgCursorKeyConfigured(row.id),
     cursorKeyHint: orgCursorKeyHint(row.id),
+    anthropicKeyConfigured: orgAnthropicKeyConfigured(row.id),
+    anthropicKeyHint: orgAnthropicKeyHint(row.id),
   };
 }
 
@@ -297,7 +303,7 @@ router.patch("/:orgId/members/:userId", requireAuth, (req, res) => {
   try {
     const orgId = String(req.params.orgId);
     const targetUserId = String(req.params.userId);
-    requireOrgAdmin(orgId, req.user!.id);
+    const actor = requireOrgAdmin(orgId, req.user!.id);
     const role = String(req.body?.role || "") as OrgRole;
     if (role !== "admin" && role !== "member") {
       res.status(400).json({ error: "role must be admin or member" });
@@ -310,6 +316,13 @@ router.patch("/:orgId/members/:userId", requireAuth, (req, res) => {
     }
     if (target.role === "owner") {
       res.status(400).json({ error: "Cannot change the org owner's role" });
+      return;
+    }
+    // Only the owner can demote/reassign an existing admin.
+    if (target.role === "admin" && actor.role !== "owner") {
+      res.status(403).json({
+        error: "Only the owner can change another admin’s role",
+      });
       return;
     }
     db.updateOrganizationMemberRole(orgId, targetUserId, role);
@@ -462,6 +475,41 @@ router.delete("/:orgId/cursor-key", requireAuth, (req, res) => {
     requireOrgAdmin(orgId, req.user!.id);
     clearOrgCursorKey(orgId);
     res.json({ cursorKeyConfigured: false, cursorKeyHint: null });
+  } catch (err) {
+    sendErr(res, err);
+  }
+});
+
+/** PUT /api/orgs/:orgId/anthropic-key — set shared org Anthropic key */
+router.put("/:orgId/anthropic-key", requireAuth, (req, res) => {
+  try {
+    const orgId = String(req.params.orgId);
+    requireOrgAdmin(orgId, req.user!.id);
+    if (!encryptionConfigured()) {
+      res.status(400).json({
+        error: "KEY_ENCRYPTION_SECRET is required to store an org key",
+      });
+      return;
+    }
+    const apiKey = String(req.body?.apiKey || "").trim();
+    if (!apiKey) {
+      res.status(400).json({ error: "apiKey is required" });
+      return;
+    }
+    const { hint } = setOrgAnthropicKey(orgId, apiKey);
+    res.json({ anthropicKeyConfigured: true, anthropicKeyHint: hint });
+  } catch (err) {
+    sendErr(res, err);
+  }
+});
+
+/** DELETE /api/orgs/:orgId/anthropic-key */
+router.delete("/:orgId/anthropic-key", requireAuth, (req, res) => {
+  try {
+    const orgId = String(req.params.orgId);
+    requireOrgAdmin(orgId, req.user!.id);
+    clearOrgAnthropicKey(orgId);
+    res.json({ anthropicKeyConfigured: false, anthropicKeyHint: null });
   } catch (err) {
     sendErr(res, err);
   }

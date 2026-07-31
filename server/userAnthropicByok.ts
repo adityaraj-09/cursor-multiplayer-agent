@@ -5,6 +5,7 @@ import {
   encryptionConfigured,
   maskApiKey,
 } from "./keyCrypto.js";
+import { getOrgAnthropicKey } from "./orgKeys.js";
 
 function settingKey(userId: string): string {
   return `user_anthropic_byok:${userId}`;
@@ -59,14 +60,19 @@ export function clearUserAnthropicByokKey(userId: string): void {
 
 /**
  * Resolve Anthropic key for a Claude Code cloud run:
- * pasted key → user's saved BYOK → server ANTHROPIC_API_KEY.
+ * pasted key → org shared key → user's saved BYOK → server ANTHROPIC_API_KEY.
  */
 export function resolveAnthropicApiKey(
   userId: string | null | undefined,
   pasted?: string | null,
+  orgId?: string | null,
 ): string {
   const fromPaste = pasted?.trim() || "";
   if (fromPaste) return fromPaste;
+  if (orgId) {
+    const orgKey = getOrgAnthropicKey(orgId);
+    if (orgKey) return orgKey;
+  }
   if (userId) {
     const saved = getUserAnthropicByokKey(userId);
     if (saved) return saved;

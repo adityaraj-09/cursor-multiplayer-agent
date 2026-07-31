@@ -6,6 +6,7 @@ import { useParams } from "next/navigation";
 import { useAuth } from "../../../../components/AuthProvider";
 import UserMenu from "../../../../components/UserMenu";
 import {
+  clearOrgAnthropicKey,
   clearOrgCursorKey,
   createOrgInvite,
   fetchOrg,
@@ -13,6 +14,7 @@ import {
   fetchOrgMembers,
   removeOrgMember,
   revokeOrgInvite,
+  setOrgAnthropicKey,
   setOrgCursorKey,
   updateOrg,
   updateOrgMemberRole,
@@ -21,7 +23,27 @@ import {
   type OrgMemberInfo,
   type OrgRole,
 } from "../../../../lib/api";
-import { canManageOrg } from "../../../../../shared/orgs";
+import {
+  canManageOrg,
+  orgRoleDescription,
+  orgRoleLabel,
+} from "../../../../../shared/orgs";
+
+function RoleBadge({ role }: { role: OrgRole }) {
+  const tone =
+    role === "owner"
+      ? "border-[#4d9fff]/50 text-[#4d9fff] bg-[#4d9fff]/10"
+      : role === "admin"
+        ? "border-[#3ecf8e]/40 text-[#3ecf8e] bg-[#3ecf8e]/10"
+        : "border-[#2b2b2b] text-[#a0a0a0] bg-[#252525]";
+  return (
+    <span
+      className={`inline-flex h-6 items-center px-2 rounded text-[11px] border ${tone}`}
+    >
+      {orgRoleLabel(role)}
+    </span>
+  );
+}
 
 export default function OrgSettingsPage() {
   const params = useParams<{ id: string }>();
@@ -34,6 +56,8 @@ export default function OrgSettingsPage() {
   const [name, setName] = useState("");
   const [domains, setDomains] = useState("");
   const [cursorKey, setCursorKey] = useState("");
+  const [anthropicKey, setAnthropicKey] = useState("");
+  const [inviteRole, setInviteRole] = useState<OrgRole>("member");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
@@ -75,6 +99,7 @@ export default function OrgSettingsPage() {
   }, [authLoading, user, orgId, reload]);
 
   const isAdmin = canManageOrg(org?.role);
+  const isOwner = org?.role === "owner";
 
   const handleSaveGeneral = async () => {
     if (!orgId) return;
@@ -98,7 +123,7 @@ export default function OrgSettingsPage() {
     }
   };
 
-  const handleSaveKey = async () => {
+  const handleSaveCursorKey = async () => {
     if (!orgId || !cursorKey.trim()) return;
     setBusy(true);
     setError("");
@@ -123,7 +148,7 @@ export default function OrgSettingsPage() {
     }
   };
 
-  const handleClearKey = async () => {
+  const handleClearCursorKey = async () => {
     if (!orgId) return;
     if (!window.confirm("Remove the team’s shared Cursor API key?")) return;
     setBusy(true);
@@ -143,18 +168,81 @@ export default function OrgSettingsPage() {
     }
   };
 
+  const handleSaveAnthropicKey = async () => {
+    if (!orgId || !anthropicKey.trim()) return;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const result = await setOrgAnthropicKey(orgId, anthropicKey.trim());
+      setOrg((prev) =>
+        prev
+          ? {
+              ...prev,
+              anthropicKeyConfigured: result.anthropicKeyConfigured,
+              anthropicKeyHint: result.anthropicKeyHint,
+            }
+          : prev,
+      );
+      setAnthropicKey("");
+      setNotice("Shared Anthropic key saved for the team");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save key");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleClearAnthropicKey = async () => {
+    if (!orgId) return;
+    if (!window.confirm("Remove the team’s shared Anthropic API key?")) return;
+    setBusy(true);
+    setError("");
+    try {
+      await clearOrgAnthropicKey(orgId);
+      setOrg((prev) =>
+        prev
+          ? { ...prev, anthropicKeyConfigured: false, anthropicKeyHint: null }
+          : prev,
+      );
+      setNotice("Shared Anthropic key cleared");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to clear key");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const handleCreateInvite = async () => {
     if (!orgId) return;
     setBusy(true);
     setError("");
     try {
-      const invite = await createOrgInvite(orgId, { role: "member" });
+      const role = inviteRole === "admin" ? "admin" : "member";
+      const invite = await createOrgInvite(orgId, { role });
       setInvites((prev) => [invite, ...prev]);
       const url = `${window.location.origin}/org-invite/${invite.code}`;
       await navigator.clipboard.writeText(url).catch(() => undefined);
-      setNotice("Invite link created and copied");
+      setNotice(
+        `${orgRoleLabel(role)} invite link created and copied`,
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create invite");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleRoleChange = async (userId: string, role: OrgRole) => {
+    if (!org) return;
+    setBusy(true);
+    setError("");
+    try {
+      await updateOrgMemberRole(org.id, userId, role);
+      await reload();
+      setNotice(`Updated role to ${orgRoleLabel(role)}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update role");
     } finally {
       setBusy(false);
     }
@@ -190,6 +278,9 @@ export default function OrgSettingsPage() {
       </div>
     );
   }
+
+  const keysReady =
+    org.cursorKeyConfigured && org.anthropicKeyConfigured;
 
   return (
     <div className="min-h-screen bg-[#141414]">
@@ -255,70 +346,165 @@ export default function OrgSettingsPage() {
         </section>
 
         <section className="rounded-lg border border-[#2b2b2b] bg-[#1a1a1a] p-4 space-y-3">
-          <h2 className="text-[14px] font-medium text-[#e4e4e4]">
-            Shared Cursor key
-          </h2>
-          <p className="text-[11px] text-[#6e6e6e]">
-            One team key for cloud “Server key” sessions. Members don’t need to
-            paste a key for every room.
-          </p>
-          {org.cursorKeyConfigured ? (
-            <p className="text-[12px] text-[#a0a0a0]">
-              Configured {org.cursorKeyHint}
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h2 className="text-[14px] font-medium text-[#e4e4e4]">
+                Shared API keys
+              </h2>
+              <p className="text-[11px] text-[#6e6e6e] mt-1">
+                Configure both Cursor and Anthropic so team cloud sessions work
+                for either backend without per-room BYOK.
+              </p>
+            </div>
+            <span
+              className={`shrink-0 text-[11px] px-2 py-1 rounded border ${
+                keysReady
+                  ? "border-[#3ecf8e]/40 text-[#3ecf8e]"
+                  : "border-[#f07070]/40 text-[#f07070]"
+              }`}
+            >
+              {keysReady ? "Both set" : "Incomplete"}
+            </span>
+          </div>
+
+          <div className="rounded-md border border-[#2b2b2b] bg-[#141414] p-3 space-y-2">
+            <h3 className="text-[13px] font-medium text-[#e4e4e4]">
+              Shared Cursor key
+            </h3>
+            <p className="text-[11px] text-[#6e6e6e]">
+              Used for team Cursor cloud sessions (“Team key”).
             </p>
-          ) : (
-            <p className="text-[12px] text-[#f07070]">No shared key set</p>
-          )}
-          {isAdmin && (
-            <>
-              <input
-                type="password"
-                value={cursorKey}
-                onChange={(e) => setCursorKey(e.target.value)}
-                placeholder={
-                  org.cursorKeyConfigured ? "Replace key…" : "cursor_…"
-                }
-                className="w-full h-9 px-2.5 rounded-md bg-[#252525] border border-[#2b2b2b] text-[13px] text-[#e4e4e4] font-mono outline-none focus:border-[#4d9fff]"
-                autoComplete="off"
-              />
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  disabled={busy || !cursorKey.trim()}
-                  onClick={() => void handleSaveKey()}
-                  className="h-8 px-3 rounded-md bg-[#e4e4e4] text-[#141414] text-[12px] font-medium hover:bg-white disabled:opacity-50"
-                >
-                  Save key
-                </button>
-                {org.cursorKeyConfigured && (
+            {org.cursorKeyConfigured ? (
+              <p className="text-[12px] text-[#a0a0a0]">
+                Configured {org.cursorKeyHint}
+              </p>
+            ) : (
+              <p className="text-[12px] text-[#f07070]">No shared Cursor key</p>
+            )}
+            {isAdmin && (
+              <>
+                <input
+                  type="password"
+                  value={cursorKey}
+                  onChange={(e) => setCursorKey(e.target.value)}
+                  placeholder={
+                    org.cursorKeyConfigured ? "Replace key…" : "cursor_…"
+                  }
+                  className="w-full h-9 px-2.5 rounded-md bg-[#252525] border border-[#2b2b2b] text-[13px] text-[#e4e4e4] font-mono outline-none focus:border-[#4d9fff]"
+                  autoComplete="off"
+                />
+                <div className="flex gap-2">
                   <button
                     type="button"
-                    disabled={busy}
-                    onClick={() => void handleClearKey()}
-                    className="h-8 px-3 rounded-md text-[12px] text-[#a0a0a0] hover:text-[#f07070] border border-[#2b2b2b]"
+                    disabled={busy || !cursorKey.trim()}
+                    onClick={() => void handleSaveCursorKey()}
+                    className="h-8 px-3 rounded-md bg-[#e4e4e4] text-[#141414] text-[12px] font-medium hover:bg-white disabled:opacity-50"
                   >
-                    Clear
+                    Save Cursor key
                   </button>
-                )}
-              </div>
-            </>
-          )}
+                  {org.cursorKeyConfigured && (
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => void handleClearCursorKey()}
+                      className="h-8 px-3 rounded-md text-[12px] text-[#a0a0a0] hover:text-[#f07070] border border-[#2b2b2b]"
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+
+          <div className="rounded-md border border-[#2b2b2b] bg-[#141414] p-3 space-y-2">
+            <h3 className="text-[13px] font-medium text-[#e4e4e4]">
+              Shared Anthropic key
+            </h3>
+            <p className="text-[11px] text-[#6e6e6e]">
+              Used for team Claude Code cloud sessions (E2B). Same idea as the
+              Cursor key — set once for the whole team.
+            </p>
+            {org.anthropicKeyConfigured ? (
+              <p className="text-[12px] text-[#a0a0a0]">
+                Configured {org.anthropicKeyHint}
+              </p>
+            ) : (
+              <p className="text-[12px] text-[#f07070]">
+                No shared Anthropic key
+              </p>
+            )}
+            {isAdmin && (
+              <>
+                <input
+                  type="password"
+                  value={anthropicKey}
+                  onChange={(e) => setAnthropicKey(e.target.value)}
+                  placeholder={
+                    org.anthropicKeyConfigured ? "Replace key…" : "sk-ant-…"
+                  }
+                  className="w-full h-9 px-2.5 rounded-md bg-[#252525] border border-[#2b2b2b] text-[13px] text-[#e4e4e4] font-mono outline-none focus:border-[#4d9fff]"
+                  autoComplete="off"
+                />
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    disabled={busy || !anthropicKey.trim()}
+                    onClick={() => void handleSaveAnthropicKey()}
+                    className="h-8 px-3 rounded-md bg-[#e4e4e4] text-[#141414] text-[12px] font-medium hover:bg-white disabled:opacity-50"
+                  >
+                    Save Anthropic key
+                  </button>
+                  {org.anthropicKeyConfigured && (
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => void handleClearAnthropicKey()}
+                      className="h-8 px-3 rounded-md text-[12px] text-[#a0a0a0] hover:text-[#f07070] border border-[#2b2b2b]"
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
         </section>
 
         <section className="rounded-lg border border-[#2b2b2b] bg-[#1a1a1a] p-4 space-y-3">
-          <div className="flex items-center justify-between gap-2">
-            <h2 className="text-[14px] font-medium text-[#e4e4e4]">
-              Team invites
-            </h2>
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+            <div>
+              <h2 className="text-[14px] font-medium text-[#e4e4e4]">
+                Team invites
+              </h2>
+              <p className="text-[11px] text-[#6e6e6e] mt-1">
+                Invite as Admin to add a co-lead, or Member for session access
+                only.
+              </p>
+            </div>
             {isAdmin && (
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => void handleCreateInvite()}
-                className="h-8 px-3 rounded-md text-[12px] border border-[#2b2b2b] text-[#e4e4e4] hover:border-[#3c3c3c] disabled:opacity-50"
-              >
-                Create invite link
-              </button>
+              <div className="flex items-center gap-2">
+                <select
+                  value={inviteRole}
+                  onChange={(e) =>
+                    setInviteRole(
+                      e.target.value === "admin" ? "admin" : "member",
+                    )
+                  }
+                  className="h-8 px-2 rounded-md bg-[#252525] border border-[#2b2b2b] text-[12px] text-[#e4e4e4]"
+                >
+                  <option value="member">Member</option>
+                  <option value="admin">Admin</option>
+                </select>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void handleCreateInvite()}
+                  className="h-8 px-3 rounded-md text-[12px] border border-[#2b2b2b] text-[#e4e4e4] hover:border-[#3c3c3c] disabled:opacity-50"
+                >
+                  Create invite
+                </button>
+              </div>
             )}
           </div>
           {invites.length === 0 ? (
@@ -333,9 +519,12 @@ export default function OrgSettingsPage() {
                 return (
                   <li
                     key={invite.code}
-                    className="flex items-center justify-between gap-2 text-[12px]"
+                    className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-[12px]"
                   >
-                    <code className="text-[#a0a0a0] truncate">{url}</code>
+                    <div className="min-w-0 flex items-center gap-2">
+                      <RoleBadge role={invite.role === "admin" ? "admin" : "member"} />
+                      <code className="text-[#a0a0a0] truncate">{url}</code>
+                    </div>
                     <div className="flex gap-2 shrink-0">
                       <button
                         type="button"
@@ -371,49 +560,71 @@ export default function OrgSettingsPage() {
         </section>
 
         <section className="rounded-lg border border-[#2b2b2b] bg-[#1a1a1a] p-4 space-y-3">
-          <h2 className="text-[14px] font-medium text-[#e4e4e4]">
-            Members ({members.length})
-          </h2>
-          <ul className="space-y-2">
+          <div>
+            <h2 className="text-[14px] font-medium text-[#e4e4e4]">
+              Members ({members.length})
+            </h2>
+            <p className="text-[11px] text-[#6e6e6e] mt-1">
+              Roles: <span className="text-[#a0a0a0]">Owner</span> (full
+              control) · <span className="text-[#a0a0a0]">Admin</span> (keys,
+              invites, roles) · <span className="text-[#a0a0a0]">Member</span>{" "}
+              (sessions only). Promote someone to Admin for a co-lead without
+              giving away ownership.
+            </p>
+          </div>
+          <ul className="space-y-3">
             {members.map((m) => (
               <li
                 key={m.userId}
-                className="flex items-center justify-between gap-3"
+                className="flex flex-col sm:flex-row sm:items-center justify-between gap-3"
               >
                 <div className="min-w-0">
-                  <p className="text-[13px] text-[#e4e4e4] truncate">{m.name}</p>
-                  <p className="text-[11px] text-[#6e6e6e] truncate">{m.email}</p>
+                  <div className="flex items-center gap-2 min-w-0">
+                    <p className="text-[13px] text-[#e4e4e4] truncate">
+                      {m.name}
+                      {m.userId === user.id ? " (you)" : ""}
+                    </p>
+                    <RoleBadge role={m.role} />
+                  </div>
+                  <p className="text-[11px] text-[#6e6e6e] truncate">
+                    {m.email}
+                  </p>
+                  <p className="text-[10px] text-[#6e6e6e] mt-0.5">
+                    {orgRoleDescription(m.role)}
+                  </p>
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
                   {isAdmin && m.role !== "owner" ? (
                     <select
                       value={m.role}
+                      disabled={busy || (!isOwner && m.role === "admin")}
                       onChange={(e) =>
-                        void updateOrgMemberRole(
-                          org.id,
+                        void handleRoleChange(
                           m.userId,
                           e.target.value as OrgRole,
-                        ).then(() => reload())
+                        )
                       }
-                      className="h-8 px-2 rounded-md bg-[#252525] border border-[#2b2b2b] text-[12px] text-[#e4e4e4]"
+                      className="h-8 px-2 rounded-md bg-[#252525] border border-[#2b2b2b] text-[12px] text-[#e4e4e4] disabled:opacity-50"
+                      title={
+                        !isOwner && m.role === "admin"
+                          ? "Only the owner can change another admin’s role"
+                          : undefined
+                      }
                     >
                       <option value="member">Member</option>
                       <option value="admin">Admin</option>
                     </select>
-                  ) : (
-                    <span className="text-[11px] text-[#6e6e6e] capitalize">
-                      {m.role}
-                    </span>
-                  )}
+                  ) : null}
                   {isAdmin && m.role !== "owner" && m.userId !== user.id && (
                     <button
                       type="button"
+                      disabled={busy || (!isOwner && m.role === "admin")}
                       onClick={() =>
                         void removeOrgMember(org.id, m.userId).then(() =>
                           reload(),
                         )
                       }
-                      className="text-[11px] text-[#f07070] hover:underline"
+                      className="text-[11px] text-[#f07070] hover:underline disabled:opacity-40"
                     >
                       Remove
                     </button>

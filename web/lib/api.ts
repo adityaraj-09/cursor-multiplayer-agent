@@ -274,6 +274,8 @@ export async function fetchAuthStatus(opts?: { orgId?: string | null }): Promise
   canManageServerKey: boolean;
   orgCursorKeyConfigured?: boolean;
   orgCursorKeyHint?: string | null;
+  orgAnthropicKeyConfigured?: boolean;
+  orgAnthropicKeyHint?: string | null;
 }> {
   const params = new URLSearchParams();
   if (opts?.orgId && opts.orgId !== "personal") {
@@ -874,6 +876,39 @@ export async function clearOrgCursorKey(orgId: string): Promise<void> {
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.error || "Failed to clear org key");
+  }
+}
+
+export async function setOrgAnthropicKey(
+  orgId: string,
+  apiKey: string,
+): Promise<{
+  anthropicKeyConfigured: boolean;
+  anthropicKeyHint: string | null;
+}> {
+  const res = await fetch(`${API_BASE}/orgs/${orgId}/anthropic-key`, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+      ...(await authHeaders()),
+    },
+    body: JSON.stringify({ apiKey }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Failed to save org Anthropic key");
+  }
+  return res.json();
+}
+
+export async function clearOrgAnthropicKey(orgId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/orgs/${orgId}/anthropic-key`, {
+    method: "DELETE",
+    headers: await authHeaders(),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Failed to clear org Anthropic key");
   }
 }
 

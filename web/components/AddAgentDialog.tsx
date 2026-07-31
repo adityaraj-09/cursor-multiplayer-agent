@@ -31,6 +31,8 @@ interface AddAgentDialogProps {
   models: ModelInfo[];
   defaultModelId?: string;
   runtime: "local" | "cloud";
+  /** When set, Claude cloud can reuse the org shared Anthropic key. */
+  orgId?: string;
 }
 
 export default function AddAgentDialog({
@@ -41,6 +43,7 @@ export default function AddAgentDialog({
   models,
   defaultModelId,
   runtime,
+  orgId,
 }: AddAgentDialogProps) {
   const [label, setLabel] = useState("");
   const [backend, setBackend] = useState<"cursor" | "claude-code">("cursor");
@@ -53,6 +56,8 @@ export default function AddAgentDialog({
   const [anthropicApiKey, setAnthropicApiKey] = useState("");
   const [anthropicConfigured, setAnthropicConfigured] = useState(false);
   const [anthropicHint, setAnthropicHint] = useState<string | null>(null);
+  const [orgAnthropicConfigured, setOrgAnthropicConfigured] = useState(false);
+  const [orgAnthropicHint, setOrgAnthropicHint] = useState<string | null>(null);
   const [userByokConfigured, setUserByokConfigured] = useState(false);
   const [userByokHint, setUserByokHint] = useState<string | null>(null);
   const [serverKeyConfigured, setServerKeyConfigured] = useState(false);
@@ -64,15 +69,21 @@ export default function AddAgentDialog({
   const needsCursorKey = backend === "cursor" && runtime === "cloud";
   const hasCursorAuth =
     Boolean(apiKey.trim()) || userByokConfigured || serverKeyConfigured;
+  const hasAnthropicAuth =
+    Boolean(anthropicApiKey.trim()) ||
+    anthropicConfigured ||
+    orgAnthropicConfigured;
 
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
-    void fetchAuthStatus()
+    void fetchAuthStatus({ orgId: orgId || null })
       .then((s) => {
         if (cancelled) return;
         setAnthropicConfigured(Boolean(s.userAnthropicByokConfigured));
         setAnthropicHint(s.userAnthropicByokHint ?? null);
+        setOrgAnthropicConfigured(Boolean(s.orgAnthropicKeyConfigured));
+        setOrgAnthropicHint(s.orgAnthropicKeyHint ?? null);
         setUserByokConfigured(Boolean(s.userByokConfigured));
         setUserByokHint(s.userByokHint ?? null);
         setServerKeyConfigured(Boolean(s.serverKeyConfigured));
@@ -85,7 +96,7 @@ export default function AddAgentDialog({
     return () => {
       cancelled = true;
     };
-  }, [open]);
+  }, [open, orgId]);
 
   // Reset model when the dialog opens or backend changes.
   useEffect(() => {
@@ -231,13 +242,12 @@ export default function AddAgentDialog({
         return;
       }
     }
-    if (
-      backend === "claude-code" &&
-      runtime === "cloud" &&
-      !anthropicApiKey.trim() &&
-      !anthropicConfigured
-    ) {
-      setError("Paste your Anthropic API key for Claude Code");
+    if (backend === "claude-code" && runtime === "cloud" && !hasAnthropicAuth) {
+      setError(
+        orgId
+          ? "Set a shared Anthropic key in Team settings, or paste your key"
+          : "Paste your Anthropic API key for Claude Code",
+      );
       return;
     }
     if (needsCursorKey && !apiKey.trim() && !userByokConfigured && !serverKeyConfigured) {
@@ -393,7 +403,14 @@ export default function AddAgentDialog({
             <label className="block text-[11px] text-[#6e6e6e] mb-1">
               Anthropic API key
             </label>
-            {anthropicConfigured && !anthropicApiKey.trim() ? (
+            {orgAnthropicConfigured &&
+            !anthropicApiKey.trim() &&
+            !anthropicConfigured ? (
+              <p className="text-[11px] text-[#a0a0a0] mb-1">
+                Using team shared Anthropic key {orgAnthropicHint}. Paste a
+                personal key below only to override.
+              </p>
+            ) : anthropicConfigured && !anthropicApiKey.trim() ? (
               <p className="text-[11px] text-[#a0a0a0] mb-1">
                 Using your saved key {anthropicHint}. Paste a new key below to
                 replace it.
@@ -402,9 +419,11 @@ export default function AddAgentDialog({
               <p className="text-[11px] text-[#6e6e6e] mb-1">
                 {anthropicConfigured
                   ? `Replacing saved key ${anthropicHint}. Saved to your account for future Claude agents.`
-                  : byokAvailable
-                    ? "Saved to your account for future Claude Code agents."
-                    : "Paste your Anthropic API key (sk-ant-…)."}
+                  : orgId && !orgAnthropicConfigured
+                    ? "No team Anthropic key — paste one or set it in Team settings."
+                    : byokAvailable
+                      ? "Saved to your account for future Claude Code agents."
+                      : "Paste your Anthropic API key (sk-ant-…)."}
               </p>
             )}
             <input
@@ -412,8 +431,8 @@ export default function AddAgentDialog({
               value={anthropicApiKey}
               onChange={(e) => setAnthropicApiKey(e.target.value)}
               placeholder={
-                anthropicConfigured
-                  ? "Paste new key to replace…"
+                hasAnthropicAuth
+                  ? "Paste new key to override…"
                   : "sk-ant-…"
               }
               autoComplete="off"

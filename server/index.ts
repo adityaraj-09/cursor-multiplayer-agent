@@ -16,6 +16,8 @@ import orgRoutes from "./orgRoutes.js";
 import * as db from "./db.js";
 import {
   getOrgCursorKey,
+  orgAnthropicKeyConfigured,
+  orgAnthropicKeyHint,
   orgCursorKeyConfigured,
   orgCursorKeyHint,
 } from "./orgKeys.js";
@@ -192,10 +194,13 @@ app.get("/api/auth/status", (req, res) => {
   const userId = req.user?.id;
   const orgId =
     typeof req.query.orgId === "string" ? req.query.orgId.trim() : "";
-  const orgKeyConfigured =
-    orgId && userId && db.isOrganizationMember(orgId, userId)
-      ? orgCursorKeyConfigured(orgId)
-      : false;
+  const inOrg = Boolean(
+    orgId && userId && db.isOrganizationMember(orgId, userId),
+  );
+  const orgKeyConfigured = inOrg ? orgCursorKeyConfigured(orgId) : false;
+  const orgAnthropicConfigured = inOrg
+    ? orgAnthropicKeyConfigured(orgId)
+    : false;
   res.json({
     serverKeyConfigured: serverKeyConfigured(),
     serverKeySource: serverKeySource(),
@@ -213,6 +218,9 @@ app.get("/api/auth/status", (req, res) => {
     orgCursorKeyConfigured: orgKeyConfigured,
     orgCursorKeyHint:
       orgKeyConfigured && orgId ? orgCursorKeyHint(orgId) : null,
+    orgAnthropicKeyConfigured: orgAnthropicConfigured,
+    orgAnthropicKeyHint:
+      orgAnthropicConfigured && orgId ? orgAnthropicKeyHint(orgId) : null,
   });
 });
 
