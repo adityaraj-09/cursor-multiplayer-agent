@@ -57,6 +57,7 @@ async function initSchema() {
       sender_color TEXT,
       tool_name TEXT,
       diff_patch TEXT,
+      todos_json TEXT,
       status TEXT NOT NULL DEFAULT 'done',
       ts BIGINT NOT NULL
     );
@@ -180,6 +181,7 @@ async function initSchema() {
     `ALTER TABLE rooms ADD COLUMN IF NOT EXISTS owner_id TEXT`,
     `ALTER TABLE invite_links ADD COLUMN IF NOT EXISTS expires_at BIGINT`,
     `ALTER TABLE messages ADD COLUMN IF NOT EXISTS agent_id TEXT`,
+    `ALTER TABLE messages ADD COLUMN IF NOT EXISTS todos_json TEXT`,
   ];
 
   for (const sql of migrations) {
@@ -263,6 +265,19 @@ function pgRowToRoom(r: Record<string, unknown>): RoomRow {
   };
 }
 
+function parseTodosJson(
+  raw: unknown,
+): ChatMessage["todos"] {
+  if (typeof raw !== "string" || !raw) return undefined;
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed) || parsed.length === 0) return undefined;
+    return parsed as NonNullable<ChatMessage["todos"]>;
+  } catch {
+    return undefined;
+  }
+}
+
 function rowToMessage(r: Record<string, unknown>): ChatMessage {
   return {
     id: r.id as string,
@@ -273,6 +288,7 @@ function rowToMessage(r: Record<string, unknown>): ChatMessage {
     senderColor: (r.sender_color as string) ?? undefined,
     toolName: (r.tool_name as string) ?? undefined,
     diffPatch: (r.diff_patch as string) || undefined,
+    todos: parseTodosJson(r.todos_json),
     status: r.status as ChatMessage["status"],
     ts: num(r.ts as string)!,
     agentId: (r.agent_id as string) || undefined,
@@ -437,8 +453,8 @@ export function getSteerHistory(
 
 export function insertMessage(msg: ChatMessage): void {
   syncQuery(
-    `INSERT INTO messages (id, room_id, role, content, sender_name, sender_color, tool_name, diff_patch, status, ts, agent_id)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+    `INSERT INTO messages (id, room_id, role, content, sender_name, sender_color, tool_name, diff_patch, todos_json, status, ts, agent_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
     [
       msg.id,
       msg.roomId,
@@ -448,6 +464,7 @@ export function insertMessage(msg: ChatMessage): void {
       msg.senderColor ?? null,
       msg.toolName ?? null,
       msg.diffPatch ?? null,
+      msg.todos?.length ? JSON.stringify(msg.todos) : null,
       msg.status,
       msg.ts,
       msg.agentId ?? null,
@@ -476,6 +493,32 @@ export function updateMessageDiff(
   syncQuery(
     `UPDATE messages SET content = $1, status = $2, diff_patch = $3 WHERE id = $4`,
     [content, status, diffPatch, id],
+  );
+}
+
+export function updateMessageTool(
+  id: string,
+  content: string,
+  status: ChatMessage["status"],
+  opts: {
+    diffPatch?: string;
+    todos?: ChatMessage["todos"];
+  } = {},
+): void {
+  const todosJson =
+    opts.todos && opts.todos.length > 0 ? JSON.stringify(opts.todos) : null;
+  syncQuery(
+    `UPDATE messages SET content = $1, status = $2,
+        diff_patch = COALESCE($3, diff_patch),
+        todos_json = COALESCE($4, todos_json)
+     WHERE id = $5`,
+    [
+      content,
+      status,
+      opts.diffPatch?.trim() ? opts.diffPatch : null,
+      todosJson,
+      id,
+    ],
   );
 }
 

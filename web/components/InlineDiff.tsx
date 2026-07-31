@@ -1,24 +1,45 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 interface InlineDiffProps {
   patch: string;
   defaultOpen?: boolean;
+  /** When true, skip the nested "Show/Hide diff" chrome and always show the patch. */
+  alwaysOpen?: boolean;
+}
+
+function countDiffLines(patch: string): { added: number; removed: number } {
+  let added = 0;
+  let removed = 0;
+  for (const line of patch.split("\n")) {
+    if (line.startsWith("+++") || line.startsWith("---") || line.startsWith("diff ") || line.startsWith("index ") || line.startsWith("@@")) {
+      continue;
+    }
+    if (line.startsWith("+")) added += 1;
+    else if (line.startsWith("-")) removed += 1;
+  }
+  return { added, removed };
 }
 
 export default function InlineDiff({
   patch,
   defaultOpen = false,
+  alwaysOpen = false,
 }: InlineDiffProps) {
-  const [open, setOpen] = useState(defaultOpen);
+  const [open, setOpen] = useState(alwaysOpen || defaultOpen);
   const containerRef = useRef<HTMLDivElement>(null);
+  const stats = useMemo(() => countDiffLines(patch), [patch]);
 
   const fileCount = (patch.match(/^diff --git /gm) || []).length;
   const fileLabel =
     patch.match(/^diff --git a\/(.+?) b\//m)?.[1] ||
     patch.match(/^\+\+\+ b\/(.+)$/m)?.[1] ||
     "file";
+
+  useEffect(() => {
+    if (alwaysOpen) setOpen(true);
+  }, [alwaysOpen]);
 
   useEffect(() => {
     if (!open || !containerRef.current || !patch.trim()) return;
@@ -38,24 +59,60 @@ export default function InlineDiff({
   }, [patch, open]);
 
   return (
-    <div className="mt-2 rounded-md border border-[#2b2b2b] overflow-hidden bg-[#121212]">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="w-full flex items-center justify-between gap-2 px-2.5 h-8 text-left hover:bg-[#1a1a1a] transition-colors"
-      >
-        <span className="min-w-0 truncate text-[11px] font-mono text-[#a0a0a0]">
-          {fileLabel}
-          {fileCount > 1 ? ` · ${fileCount} files` : ""}
-        </span>
-        <span className="text-[10px] text-[#6e6e6e] shrink-0">
-          {open ? "Hide diff" : "Show diff"}
-        </span>
-      </button>
+    <div className="rounded-md border border-[#2b2b2b] overflow-hidden bg-[#121212]">
+      {!alwaysOpen && (
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          className="w-full flex items-center justify-between gap-2 px-2.5 h-8 text-left hover:bg-[#1a1a1a] transition-colors"
+        >
+          <span className="min-w-0 truncate text-[11px] font-mono text-[#a0a0a0]">
+            {fileLabel}
+            {fileCount > 1 ? ` · ${fileCount} files` : ""}
+          </span>
+          <span className="flex items-center gap-2 shrink-0">
+            {stats.added > 0 && (
+              <span className="text-[10px] font-medium text-[#3ecf8e]">
+                +{stats.added}
+              </span>
+            )}
+            {stats.removed > 0 && (
+              <span className="text-[10px] font-medium text-[#f07070]">
+                −{stats.removed}
+              </span>
+            )}
+            <span className="text-[10px] text-[#6e6e6e]">
+              {open ? "Hide" : "Show"}
+            </span>
+          </span>
+        </button>
+      )}
+      {alwaysOpen && (
+        <div className="flex items-center justify-between gap-2 px-2.5 h-8 border-b border-[#2b2b2b]">
+          <span className="min-w-0 truncate text-[11px] font-mono text-[#a0a0a0]">
+            {fileLabel}
+            {fileCount > 1 ? ` · ${fileCount} files` : ""}
+          </span>
+          <span className="flex items-center gap-2 shrink-0">
+            {stats.added > 0 && (
+              <span className="text-[10px] font-medium text-[#3ecf8e]">
+                +{stats.added}
+              </span>
+            )}
+            {stats.removed > 0 && (
+              <span className="text-[10px] font-medium text-[#f07070]">
+                −{stats.removed}
+              </span>
+            )}
+          </span>
+        </div>
+      )}
       {open && (
         <div
           ref={containerRef}
-          className="max-h-72 overflow-auto border-t border-[#2b2b2b] font-mono text-[11px] diff-container inline-diff"
+          className={`max-h-80 overflow-auto font-mono text-[11px] diff-container inline-diff ${
+            alwaysOpen ? "" : "border-t border-[#2b2b2b]"
+          }`}
         />
       )}
     </div>

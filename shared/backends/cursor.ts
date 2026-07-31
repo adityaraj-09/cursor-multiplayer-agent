@@ -1,3 +1,4 @@
+import type { AgentTodoItem } from "../events.js";
 import type {
   BuildArgsOptions,
   NormalizedAgentEvent,
@@ -61,10 +62,17 @@ function toolInfo(toolCall: Record<string, unknown> | undefined): {
         break;
       }
     }
-    detail =
-      String(
-        args.command ?? args.globPattern ?? path ?? args.targetDirectory ?? "",
-      ) || JSON.stringify(args).slice(0, 120);
+    if (isTodoTool(name)) {
+      const todos = todosFromToolArgs(args);
+      detail = todos.length
+        ? `${todos.length} todo${todos.length === 1 ? "" : "s"} · ${todoStatusSummary(todos)}`
+        : "Updating todos";
+    } else {
+      detail =
+        String(
+          args.command ?? args.globPattern ?? path ?? args.targetDirectory ?? "",
+        ) || JSON.stringify(args).slice(0, 120);
+    }
   }
   const parentCallId =
     typeof toolCall.parentToolCallId === "string"
@@ -146,8 +154,66 @@ export function diffFromToolArgs(
 const EDIT_TOOL_RE =
   /^(write|edit|strreplace|searchreplace|delete|applypatch|editnotebook|create|updatefile|deletefile|writefile)/i;
 
+const TODO_TOOL_RE =
+  /^(todo|todowrite|todoread|updatetodos|write_todos|todo_write|todo_read)$/i;
+
 export function isEditTool(name: string): boolean {
   return EDIT_TOOL_RE.test(name.replace(/ToolCall$/i, ""));
+}
+
+export function isTodoTool(name: string): boolean {
+  const n = name.replace(/ToolCall$/i, "");
+  return TODO_TOOL_RE.test(n) || /todo/i.test(n);
+}
+
+function normalizeTodoStatus(
+  raw: unknown,
+): AgentTodoItem["status"] {
+  const s = String(raw ?? "pending").toLowerCase().replace(/[\s-]/g, "_");
+  if (s === "completed" || s === "complete" || s === "done") return "completed";
+  if (s === "in_progress" || s === "inprogress" || s === "active")
+    return "in_progress";
+  if (s === "cancelled" || s === "canceled") return "cancelled";
+  return "pending";
+}
+
+export function todosFromToolArgs(
+  args?: Record<string, unknown>,
+): AgentTodoItem[] {
+  if (!args) return [];
+  const raw =
+    (Array.isArray(args.todos) && args.todos) ||
+    (Array.isArray(args.items) && args.items) ||
+    (Array.isArray(args.todo_list) && args.todo_list) ||
+    null;
+  if (!raw) return [];
+  const out: AgentTodoItem[] = [];
+  for (let i = 0; i < raw.length; i++) {
+    const item = raw[i];
+    if (!item || typeof item !== "object") continue;
+    const t = item as Record<string, unknown>;
+    const content = String(
+      t.content ?? t.text ?? t.title ?? t.description ?? "",
+    ).trim();
+    if (!content) continue;
+    out.push({
+      id: String(t.id ?? `todo-${i + 1}`),
+      content,
+      status: normalizeTodoStatus(t.status),
+    });
+  }
+  return out;
+}
+
+export function todoStatusSummary(todos: AgentTodoItem[]): string {
+  const completed = todos.filter((t) => t.status === "completed").length;
+  const active = todos.filter((t) => t.status === "in_progress").length;
+  const pending = todos.filter((t) => t.status === "pending").length;
+  const parts: string[] = [];
+  if (active) parts.push(`${active} in progress`);
+  if (completed) parts.push(`${completed} done`);
+  if (pending) parts.push(`${pending} pending`);
+  return parts.join(" · ") || "updated";
 }
 
 /**
@@ -227,6 +293,10 @@ export class CursorAgentBackend implements WorkerBackend {
         });
         return out;
       }
+      const todos =
+        isTodoTool(info.name) && info.args
+          ? todosFromToolArgs(info.args)
+          : undefined;
       if (ev.subtype === "started") {
         out.push({
           kind: "tool_start",
@@ -234,6 +304,7 @@ export class CursorAgentBackend implements WorkerBackend {
           name: info.name,
           detail: info.detail,
           path: info.path,
+          todos: todos?.length ? todos : undefined,
         });
       } else if (ev.subtype === "completed") {
         const diffPatch =
@@ -247,6 +318,7 @@ export class CursorAgentBackend implements WorkerBackend {
           detail: info.detail,
           path: info.path,
           diffPatch: diffPatch || undefined,
+          todos: todos?.length ? todos : undefined,
         });
       }
       return out;

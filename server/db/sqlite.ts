@@ -84,6 +84,7 @@ db.exec(`
     sender_color TEXT,
     tool_name TEXT,
     diff_patch TEXT,
+    todos_json TEXT,
     status TEXT NOT NULL DEFAULT 'done',
     ts INTEGER NOT NULL
   );
@@ -201,6 +202,7 @@ const migrations = [
   `ALTER TABLE rooms ADD COLUMN owner_id TEXT`,
   `ALTER TABLE invite_links ADD COLUMN expires_at INTEGER`,
   `ALTER TABLE messages ADD COLUMN agent_id TEXT`,
+  `ALTER TABLE messages ADD COLUMN todos_json TEXT`,
 ];
 
 for (const sql of migrations) {
@@ -272,14 +274,20 @@ const stmts = {
     ORDER BY ts DESC LIMIT ?
   `),
   insertMessage: db.prepare(`
-    INSERT INTO messages (id, room_id, role, content, sender_name, sender_color, tool_name, diff_patch, status, ts, agent_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO messages (id, room_id, role, content, sender_name, sender_color, tool_name, diff_patch, todos_json, status, ts, agent_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `),
   updateMessageContent: db.prepare(
     `UPDATE messages SET content = ?, status = ? WHERE id = ?`,
   ),
   updateMessageDiff: db.prepare(
     `UPDATE messages SET content = ?, status = ?, diff_patch = ? WHERE id = ?`,
+  ),
+  updateMessageTool: db.prepare(
+    `UPDATE messages SET content = ?, status = ?,
+        diff_patch = COALESCE(?, diff_patch),
+        todos_json = COALESCE(?, todos_json)
+     WHERE id = ?`,
   ),
   // Newest-first so LIMIT keeps recent history; reversed in getMessages().
   getMessages: db.prepare(`
@@ -488,6 +496,19 @@ export interface CreateRoomInput {
   ownerId?: string | null;
 }
 
+function parseTodosJson(
+  raw: string | null | undefined,
+): ChatMessage["todos"] {
+  if (!raw) return undefined;
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed) || parsed.length === 0) return undefined;
+    return parsed as NonNullable<ChatMessage["todos"]>;
+  } catch {
+    return undefined;
+  }
+}
+
 function rowToMessage(r: {
   id: string;
   room_id: string;
@@ -497,6 +518,7 @@ function rowToMessage(r: {
   sender_color: string | null;
   tool_name: string | null;
   diff_patch?: string | null;
+  todos_json?: string | null;
   status: string;
   ts: number;
   agent_id?: string | null;
@@ -510,6 +532,7 @@ function rowToMessage(r: {
     senderColor: r.sender_color ?? undefined,
     toolName: r.tool_name ?? undefined,
     diffPatch: r.diff_patch || undefined,
+    todos: parseTodosJson(r.todos_json),
     status: r.status as ChatMessage["status"],
     ts: r.ts,
     agentId: r.agent_id || undefined,
@@ -647,6 +670,7 @@ export function insertMessage(msg: ChatMessage): void {
     msg.senderColor ?? null,
     msg.toolName ?? null,
     msg.diffPatch ?? null,
+    msg.todos?.length ? JSON.stringify(msg.todos) : null,
     msg.status,
     msg.ts,
     msg.agentId ?? null,
@@ -668,6 +692,27 @@ export function updateMessageDiff(
   diffPatch: string,
 ): void {
   stmts.updateMessageDiff.run(content, status, diffPatch, id);
+}
+
+export function updateMessageTool(
+  id: string,
+  content: string,
+  status: ChatMessage["status"],
+  opts: {
+    diffPatch?: string;
+    todos?: ChatMessage["todos"];
+  } = {},
+): void {
+  const todosJson =
+    opts.todos && opts.todos.length > 0 ? JSON.stringify(opts.todos) : null;
+  // null keeps the previous column value (COALESCE in SQL).
+  stmts.updateMessageTool.run(
+    content,
+    status,
+    opts.diffPatch?.trim() ? opts.diffPatch : null,
+    todosJson,
+    id,
+  );
 }
 
 export function getMessages(roomId: string, limit = 500): ChatMessage[] {
