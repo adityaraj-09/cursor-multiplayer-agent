@@ -506,6 +506,7 @@ export class WorkerRelay {
     sessionId?: string | null,
     agentId?: string,
     cwd?: string,
+    backend?: string,
   ): boolean {
     const worker = this.workers.get(workerId);
     if (!worker) return false;
@@ -524,6 +525,12 @@ export class WorkerRelay {
       );
     }
 
+    if (backend === "claude-code" && worker.protocol < 3) {
+      throw new Error(
+        "Update the Steer CLI (`npm i -g @oblivihon/steer@latest`) to run Claude Code agents",
+      );
+    }
+
     const runKey = makeRunKey(roomId, resolvedAgentId);
     this.runToWorker.set(runKey, workerId);
     worker.activeRuns.add(runKey);
@@ -536,6 +543,7 @@ export class WorkerRelay {
       cwd: cwd || repoPath,
       modelId,
       sessionId,
+      backend: backend === "claude-code" ? "claude-code" : "cursor",
     });
 
     return true;

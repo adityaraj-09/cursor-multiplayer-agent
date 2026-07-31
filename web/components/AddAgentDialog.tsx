@@ -118,16 +118,28 @@ export default function AddAgentDialog({
         <label className="block text-[11px] text-[#6e6e6e] mb-1">Backend</label>
         <select
           value={backend}
-          onChange={(e) =>
-            setBackend(e.target.value as "cursor" | "claude-code")
-          }
+          onChange={(e) => {
+            const next = e.target.value as "cursor" | "claude-code";
+            setBackend(next);
+            if (next === "claude-code" && (!modelId || modelId === "auto")) {
+              setModelId("sonnet");
+            }
+          }}
           className="w-full h-9 mb-3 px-2.5 rounded-md bg-[#252525] border border-[#2b2b2b] text-[13px] text-[#e4e4e4] outline-none"
         >
           <option value="cursor">Cursor</option>
-          <option value="claude-code" disabled>
-            Claude Code (coming soon)
+          <option value="claude-code">
+            Claude Code
+            {runtime === "cloud" ? " (E2B sandbox)" : " (local CLI)"}
           </option>
         </select>
+        {backend === "claude-code" && (
+          <p className="text-[11px] text-[#6e6e6e] mb-3 -mt-1">
+            {runtime === "cloud"
+              ? "Runs in an E2B sandbox. Server needs E2B_API_KEY + ANTHROPIC_API_KEY."
+              : "Uses the claude CLI on the host running steer start."}
+          </p>
+        )}
 
         {runtime === "local" && (
           <>
@@ -153,13 +165,21 @@ export default function AddAgentDialog({
           onChange={(e) => setModelId(e.target.value)}
           className="w-full h-9 mb-3 px-2.5 rounded-md bg-[#252525] border border-[#2b2b2b] text-[13px] text-[#e4e4e4] outline-none"
         >
-          {(models.length ? models : [{ id: "auto", displayName: "Auto" }]).map(
-            (m) => (
-              <option key={m.id} value={m.id}>
-                {m.displayName}
-              </option>
-            ),
-          )}
+          {(backend === "claude-code"
+            ? [
+                { id: "sonnet", displayName: "Sonnet" },
+                { id: "opus", displayName: "Opus" },
+                { id: "haiku", displayName: "Haiku" },
+                { id: "fable", displayName: "Fable" },
+              ]
+            : models.length
+              ? models
+              : [{ id: "auto", displayName: "Auto" }]
+          ).map((m) => (
+            <option key={m.id} value={m.id}>
+              {m.displayName}
+            </option>
+          ))}
         </select>
 
         {error && (

@@ -259,6 +259,8 @@ export interface ServerToWorkerEvents {
     cwd?: string;
     modelId: string;
     sessionId?: string | null;
+    /** Agent CLI backend — defaults to cursor when omitted. */
+    backend?: AgentBackendKind;
   }) => void;
   "worker:abort": (data: { roomId: string; agentId?: string }) => void;
   "worker:pick-folder": (data: { requestId: string }) => void;
