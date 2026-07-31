@@ -254,6 +254,9 @@ export async function fetchAuthStatus(): Promise<{
   byokAvailable: boolean;
   userByokConfigured: boolean;
   userByokHint: string | null;
+  userAnthropicByokConfigured: boolean;
+  userAnthropicByokHint: string | null;
+  e2bConfigured: boolean;
   canManageServerKey: boolean;
 }> {
   const res = await fetch(`${API_BASE}/auth/status`, {
@@ -316,6 +319,33 @@ export async function clearByokKey(): Promise<void> {
     headers: await authHeaders(),
   });
   if (!res.ok) throw new Error("Failed to clear BYOK key");
+}
+
+export async function setAnthropicByokKey(apiKey: string): Promise<{
+  userAnthropicByokConfigured: boolean;
+  userAnthropicByokHint: string | null;
+}> {
+  const res = await fetch(`${API_BASE}/auth/anthropic-byok-key`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(await authHeaders()),
+    },
+    body: JSON.stringify({ apiKey }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Failed to save Anthropic API key");
+  }
+  return res.json();
+}
+
+export async function clearAnthropicByokKey(): Promise<void> {
+  const res = await fetch(`${API_BASE}/auth/anthropic-byok-key`, {
+    method: "DELETE",
+    headers: await authHeaders(),
+  });
+  if (!res.ok) throw new Error("Failed to clear Anthropic API key");
 }
 
 export async function fetchModels(opts: {
@@ -482,6 +512,7 @@ export async function addRoomAgent(
     backend?: string;
     scopePath?: string;
     modelId?: string;
+    anthropicApiKey?: string;
   },
 ): Promise<import("../../shared/events").AgentInfo> {
   const res = await fetch(`${API_BASE}/rooms/${roomId}/agents`, {

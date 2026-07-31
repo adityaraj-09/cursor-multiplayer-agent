@@ -339,6 +339,7 @@ function shellQuote(s: string): string {
   return `'${s.replace(/'/g, `'\\''`)}'`;
 }
 
+/** E2B sandbox host is server-configured; Anthropic key is BYOK / server fallback. */
 export function isClaudeSandboxConfigured(): boolean {
-  return Boolean(process.env.E2B_API_KEY?.trim() && process.env.ANTHROPIC_API_KEY?.trim());
+  return Boolean(process.env.E2B_API_KEY?.trim());
 }
