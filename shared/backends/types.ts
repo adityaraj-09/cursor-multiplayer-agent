@@ -1,6 +1,15 @@
 /** Backend kind for a room-level agent process. */
 export type AgentBackendKind = "cursor" | "claude-code";
 
+/** Git / PR metadata attached to a completed cloud agent run. */
+export interface RunGitInfo {
+  branches: Array<{
+    repoUrl: string;
+    branch?: string;
+    prUrl?: string;
+  }>;
+}
+
 /**
  * Normalized agent stream events used internally by Steer.
  * Subagent events from within a single agent carry `subagent_nested`
@@ -35,7 +44,7 @@ export type NormalizedAgentEvent =
       status: "started" | "completed";
     }
   | { kind: "error"; message: string }
-  | { kind: "done"; result: string };
+  | { kind: "done"; result: string; git?: RunGitInfo };
 
 export interface BuildArgsOptions {
   prompt: string;

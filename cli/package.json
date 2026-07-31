@@ -1,7 +1,7 @@
 {
   "name": "@oblivihon/steer",
-  "version": "0.5.0",
-  "description": "CLI worker for Steer — run local Cursor agents for multiplayer sessions",
+  "version": "0.6.0",
+  "description": "CLI worker for Steer — run local Cursor and Claude Code agents for multiplayer sessions (protocol 3)",
   "type": "module",
   "bin": {
     "steer": "./dist/cli/src/index.js"
@@ -17,6 +17,8 @@
   },
   "keywords": [
     "cursor",
+    "claude",
+    "claude-code",
     "agent",
     "cli",
     "steer",

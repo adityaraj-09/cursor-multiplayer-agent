@@ -3,6 +3,10 @@
 import { useEffect, useState } from "react";
 import type { ModelInfo } from "../../shared/events";
 import {
+  CLAUDE_MODELS,
+  DEFAULT_CLAUDE_MODEL,
+} from "../../shared/claudeModels";
+import {
   clearAnthropicByokKey,
   fetchAuthStatus,
   validateAgentScope,
@@ -178,7 +182,7 @@ export default function AddAgentDialog({
             const next = e.target.value as "cursor" | "claude-code";
             setBackend(next);
             if (next === "claude-code" && (!modelId || modelId === "auto")) {
-              setModelId("sonnet");
+              setModelId(DEFAULT_CLAUDE_MODEL);
             }
           }}
           className="w-full h-9 mb-3 px-2.5 rounded-md bg-[#252525] border border-[#2b2b2b] text-[13px] text-[#e4e4e4] outline-none"
@@ -268,12 +272,7 @@ export default function AddAgentDialog({
           className="w-full h-9 mb-3 px-2.5 rounded-md bg-[#252525] border border-[#2b2b2b] text-[13px] text-[#e4e4e4] outline-none"
         >
           {(backend === "claude-code"
-            ? [
-                { id: "sonnet", displayName: "Sonnet" },
-                { id: "opus", displayName: "Opus" },
-                { id: "haiku", displayName: "Haiku" },
-                { id: "fable", displayName: "Fable" },
-              ]
+            ? CLAUDE_MODELS
             : models.length
               ? models
               : [{ id: "auto", displayName: "Auto" }]

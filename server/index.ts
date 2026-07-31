@@ -466,6 +466,11 @@ app.post("/api/rooms", requireAuth, async (req, res) => {
       autoCreatePR: Boolean(req.body?.autoCreatePR),
       apiKey: req.body?.apiKey,
       ownerId: req.user!.id,
+      backend:
+        req.body?.backend === "claude-code" ? "claude-code" : "cursor",
+      anthropicApiKey: req.body?.anthropicApiKey
+        ? String(req.body.anthropicApiKey)
+        : undefined,
     });
     res.status(201).json(room);
   } catch (err) {
@@ -483,7 +488,10 @@ app.get("/api/rooms/:id/models", requireAuth, async (req, res) => {
     return;
   }
   try {
-    const models = await roomManager.listModelsForRoom(id);
+    const agentId = req.query.agentId
+      ? String(req.query.agentId)
+      : undefined;
+    const models = await roomManager.listModelsForRoom(id, agentId);
     res.setHeader("Cache-Control", "private, max-age=60");
     res.json({ models });
   } catch (err) {

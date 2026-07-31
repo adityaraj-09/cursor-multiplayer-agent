@@ -12,10 +12,15 @@ import {
   ClaudeSandboxSession,
   isClaudeSandboxConfigured,
 } from "./claudeSandbox.js";
+import { githubTokenFromEnv } from "./githubPr.js";
 import {
   resolveAnthropicApiKey,
   setUserAnthropicByokKey,
 } from "./userAnthropicByok.js";
+import {
+  CLAUDE_MODELS,
+  DEFAULT_CLAUDE_MODEL,
+} from "../shared/claudeModels.js";
 import { DiffWatcher } from "./diffWatcher.js";
 import { extractToolPath, getFileDiff, isEditTool } from "./gitDiff.js";
 import { listCliModels } from "./cliModels.js";
@@ -78,6 +83,10 @@ export interface CreateRoomRequest {
   autoCreatePR?: boolean;
   apiKey?: string;
   ownerId?: string;
+  /** Primary agent backend. Defaults to cursor. */
+  backend?: AgentBackendKind;
+  /** Anthropic API key when backend is claude-code (cloud). Saved as user BYOK. */
+  anthropicApiKey?: string;
 }
 
 type AgentBackend = AgentRunner | SdkAgentSession | ClaudeSandboxSession;
@@ -279,18 +288,63 @@ export class RoomManager {
     if (!name) throw new Error("name is required");
 
     const runtime: AgentRuntime = req.runtime === "cloud" ? "cloud" : "local";
-    const authMode = normalizeAuthMode(runtime, req.authMode);
-    const modelId =
-      (req.modelId || (authMode === "cli" ? "auto" : DEFAULT_MODEL)).trim() ||
-      (authMode === "cli" ? "auto" : DEFAULT_MODEL);
+    const backendKind: AgentBackendKind =
+      req.backend === "claude-code" ? "claude-code" : "cursor";
+    const ownerId = req.ownerId?.trim() || null;
+
+    // Claude Code local always uses the Steer CLI worker (user's machine).
+    let authMode = normalizeAuthMode(runtime, req.authMode);
+    if (backendKind === "claude-code" && runtime === "local") {
+      authMode = "cli";
+    }
+
+    const defaultModel =
+      backendKind === "claude-code"
+        ? DEFAULT_CLAUDE_MODEL
+        : authMode === "cli"
+          ? "auto"
+          : DEFAULT_MODEL;
+    const modelId = (req.modelId || defaultModel).trim() || defaultModel;
 
     let keyCiphertext: string | null = null;
     let keyHint: string | null = null;
     let apiKey = "";
+    let anthropicApiKey = "";
 
-    if (authMode === "byok") {
+    if (backendKind === "claude-code") {
+      if (runtime === "cloud") {
+        if (!isClaudeSandboxConfigured()) {
+          throw new Error(
+            "Claude Code cloud sessions require E2B_API_KEY on the server",
+          );
+        }
+        // Cloud Claude does not need a Cursor API key. Persist Anthropic BYOK.
+        authMode = "server";
+        const pasted = req.anthropicApiKey?.trim() || "";
+        if (pasted) {
+          if (!encryptionConfigured()) {
+            throw new Error(
+              "KEY_ENCRYPTION_SECRET is required to store an Anthropic API key",
+            );
+          }
+          if (!ownerId) {
+            throw new Error("Sign in required to save an Anthropic API key");
+          }
+          setUserAnthropicByokKey(ownerId, pasted);
+          anthropicApiKey = pasted;
+        } else {
+          anthropicApiKey = resolveAnthropicApiKey(ownerId);
+        }
+        if (!anthropicApiKey) {
+          throw new Error(
+            "Paste your Anthropic API key for Claude Code (or set ANTHROPIC_API_KEY on the server)",
+          );
+        }
+      } else if (!ownerId) {
+        throw new Error("Sign in required to create a local Claude Code session");
+      }
+    } else if (authMode === "byok") {
       const pasted = req.apiKey?.trim() || "";
-      const ownerId = req.ownerId?.trim() || "";
       const raw = pasted || (ownerId ? getUserByokKey(ownerId) : "");
       if (!raw) {
         throw new Error(
@@ -343,10 +397,12 @@ export class RoomManager {
 
     const id = nanoid(10);
     let cursorAgentId: string | null = null;
-    let existingSdk: SdkAgentSession | null = null;
+    let existingBackend: AgentBackend | null = null;
 
-    if (authMode === "cli") {
-      // Backend will be created inside initRoomState from the agent row.
+    if (backendKind === "claude-code") {
+      // Backend is constructed in initRoomState / below after the agent row exists.
+    } else if (authMode === "cli") {
+      // Cursor CLI worker — backend created in initRoomState.
     } else {
       const sdk = new SdkAgentSession({
         runtime,
@@ -359,10 +415,9 @@ export class RoomManager {
         autoCreatePR,
       });
       cursorAgentId = await sdk.ensureStarted();
-      existingSdk = sdk;
+      existingBackend = sdk;
     }
 
-    const ownerId = req.ownerId?.trim() || null;
     if (authMode === "cli" && !ownerId) {
       throw new Error("Sign in required to create a local CLI session");
     }
@@ -395,7 +450,7 @@ export class RoomManager {
 
     const agentRow = db.createAgent({
       roomId: id,
-      backend: "cursor",
+      backend: backendKind,
       label: "Agent 1",
       sessionId: null,
       sdkAgentId: cursorAgentId,
@@ -404,13 +459,18 @@ export class RoomManager {
     });
 
     const existingByAgentId = new Map<string, AgentBackend>();
-    if (existingSdk) {
-      existingByAgentId.set(agentRow.id, existingSdk);
+    if (existingBackend) {
+      existingByAgentId.set(agentRow.id, existingBackend);
+    } else if (backendKind === "claude-code" && runtime === "cloud") {
+      existingByAgentId.set(
+        agentRow.id,
+        this.createClaudeSandboxBackend(row, agentRow, anthropicApiKey),
+      );
     }
 
     this.initRoomState(row, existingByAgentId);
     console.log(
-      `Created ${runtime}/${authMode} room "${name}" (${id}) model=${modelId}`,
+      `Created ${runtime}/${authMode}/${backendKind} room "${name}" (${id}) model=${modelId}`,
     );
     return this.toRoomInfo(row, 0);
   }
@@ -595,15 +655,46 @@ export class RoomManager {
       anthropicApiKey?.trim() ||
       resolveAnthropicApiKey(row.owner_id) ||
       "";
+    const agentId = agentRow.id;
+    const roomId = row.id;
     return new ClaudeSandboxSession({
       apiKey,
-      model: agentRow.model_id || "sonnet",
+      model: agentRow.model_id || DEFAULT_CLAUDE_MODEL,
       name: `${row.name}/${agentRow.label}`,
       repoUrl: row.repo_url?.trim() || "",
       startingRef: row.starting_ref || "main",
+      autoCreatePR: Boolean(row.auto_create_pr),
       sessionId: agentRow.session_id,
       sandboxId: agentRow.sdk_agent_id,
-      githubToken: process.env.GITHUB_TOKEN?.trim() || undefined,
+      branch: agentRow.branch,
+      prUrl: agentRow.pr_url,
+      githubToken: githubTokenFromEnv(),
+      onReady: ({ sandboxId, branch }) => {
+        // Persist sandbox identity as soon as the E2B box is up (not only on done).
+        if (sandboxId) {
+          db.setAgentSdkId(agentId, sandboxId);
+          const def = db.listAgents(roomId)[0];
+          if (def?.id === agentId) {
+            db.setCursorAgentId(roomId, sandboxId);
+          }
+        }
+        if (branch) {
+          const existing = db.getAgent(agentId);
+          db.setAgentPr(agentId, existing?.pr_url ?? null, branch);
+        }
+        const room = this.rooms.get(roomId);
+        const agent = room?.agents.get(agentId);
+        if (room && agent) {
+          if (sandboxId) {
+            agent.row.sdk_agent_id = sandboxId;
+            if (this.getDefaultAgent(room).row.id === agentId) {
+              room.row.cursor_agent_id = sandboxId;
+            }
+          }
+          if (branch) agent.row.branch = branch;
+          this.broadcastAgents(room);
+        }
+      },
     });
   }
 
@@ -1799,29 +1890,32 @@ export class RoomManager {
             emitAssistant(event.result, "done");
             closeAssistant("done");
             const git =
-              "git" in event
-                ? (event as SdkStreamEvent & { kind: "done" }).git
+              "git" in event && event.git
+                ? event.git
                 : undefined;
             if (git?.branches?.length) {
               const branch = git.branches[0];
               room.cloudMeta = {
                 ...room.cloudMeta,
                 repoUrl: branch.repoUrl || room.cloudMeta.repoUrl,
-                branch: branch.branch,
+                branch: branch.branch || room.cloudMeta.branch,
                 prUrl: branch.prUrl || room.cloudMeta.prUrl,
               };
-              if (branch.prUrl) {
-                db.setPrUrl(room.id, branch.prUrl);
-                room.row.pr_url = branch.prUrl;
+              if (branch.prUrl || branch.branch) {
+                if (branch.prUrl) {
+                  db.setPrUrl(room.id, branch.prUrl);
+                  room.row.pr_url = branch.prUrl;
+                  agent.row.pr_url = branch.prUrl;
+                }
                 db.setAgentPr(
                   agent.row.id,
-                  branch.prUrl,
-                  branch.branch || null,
+                  branch.prUrl || agent.row.pr_url || null,
+                  branch.branch || agent.row.branch || null,
                 );
-                agent.row.pr_url = branch.prUrl;
-                agent.row.branch = branch.branch || null;
+                if (branch.branch) agent.row.branch = branch.branch;
               }
               this.io.to(room.id).emit("cloud-meta", room.cloudMeta);
+              this.broadcastAgents(room);
             }
             break;
           }
@@ -2090,7 +2184,7 @@ export class RoomManager {
       opts.modelId ||
       row.model_id ||
       (backendKind === "claude-code"
-        ? "sonnet"
+        ? DEFAULT_CLAUDE_MODEL
         : row.auth_mode === "cli"
           ? "auto"
           : DEFAULT_MODEL);
@@ -2519,9 +2613,30 @@ export class RoomManager {
     return this.toRoomInfo(row, this.rooms.get(id)?.participants.size || 0);
   }
 
-  async listModelsForRoom(id: string): Promise<ModelInfo[]> {
+  async listModelsForRoom(
+    id: string,
+    agentId?: string,
+  ): Promise<ModelInfo[]> {
     const row = db.getRoom(id);
     if (!row) throw new Error("Room not found");
+
+    const agentRow = agentId
+      ? db.getAgent(agentId)
+      : db.listAgents(id)[0] || null;
+    if (agentRow?.backend === "claude-code") {
+      return CLAUDE_MODELS;
+    }
+
+    // Claude-primary rooms created without a Cursor key still use auth_mode=server.
+    // Prefer Claude models when every agent in the room is Claude Code.
+    const agents = db.listAgents(id);
+    if (
+      agents.length > 0 &&
+      agents.every((a) => a.backend === "claude-code")
+    ) {
+      return CLAUDE_MODELS;
+    }
+
     if (row.auth_mode === "cli") {
       const ownerId = row.owner_id;
       const cacheKey = ownerId ? `cli:${ownerId}` : `room:${id}`;
@@ -2553,8 +2668,17 @@ export class RoomManager {
         return [{ id: "auto", displayName: "Auto" }];
       }
     }
-    const apiKey = resolveApiKey(row);
-    return listModelsForKey(apiKey);
+
+    // Cursor SDK listing — may fail for Claude-only rooms with no Cursor key
+    // (Claude backends already returned above).
+    try {
+      const apiKey = resolveApiKey(row);
+      return listModelsForKey(apiKey);
+    } catch {
+      throw new Error(
+        "No Cursor API key configured for this room — switch to a Claude agent or set a server/BYOK key",
+      );
+    }
   }
 
   // -----------------------------------------------------------------------

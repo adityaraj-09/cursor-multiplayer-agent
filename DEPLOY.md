@@ -23,7 +23,10 @@ This project defaults to **SQLite** when `DATABASE_URL` is unset — good for on
 | `AUTH_SECRET` | `openssl rand -hex 32` |
 | `KEY_ENCRYPTION_SECRET` | `openssl rand -hex 32` |
 | `CORS_ORIGIN` | Your Vercel URL, e.g. `https://steer.vercel.app` |
-| `CURSOR_API_KEY` | Optional (Cloud agents) |
+| `CURSOR_API_KEY` | Optional (Cursor Cloud / server auth) |
+| `ANTHROPIC_API_KEY` | Optional fallback for Claude Code cloud (prefer user BYOK) |
+| `E2B_API_KEY` | Required for Claude Code cloud (E2B sandboxes) |
+| `GITHUB_TOKEN` | Optional but recommended — push/PR for Claude Code cloud (`GH_TOKEN` also accepted) |
 
 4. Note the service URL, e.g. `https://steer-api.onrender.com`.
 
