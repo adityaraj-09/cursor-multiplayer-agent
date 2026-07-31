@@ -1396,6 +1396,7 @@ export class RoomManager {
               role: "tool",
               content: event.detail || "Running…",
               toolName: event.name || "tool",
+              todos: event.todos?.length ? event.todos : undefined,
               status: "streaming",
               ts: Date.now(),
               agentId: agent.row.id,
@@ -1423,32 +1424,28 @@ export class RoomManager {
             if (id) {
               const content = event.detail || event.path || "Done";
               const patch = event.diffPatch?.trim() || "";
-              if (patch) {
-                db.updateMessageDiff(id, content, "done", patch);
-                this.io.to(room.id).emit("chat-message", {
-                  id,
-                  roomId: room.id,
-                  role: "tool",
-                  content,
-                  toolName: event.name || "tool",
-                  diffPatch: patch,
-                  status: "done",
-                  ts: Date.now(),
-                  agentId: agent.row.id,
+              const todos = event.todos?.length ? event.todos : undefined;
+              if (patch || todos) {
+                db.updateMessageTool(id, content, "done", {
+                  diffPatch: patch || undefined,
+                  todos,
                 });
               } else {
                 db.updateMessageContent(id, content, "done");
-                this.io.to(room.id).emit("chat-message", {
-                  id,
-                  roomId: room.id,
-                  role: "tool",
-                  content,
-                  toolName: event.name || "tool",
-                  status: "done",
-                  ts: Date.now(),
-                  agentId: agent.row.id,
-                });
               }
+              const doneMsg: ChatMessage = {
+                id,
+                roomId: room.id,
+                role: "tool",
+                content,
+                toolName: event.name || "tool",
+                status: "done",
+                ts: Date.now(),
+                agentId: agent.row.id,
+              };
+              if (patch) doneMsg.diffPatch = patch;
+              if (todos) doneMsg.todos = todos;
+              this.io.to(room.id).emit("chat-message", doneMsg);
             }
             afterTools = true;
             break;
@@ -1813,6 +1810,7 @@ export class RoomManager {
               role: "tool",
               content: event.detail || "Running…",
               toolName: event.name,
+              todos: event.todos?.length ? event.todos : undefined,
               status: "streaming",
               ts: Date.now(),
               agentId: agent.row.id,
@@ -1840,32 +1838,28 @@ export class RoomManager {
             if (id) {
               const content = event.detail || path || "Done";
               const synthetic = event.diffPatch?.trim() || "";
-              if (synthetic) {
-                db.updateMessageDiff(id, content, "done", synthetic);
-                this.io.to(room.id).emit("chat-message", {
-                  id,
-                  roomId: room.id,
-                  role: "tool",
-                  content,
-                  toolName: event.name,
-                  diffPatch: synthetic,
-                  status: "done",
-                  ts: Date.now(),
-                  agentId: agent.row.id,
+              const todos = event.todos?.length ? event.todos : undefined;
+              if (synthetic || todos) {
+                db.updateMessageTool(id, content, "done", {
+                  diffPatch: synthetic || undefined,
+                  todos,
                 });
               } else {
                 db.updateMessageContent(id, content, "done");
-                this.io.to(room.id).emit("chat-message", {
-                  id,
-                  roomId: room.id,
-                  role: "tool",
-                  content,
-                  toolName: event.name,
-                  status: "done",
-                  ts: Date.now(),
-                  agentId: agent.row.id,
-                });
               }
+              const doneMsg: ChatMessage = {
+                id,
+                roomId: room.id,
+                role: "tool",
+                content,
+                toolName: event.name,
+                status: "done",
+                ts: Date.now(),
+                agentId: agent.row.id,
+              };
+              if (synthetic) doneMsg.diffPatch = synthetic;
+              if (todos) doneMsg.todos = todos;
+              this.io.to(room.id).emit("chat-message", doneMsg);
               void attachFileDiff(
                 id,
                 event.name,

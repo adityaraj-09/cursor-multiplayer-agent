@@ -21,6 +21,7 @@ export const getSteerHistory = backend.getSteerHistory;
 export const insertMessage = backend.insertMessage;
 export const updateMessageContent = backend.updateMessageContent;
 export const updateMessageDiff = backend.updateMessageDiff;
+export const updateMessageTool = backend.updateMessageTool;
 export const getMessages = backend.getMessages;
 export const deleteRoom = backend.deleteRoom;
 export const getSetting = backend.getSetting;
