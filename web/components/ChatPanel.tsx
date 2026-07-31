@@ -12,7 +12,6 @@ import {
   Wrench,
 } from "lucide-react";
 import type { AgentRunStatus, ChatMessage } from "../../shared/events";
-import { isEditTool } from "../../shared/backends/cursor";
 import Markdown from "./Markdown";
 import InlineDiff from "./InlineDiff";
 import TodoCard, { messageHasTodos } from "./TodoCard";
@@ -28,13 +27,7 @@ interface ChatPanelProps {
 type ChatItem =
   | { type: "message"; message: ChatMessage }
   | { type: "todos"; message: ChatMessage }
-  | { type: "edit"; message: ChatMessage }
   | { type: "tools"; messages: ChatMessage[]; key: string };
-
-function isEditMessage(message: ChatMessage): boolean {
-  if (message.diffPatch) return true;
-  return Boolean(message.toolName && isEditTool(message.toolName));
-}
 
 function groupMessages(messages: ChatMessage[]): ChatItem[] {
   const items: ChatItem[] = [];
@@ -57,16 +50,10 @@ function groupMessages(messages: ChatMessage[]): ChatItem[] {
       continue;
     }
 
-    // Todos and file edits get their own first-class cards so the full
-    // payload is visible without digging through a collapsed Tools group.
+    // Todos stay first-class; file edits stay inside the Tools group.
     if (messageHasTodos(msg)) {
       flushTools();
       items.push({ type: "todos", message: msg });
-      continue;
-    }
-    if (isEditMessage(msg)) {
-      flushTools();
-      items.push({ type: "edit", message: msg });
       continue;
     }
 
@@ -162,20 +149,11 @@ export default function ChatPanel({
         ref={scrollerRef}
         className="room-chat-scroll flex-1 min-h-0 h-full overflow-y-auto overscroll-contain"
       >
-        <div className="max-w-3xl mx-auto px-3 sm:px-4 py-3 sm:py-4 space-y-3 sm:space-y-4">
+        <div className="max-w-4xl mx-auto px-3 sm:px-5 py-4 sm:py-6 space-y-4">
           {items.map((item) => {
             if (item.type === "todos") {
               return (
                 <TodoCard
-                  key={item.message.id}
-                  message={item.message}
-                  agentLabel={agentLabel(item.message.agentId)}
-                />
-              );
-            }
-            if (item.type === "edit") {
-              return (
-                <EditToolCard
                   key={item.message.id}
                   message={item.message}
                   agentLabel={agentLabel(item.message.agentId)}
@@ -211,64 +189,6 @@ export default function ChatPanel({
   );
 }
 
-function EditToolCard({
-  message,
-  agentLabel,
-}: {
-  message: ChatMessage;
-  agentLabel?: string;
-}) {
-  const path =
-    message.content ||
-    message.diffPatch?.match(/^diff --git a\/(.+?) b\//m)?.[1] ||
-    "file";
-  const streaming = message.status === "streaming";
-
-  return (
-    <div className="rounded-lg border border-[#2b2b2b] bg-[#1a1a1a] overflow-hidden">
-      <div className="flex items-center gap-2 px-3 h-9 border-b border-[#2b2b2b]">
-        <span className="text-[11px] uppercase tracking-wide text-[#6e6e6e]">
-          Edit
-        </span>
-        {agentLabel && (
-          <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#252525] text-[#a0a0a0]">
-            {agentLabel}
-          </span>
-        )}
-        <span className="text-[12px] text-[#a0a0a0] font-mono truncate min-w-0 flex-1">
-          {message.toolName || "edit"} · {path}
-        </span>
-        <span
-          className={`text-[10px] shrink-0 ${
-            streaming
-              ? "text-[#4d9fff]"
-              : message.status === "error"
-                ? "text-[#f07070]"
-                : "text-[#3ecf8e]"
-          }`}
-        >
-          {streaming
-            ? "editing"
-            : message.status === "error"
-              ? "error"
-              : "done"}
-        </span>
-      </div>
-      <div className="p-2.5 space-y-2">
-        {message.diffPatch ? (
-          <InlineDiff patch={message.diffPatch} alwaysOpen />
-        ) : (
-          <p className="px-1 py-1.5 text-[12px] text-[#6e6e6e]">
-            {streaming
-              ? "Waiting for the file diff…"
-              : "No line-level diff was captured for this edit."}
-          </p>
-        )}
-      </div>
-    </div>
-  );
-}
-
 function ToolCallGroup({
   messages,
   agentLabel,
@@ -277,7 +197,11 @@ function ToolCallGroup({
   agentLabel?: string;
 }) {
   const anyStreaming = messages.some((m) => m.status === "streaming");
-  const [open, setOpen] = useState(false);
+  const hasDiffs = messages.some((m) => Boolean(m.diffPatch));
+  // Keep tools collapsed by default; auto-open when the group includes edits
+  // so file diffs aren't easy to miss. Manual toggles win after that.
+  const [manualOpen, setManualOpen] = useState<boolean | null>(null);
+  const open = manualOpen ?? hasDiffs;
 
   const doneCount = messages.filter((m) => m.status === "done").length;
   const editCount = messages.filter((m) => Boolean(m.diffPatch)).length;
@@ -341,7 +265,10 @@ function ToolCallGroup({
 }
 
 function ToolCallRow({ message }: { message: ChatMessage }) {
-  const [open, setOpen] = useState(false);
+  const hasDiff = Boolean(message.diffPatch);
+  // Expand edit rows by default so the file diff is visible inside Tools.
+  const [manualOpen, setManualOpen] = useState<boolean | null>(null);
+  const open = manualOpen ?? hasDiff;
 
   return (
     <div className="bg-[#151515]">
@@ -378,6 +305,9 @@ function ToolCallRow({ message }: { message: ChatMessage }) {
                   ? "error"
                   : "done"}
             </span>
+            {hasDiff && (
+              <span className="text-[10px] text-[#4d9fff]">diff</span>
+            )}
           </div>
           {!open && message.content && (
             <p className="text-[11px] text-[#6e6e6e] font-mono truncate mt-0.5">
@@ -386,11 +316,16 @@ function ToolCallRow({ message }: { message: ChatMessage }) {
           )}
         </div>
       </button>
-      {open && message.content && (
-        <div className="px-3 pb-2.5 pl-8">
-          <p className="text-[12px] text-[#6e6e6e] font-mono break-all whitespace-pre-wrap">
-            {message.content}
-          </p>
+      {open && (
+        <div className="px-3.5 pb-3 pl-12 space-y-2">
+          {message.content && (
+            <p className="text-[12px] text-[#8a8a8a] font-mono break-all whitespace-pre-wrap">
+              {message.content}
+            </p>
+          )}
+          {message.diffPatch && (
+            <InlineDiff patch={message.diffPatch} defaultOpen />
+          )}
         </div>
       )}
     </div>
