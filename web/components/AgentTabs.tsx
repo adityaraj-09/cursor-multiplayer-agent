@@ -1,5 +1,13 @@
 "use client";
 
+import {
+  Bot,
+  BrainCircuit,
+  CircleStop,
+  Layers3,
+  Plus,
+  Radio,
+} from "lucide-react";
 import type { AgentInfo, AgentRunStatus, ModelInfo, Participant } from "../../shared/events";
 
 interface AgentTabsProps {
@@ -52,17 +60,18 @@ export default function AgentTabs({
   if (!agents.length && !amHost) return null;
 
   return (
-    <div className="flex items-center gap-1 px-2 sm:px-3 py-1.5 border-b border-[#2b2b2b] bg-[#161616] overflow-x-auto shrink-0">
+    <div className="relative z-10 flex items-center gap-2 px-3 sm:px-4 py-2 border-b border-[#2b2b2b]/90 bg-[#141414]/95 overflow-x-auto shrink-0">
       {showAllTab && (
         <button
           type="button"
           onClick={onSelectAll}
-          className={`h-7 px-2.5 rounded-md text-[12px] shrink-0 transition-colors border ${
+          className={`inline-flex h-8 items-center gap-1.5 px-3 rounded-xl text-[12px] shrink-0 transition-colors border ${
             allSelected
-              ? "bg-[#252525] text-[#e4e4e4] border-[#3c3c3c]"
-              : "text-[#a0a0a0] hover:text-[#e4e4e4] hover:bg-[#1e1e1e] border-transparent"
+              ? "bg-[#252525] text-[#e4e4e4] border-[#3c3c3c] shadow-sm"
+              : "text-[#a0a0a0] hover:text-[#e4e4e4] hover:bg-[#1e1e1e] border-[#252525]"
           }`}
         >
+          <Layers3 className="h-3.5 w-3.5" strokeWidth={1.75} />
           All agents
         </button>
       )}
@@ -80,35 +89,43 @@ export default function AgentTabs({
         return (
           <div
             key={agent.id}
-            className={`group flex items-center gap-1.5 h-7 px-2 rounded-md text-[12px] shrink-0 transition-colors border ${
+            className={`group flex items-center gap-2 h-8 px-2.5 rounded-xl text-[12px] shrink-0 transition-colors border ${
               isActive
-                ? "bg-[#252525] text-[#e4e4e4] border-[#3c3c3c]"
-                : "text-[#a0a0a0] hover:text-[#e4e4e4] hover:bg-[#1e1e1e] border-transparent"
+                ? "bg-[#252525] text-[#e4e4e4] border-[#3c3c3c] shadow-sm"
+                : "text-[#a0a0a0] hover:text-[#e4e4e4] hover:bg-[#1e1e1e] border-[#252525]"
             } ${agent.status === "stopped" ? "opacity-50" : ""}`}
           >
             <button
               type="button"
               onClick={() => onSelectAgent(agent.id)}
-              className="flex items-center gap-1.5 min-w-0"
+              className="flex items-center gap-2 min-w-0"
               title={
                 isTarget
                   ? `Messaging ${agent.label}`
                   : `View ${agent.label} — click to focus`
               }
             >
-              <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${statusDot(status)}`} />
+              <span className="relative flex h-5 w-5 items-center justify-center rounded-md bg-[#1a1a1a] text-[#a0a0a0]">
+                {agent.backend === "claude-code" ? (
+                  <BrainCircuit className="h-3.5 w-3.5" strokeWidth={1.75} />
+                ) : (
+                  <Bot className="h-3.5 w-3.5" strokeWidth={1.75} />
+                )}
+                <span className={`absolute -right-0.5 -top-0.5 w-1.5 h-1.5 rounded-full ring-1 ring-[#1a1a1a] ${statusDot(status)}`} />
+              </span>
               <span className="whitespace-nowrap font-medium">{agent.label}</span>
-              <span className="text-[10px] uppercase tracking-wide text-[#6e6e6e] hidden sm:inline">
+              <span className="text-[10px] uppercase tracking-wide text-[#6e6e6e] hidden sm:inline-flex items-center gap-1">
                 {agent.backend === "claude-code" ? "Claude" : "Cursor"}
               </span>
               <span
-                className="text-[10px] px-1.5 py-0.5 rounded bg-[#1a1a1a] text-[#8a8a8a] max-w-[7rem] truncate hidden md:inline"
+                className="text-[10px] px-1.5 py-0.5 rounded-md bg-[#1a1a1a] text-[#8a8a8a] max-w-[7rem] truncate hidden md:inline"
                 title={agent.modelId}
               >
                 {modelLabel(agent.modelId, models)}
               </span>
               {isTarget && multi && (
-                <span className="text-[9px] px-1 py-0.5 rounded bg-[#1f2a1f] text-[#3ecf8e]">
+                <span className="text-[9px] px-1.5 py-0.5 rounded-md bg-[#17251f] text-[#3ecf8e] inline-flex items-center gap-1">
+                  <Radio className="h-2.5 w-2.5" strokeWidth={2} />
                   active
                 </span>
               )}
@@ -129,7 +146,7 @@ export default function AgentTabs({
                 onClick={() => onStopAgent(agent.id)}
                 className="opacity-0 group-hover:opacity-100 text-[#6e6e6e] hover:text-[#f07070] ml-0.5"
               >
-                ×
+                <CircleStop className="h-3.5 w-3.5" strokeWidth={1.75} />
               </button>
             )}
           </div>
@@ -140,9 +157,10 @@ export default function AgentTabs({
         <button
           type="button"
           onClick={onAddAgent}
-          className="h-7 px-2 rounded-md text-[12px] text-[#6e6e6e] hover:text-[#e4e4e4] hover:bg-[#1e1e1e] shrink-0"
+          className="inline-flex h-8 items-center gap-1.5 px-3 rounded-xl border border-dashed border-[#3c3c3c] text-[12px] text-[#8a8a8a] hover:text-[#e4e4e4] hover:bg-[#1e1e1e] shrink-0 transition-colors"
         >
-          + Add agent
+          <Plus className="h-3.5 w-3.5" strokeWidth={1.75} />
+          Add agent
         </button>
       )}
     </div>

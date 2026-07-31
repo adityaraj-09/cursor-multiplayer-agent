@@ -1,6 +1,16 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import {
+  AlertTriangle,
+  Bot,
+  CheckCircle2,
+  GitCompare,
+  LoaderCircle,
+  Sparkles,
+  User,
+  Wrench,
+} from "lucide-react";
 import type { AgentRunStatus, ChatMessage } from "../../shared/events";
 import Markdown from "./Markdown";
 import InlineDiff from "./InlineDiff";
@@ -15,6 +25,7 @@ interface ChatPanelProps {
 
 type ChatItem =
   | { type: "message"; message: ChatMessage }
+  | { type: "diff"; message: ChatMessage }
   | { type: "tools"; messages: ChatMessage[]; key: string };
 
 function groupMessages(messages: ChatMessage[]): ChatItem[] {
@@ -32,7 +43,10 @@ function groupMessages(messages: ChatMessage[]): ChatItem[] {
   };
 
   for (const msg of messages) {
-    if (msg.role === "tool") {
+    if (msg.role === "tool" && msg.diffPatch) {
+      flushTools();
+      items.push({ type: "diff", message: msg });
+    } else if (msg.role === "tool") {
       toolBuf.push(msg);
     } else {
       flushTools();
@@ -87,11 +101,35 @@ export default function ChatPanel({
 
   if (filtered.length === 0) {
     return (
-      <div className="flex-1 min-h-0 h-full overflow-hidden flex flex-col items-center justify-center gap-2 px-4 sm:px-6">
-        <div className="text-[#e4e4e4] text-[14px]">No messages yet</div>
-        <div className="text-[#6e6e6e] text-[13px] text-center max-w-sm">
-          Send a message below. Anyone in the room can steer the agent — replies
-          and tool activity show up here.
+      <div className="flex-1 min-h-0 h-full overflow-hidden flex flex-col items-center justify-center px-4 sm:px-6">
+        <div className="max-w-md w-full rounded-2xl border border-[#2b2b2b] bg-[#181818]/90 p-6 shadow-[0_24px_70px_rgba(0,0,0,0.25)]">
+          <div className="mx-auto mb-4 flex h-11 w-11 items-center justify-center rounded-xl border border-[#2b2b2b] bg-[#1f1f1f] text-[#e4e4e4]">
+            <Sparkles className="h-5 w-5" strokeWidth={1.75} />
+          </div>
+          <div className="text-center">
+            <div className="text-[#e4e4e4] text-[15px] font-medium">
+              Start steering the agent
+            </div>
+            <div className="mt-2 text-[#7d7d7d] text-[13px] leading-relaxed">
+              Ask for a task, request a review, or redirect the current plan.
+              Replies, tool calls, and file diffs will appear here in a live
+              room timeline.
+            </div>
+          </div>
+          <div className="mt-5 grid gap-2 text-[12px] text-[#a0a0a0]">
+            {[
+              "Summarize the repository architecture",
+              "Make this page look like the landing demo",
+              "Review the latest diff and suggest fixes",
+            ].map((item) => (
+              <div
+                key={item}
+                className="rounded-lg border border-[#2b2b2b] bg-[#141414] px-3 py-2"
+              >
+                {item}
+              </div>
+            ))}
+          </div>
         </div>
       </div>
     );
@@ -105,13 +143,19 @@ export default function ChatPanel({
         ref={scrollerRef}
         className="room-chat-scroll flex-1 min-h-0 h-full overflow-y-auto overscroll-contain"
       >
-        <div className="max-w-3xl mx-auto px-3 sm:px-4 py-3 sm:py-4 space-y-3 sm:space-y-4">
+        <div className="max-w-4xl mx-auto px-3 sm:px-5 py-4 sm:py-6 space-y-4">
           {items.map((item) =>
             item.type === "tools" ? (
               <ToolCallGroup
                 key={item.key}
                 messages={item.messages}
                 agentLabel={agentLabel(item.messages[0]?.agentId)}
+              />
+            ) : item.type === "diff" ? (
+              <DiffMessageCard
+                key={item.message.id}
+                message={item.message}
+                agentLabel={agentLabel(item.message.agentId)}
               />
             ) : (
               <MessageBubble
@@ -122,9 +166,9 @@ export default function ChatPanel({
             ),
           )}
           {agentStatus === "running" && (
-            <div className="flex items-center gap-2 text-[12px] text-[#6e6e6e] px-1">
-              <span className="inline-block w-1.5 h-1.5 rounded-full bg-[#4d9fff] animate-pulse" />
-              Agent is working…
+            <div className="inline-flex items-center gap-2 rounded-full border border-[#2b2b2b] bg-[#181818] px-3 py-1.5 text-[12px] text-[#a0a0a0] shadow-sm">
+              <LoaderCircle className="h-3.5 w-3.5 animate-spin text-[#4d9fff]" strokeWidth={1.75} />
+              Agent is working
             </div>
           )}
         </div>
@@ -151,18 +195,21 @@ function ToolCallGroup({
       : `${messages.length} tool calls`;
 
   return (
-    <div className="rounded-lg border border-[#2b2b2b] bg-[#1a1a1a] overflow-hidden">
+    <div className="rounded-xl border border-[#2b2b2b] bg-[#181818] overflow-hidden shadow-[0_14px_34px_rgba(0,0,0,0.16)]">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="w-full flex items-center gap-2 px-3 h-9 text-left hover:bg-[#1e1e1e] transition-colors"
+        className="w-full flex items-center gap-2.5 px-3.5 h-10 text-left hover:bg-[#1f1f1f] transition-colors"
       >
         <Chevron open={open} />
-        <span className="text-[11px] uppercase tracking-wide text-[#6e6e6e]">
+        <span className="flex h-6 w-6 items-center justify-center rounded-md bg-[#252525] text-[#a0a0a0]">
+          <Wrench className="h-3.5 w-3.5" strokeWidth={1.75} />
+        </span>
+        <span className="text-[11px] uppercase tracking-[0.12em] text-[#6e6e6e]">
           Tools
         </span>
         {agentLabel && (
-          <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#252525] text-[#a0a0a0]">
+          <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-[#252525] text-[#a0a0a0]">
             {agentLabel}
           </span>
         )}
@@ -170,10 +217,17 @@ function ToolCallGroup({
           {label}
         </span>
         <span
-          className={`text-[10px] shrink-0 ${
-            anyStreaming ? "text-[#4d9fff]" : "text-[#3ecf8e]"
+          className={`inline-flex items-center gap-1 text-[10px] shrink-0 rounded-full border px-2 py-0.5 ${
+            anyStreaming
+              ? "border-[#26405d] bg-[#17202a] text-[#4d9fff]"
+              : "border-[#234337] bg-[#17251f] text-[#3ecf8e]"
           }`}
         >
+          {anyStreaming ? (
+            <LoaderCircle className="h-3 w-3 animate-spin" strokeWidth={1.8} />
+          ) : (
+            <CheckCircle2 className="h-3 w-3" strokeWidth={1.8} />
+          )}
           {anyStreaming ? "running" : `${doneCount}/${messages.length}`}
         </span>
       </button>
@@ -189,21 +243,21 @@ function ToolCallGroup({
 }
 
 function ToolCallRow({ message }: { message: ChatMessage }) {
-  const hasDiff = Boolean(message.diffPatch);
   // Individual tool rows stay collapsed until the user expands them.
   const [open, setOpen] = useState(false);
 
   return (
-    <div className="bg-[#161616]">
+    <div className="bg-[#151515]">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="w-full flex items-start gap-2 px-3 py-2 text-left hover:bg-[#1a1a1a] transition-colors"
+        className="w-full flex items-start gap-2.5 px-3.5 py-2.5 text-left hover:bg-[#1a1a1a] transition-colors"
       >
         <Chevron open={open} className="mt-0.5" />
+        <ToolStatusIcon status={message.status} />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-[12px] text-[#a0a0a0] font-medium">
+            <span className="text-[12px] text-[#d0d0d0] font-medium">
               {message.toolName || "tool"}
             </span>
             <span
@@ -221,9 +275,6 @@ function ToolCallRow({ message }: { message: ChatMessage }) {
                   ? "error"
                   : "done"}
             </span>
-            {hasDiff && (
-              <span className="text-[10px] text-[#4d9fff]">diff</span>
-            )}
           </div>
           {!open && message.content && (
             <p className="text-[11px] text-[#6e6e6e] font-mono truncate mt-0.5">
@@ -233,17 +284,47 @@ function ToolCallRow({ message }: { message: ChatMessage }) {
         </div>
       </button>
       {open && (
-        <div className="px-3 pb-2.5 pl-8">
+        <div className="px-3.5 pb-3 pl-12">
           {message.content && (
-            <p className="text-[12px] text-[#6e6e6e] font-mono break-all whitespace-pre-wrap mb-1">
+            <p className="text-[12px] text-[#8a8a8a] font-mono break-all whitespace-pre-wrap">
               {message.content}
             </p>
           )}
-          {message.diffPatch && (
-            <InlineDiff patch={message.diffPatch} defaultOpen />
-          )}
         </div>
       )}
+    </div>
+  );
+}
+
+function DiffMessageCard({
+  message,
+  agentLabel,
+}: {
+  message: ChatMessage;
+  agentLabel?: string;
+}) {
+  return (
+    <div className="rounded-xl border border-[#2b2b2b] bg-[#181818] overflow-hidden shadow-[0_14px_34px_rgba(0,0,0,0.18)]">
+      <div className="flex items-center gap-2.5 px-3.5 h-10 border-b border-[#2b2b2b]">
+        <span className="flex h-6 w-6 items-center justify-center rounded-md bg-[#17202a] text-[#4d9fff]">
+          <GitCompare className="h-3.5 w-3.5" strokeWidth={1.75} />
+        </span>
+        <span className="text-[11px] uppercase tracking-[0.12em] text-[#6e6e6e]">
+          Edit
+        </span>
+        {agentLabel && (
+          <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-[#252525] text-[#a0a0a0]">
+            {agentLabel}
+          </span>
+        )}
+        <span className="text-[12px] text-[#a0a0a0] font-mono truncate min-w-0 flex-1">
+          {message.content || message.toolName || "file changes"}
+        </span>
+        <span className="text-[10px] text-[#3ecf8e]">done</span>
+      </div>
+      <div className="p-2.5">
+        <InlineDiff patch={message.diffPatch || ""} defaultOpen />
+      </div>
     </div>
   );
 }
@@ -276,21 +357,18 @@ function MessageBubble({
 }) {
   if (message.role === "user") {
     return (
-      <div className="flex justify-end">
-        <div className="max-w-[92%] sm:max-w-[85%] rounded-2xl rounded-br-md bg-[#252525] border border-[#2b2b2b] px-3 sm:px-3.5 py-2 sm:py-2.5">
-          <div className="flex items-center gap-2 mb-1">
+      <div className="flex justify-end gap-3">
+        <div className="max-w-[92%] sm:max-w-[82%] rounded-2xl rounded-br-md bg-[#242424] border border-[#343434] px-3.5 sm:px-4 py-2.5 shadow-[0_14px_35px_rgba(0,0,0,0.18)]">
+          <div className="flex items-center gap-2 mb-1.5">
             <span
-              className="w-1.5 h-1.5 rounded-full"
-              style={{ backgroundColor: message.senderColor || "#4d9fff" }}
-            />
-            <span
-              className="text-[11px] font-medium"
+              className="text-[11px] font-medium inline-flex items-center gap-1.5"
               style={{ color: message.senderColor || "#a0a0a0" }}
             >
+              <User className="h-3 w-3" strokeWidth={1.8} />
               {message.senderName || "User"}
             </span>
             {agentLabel && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#1a1a1a] text-[#6e6e6e]">
+              <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-[#1a1a1a] text-[#8a8a8a]">
                 → {agentLabel}
               </span>
             )}
@@ -298,7 +376,7 @@ function MessageBubble({
               {formatTime(message.ts)}
             </span>
           </div>
-          <p className="text-[13px] text-[#e4e4e4] leading-relaxed whitespace-pre-wrap break-words">
+          <p className="text-[13px] text-[#f0f0f0] leading-relaxed whitespace-pre-wrap break-words">
             {message.content}
           </p>
         </div>
@@ -307,20 +385,30 @@ function MessageBubble({
   }
 
   return (
-    <div className="flex justify-start">
-      <div className="max-w-[95%] sm:max-w-[90%] rounded-2xl rounded-bl-md bg-[#1a1a1a] border border-[#2b2b2b] px-3 sm:px-3.5 py-2 sm:py-2.5">
-        <div className="flex items-center gap-2 mb-1">
-          <span className="text-[11px] font-medium text-[#a0a0a0]">
+    <div className="flex justify-start gap-3">
+      <div className="mt-0.5 hidden sm:flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-[#2b2b2b] bg-[#1f1f1f] text-[#a0a0a0]">
+        <Bot className="h-4 w-4" strokeWidth={1.75} />
+      </div>
+      <div className="max-w-[95%] sm:max-w-[86%] rounded-2xl rounded-bl-md bg-[#191919] border border-[#2b2b2b] px-3.5 sm:px-4 py-2.5 shadow-[0_14px_35px_rgba(0,0,0,0.14)]">
+        <div className="flex items-center gap-2 mb-1.5">
+          <span className="text-[11px] font-medium text-[#a0a0a0] inline-flex items-center gap-1.5">
+            <Bot className="h-3 w-3 sm:hidden" strokeWidth={1.8} />
             {agentLabel || "Agent"}
           </span>
           <span className="text-[10px] text-[#4a4a4a] font-mono">
             {formatTime(message.ts)}
           </span>
           {message.status === "streaming" && (
-            <span className="text-[10px] text-[#4d9fff]">streaming</span>
+            <span className="inline-flex items-center gap-1 text-[10px] text-[#4d9fff]">
+              <LoaderCircle className="h-3 w-3 animate-spin" strokeWidth={1.8} />
+              streaming
+            </span>
           )}
           {message.status === "error" && (
-            <span className="text-[10px] text-[#f07070]">error</span>
+            <span className="inline-flex items-center gap-1 text-[10px] text-[#f07070]">
+              <AlertTriangle className="h-3 w-3" strokeWidth={1.8} />
+              error
+            </span>
           )}
         </div>
         {message.content ? (
@@ -330,6 +418,28 @@ function MessageBubble({
         )}
       </div>
     </div>
+  );
+}
+
+function ToolStatusIcon({ status }: { status: ChatMessage["status"] }) {
+  if (status === "streaming") {
+    return (
+      <span className="mt-0.5 flex h-6 w-6 items-center justify-center rounded-md bg-[#17202a] text-[#4d9fff]">
+        <LoaderCircle className="h-3.5 w-3.5 animate-spin" strokeWidth={1.75} />
+      </span>
+    );
+  }
+  if (status === "error") {
+    return (
+      <span className="mt-0.5 flex h-6 w-6 items-center justify-center rounded-md bg-[#2a1717] text-[#f07070]">
+        <AlertTriangle className="h-3.5 w-3.5" strokeWidth={1.75} />
+      </span>
+    );
+  }
+  return (
+    <span className="mt-0.5 flex h-6 w-6 items-center justify-center rounded-md bg-[#17251f] text-[#3ecf8e]">
+      <CheckCircle2 className="h-3.5 w-3.5" strokeWidth={1.75} />
+    </span>
   );
 }
 

@@ -32,9 +32,9 @@ export default function PresenceBar({
         return (
           <div key={p.socketId} className="relative group">
             <div
-              className={`w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-medium text-white border-2 border-[#1a1a1a] ${
+              className={`w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-semibold text-white border-2 border-[#171717] shadow-sm ${
                 p.isDriver
-                  ? "ring-1 ring-[#4d9fff] ring-offset-1 ring-offset-[#1a1a1a]"
+                  ? "ring-1 ring-[#4d9fff] ring-offset-1 ring-offset-[#171717]"
                   : ""
               }`}
               style={{ backgroundColor: p.color }}
@@ -48,7 +48,7 @@ export default function PresenceBar({
             >
               {p.name.charAt(0).toUpperCase()}
             </div>
-            <div className="absolute top-full right-0 sm:left-1/2 sm:-translate-x-1/2 sm:right-auto mt-2 bg-[#252525] border border-[#3c3c3c] text-[#e4e4e4] px-2 py-1.5 rounded text-[11px] whitespace-nowrap opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity pointer-events-none group-hover:pointer-events-auto z-50 shadow-lg">
+            <div className="absolute top-full right-0 sm:left-1/2 sm:-translate-x-1/2 sm:right-auto mt-2 bg-[#202020] border border-[#3c3c3c] text-[#e4e4e4] px-2.5 py-2 rounded-lg text-[11px] whitespace-nowrap opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity pointer-events-none group-hover:pointer-events-auto z-50 shadow-xl">
               <div>
                 {p.name}
                 {p.isOwner ? " · host" : ""}
@@ -77,7 +77,7 @@ export default function PresenceBar({
       })}
       {overflow > 0 && (
         <div
-          className="w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-medium text-[#a0a0a0] bg-[#252525] border-2 border-[#1a1a1a]"
+          className="w-7 h-7 rounded-full flex items-center justify-center text-[10px] font-medium text-[#a0a0a0] bg-[#252525] border-2 border-[#171717]"
           title={`${overflow} more`}
         >
           +{overflow}

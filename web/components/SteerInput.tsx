@@ -1,6 +1,13 @@
 "use client";
 
 import { useState, type FormEvent, type KeyboardEvent } from "react";
+import {
+  Bot,
+  ChevronDown,
+  Lock,
+  SendHorizontal,
+  Sparkles,
+} from "lucide-react";
 import type { ModelInfo } from "../../shared/events";
 
 interface SteerInputProps {
@@ -87,64 +94,73 @@ export default function SteerInput({
   return (
     <form
       onSubmit={handleSubmit}
-      className="px-2 sm:px-3 pb-2 sm:pb-3 pt-2"
+      className="px-3 sm:px-5 pb-3 sm:pb-4 pt-3"
     >
-      <div className="flex items-center gap-2 mb-1.5 sm:mb-2 min-h-7">
-        <label className="text-[11px] text-[#6e6e6e] shrink-0">
-          {agentName ? `${agentName} model` : "Model"}
-        </label>
-        <select
-          value={modelId}
-          onChange={(e) => onModelChange?.(e.target.value)}
-          disabled={modelLocked}
-          title={modelLocked ? modelReason : undefined}
-          className="min-w-0 flex-1 sm:flex-none sm:max-w-[min(100%,280px)] h-8 sm:h-7 px-2 rounded-md bg-[#252525] border border-[#2b2b2b] text-[12px] text-[#e4e4e4] outline-none focus:border-[#4d9fff] disabled:opacity-40"
-        >
-          {modelOptions.length === 0 ? (
-            <option value="auto">Auto</option>
-          ) : (
-            modelOptions.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.displayName}
-              </option>
-            ))
-          )}
-        </select>
-        {modelLocked && modelReason && (
-          <span className="hidden sm:inline text-[11px] text-[#6e6e6e] truncate">
-            {modelReason}
-          </span>
-        )}
-      </div>
-
       <div
-        className={`flex items-center gap-2 rounded-lg border bg-[#1e1e1e] transition-colors px-2.5 sm:px-3 h-12 sm:h-11 ${
+        className={`rounded-2xl border bg-[#181818] transition-all shadow-[0_18px_55px_rgba(0,0,0,0.28)] overflow-hidden ${
           !connected
             ? "border-[#5a3a3a]"
-            : "border-[#2b2b2b] focus-within:border-[#3c3c3c]"
+            : "border-[#2b2b2b] focus-within:border-[#4d9fff]/60 focus-within:shadow-[0_18px_70px_rgba(77,159,255,0.08)]"
         }`}
       >
-        {/* Fixed height — long text / paste scrolls inside, never grows the footer */}
-        <textarea
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder={livePlaceholder}
-          rows={1}
-          // Keep editable while busy/disconnected so users can draft
-          className="flex-1 h-full min-h-0 resize-none overflow-y-auto bg-transparent text-[16px] sm:text-[13px] text-[#e4e4e4] placeholder:text-[#6e6e6e] outline-none leading-5 py-3 sm:py-2.5"
-          aria-label="Message the agent"
-        />
-        <button
-          type="submit"
-          disabled={!canSend}
-          className="shrink-0 h-10 sm:h-8 min-w-[4.25rem] sm:min-w-0 px-4 sm:px-3 rounded-md bg-[#e4e4e4] text-[#141414] text-[14px] sm:text-[12px] font-medium hover:bg-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-        >
-          Send
-        </button>
+        <div className="flex items-center gap-2 border-b border-[#2b2b2b]/80 px-3 h-9">
+          <span className="flex items-center gap-1.5 text-[11px] text-[#8a8a8a] shrink-0">
+            <Bot className="h-3.5 w-3.5" strokeWidth={1.75} />
+            {agentName || "Agent"}
+          </span>
+          <div className="relative min-w-0 flex-1 sm:flex-none sm:w-[min(100%,320px)]">
+            <select
+              value={modelId}
+              onChange={(e) => onModelChange?.(e.target.value)}
+              disabled={modelLocked}
+              title={modelLocked ? modelReason : undefined}
+              className="w-full h-7 appearance-none rounded-lg bg-[#202020] border border-[#2b2b2b] pl-2.5 pr-7 text-[12px] text-[#e4e4e4] outline-none focus:border-[#4d9fff] disabled:opacity-45"
+            >
+              {modelOptions.length === 0 ? (
+                <option value="auto">Auto</option>
+              ) : (
+                modelOptions.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.displayName}
+                  </option>
+                ))
+              )}
+            </select>
+            <ChevronDown className="pointer-events-none absolute right-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[#6e6e6e]" strokeWidth={1.75} />
+          </div>
+          {modelLocked && modelReason && (
+            <span className="hidden sm:inline-flex items-center gap-1 text-[11px] text-[#6e6e6e] truncate">
+              <Lock className="h-3 w-3" strokeWidth={1.75} />
+              {modelReason}
+            </span>
+          )}
+        </div>
+
+        <div className="flex items-end gap-2 px-3 py-2.5">
+          <Sparkles className="mt-1 h-4 w-4 shrink-0 text-[#6e6e6e]" strokeWidth={1.75} />
+          {/* Fixed height — long text / paste scrolls inside, never grows the footer */}
+          <textarea
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder={livePlaceholder}
+            rows={1}
+            // Keep editable while busy/disconnected so users can draft
+            className="flex-1 h-11 min-h-0 resize-none overflow-y-auto bg-transparent text-[16px] sm:text-[13px] text-[#e4e4e4] placeholder:text-[#6e6e6e] outline-none leading-5 py-2.5"
+            aria-label="Message the agent"
+          />
+          <button
+            type="submit"
+            disabled={!canSend}
+            className="shrink-0 inline-flex h-9 w-9 items-center justify-center rounded-xl bg-[#e4e4e4] text-[#141414] hover:bg-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+            aria-label="Send message"
+          >
+            <SendHorizontal className="h-4 w-4" strokeWidth={2} />
+          </button>
+        </div>
       </div>
 
-      <div className="mt-1.5 px-0.5 flex items-center justify-between gap-2 min-h-[1rem]">
+      <div className="mt-2 px-1 flex items-center justify-between gap-2 min-h-[1rem]">
         <p className="text-[11px] text-[#6e6e6e]">
           {statusHint ? (
             <span className={!connected ? "text-[#f07070]" : "text-[#4d9fff]"}>

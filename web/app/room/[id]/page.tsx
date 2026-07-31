@@ -3,6 +3,18 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
+import {
+  Activity,
+  Bot,
+  Cloud,
+  Home,
+  PanelRightOpen,
+  Share2,
+  Square,
+  StopCircle,
+  Wifi,
+  WifiOff,
+} from "lucide-react";
 import { useSocket } from "../../../hooks/useSocket";
 import { useAuth } from "../../../components/AuthProvider";
 import {
@@ -259,7 +271,8 @@ function LiveRoom({
     ) {
       const first =
         agents.find((a) => a.status !== "stopped") || agents[0];
-      setSelectedAgentId(first.id);
+      const frame = requestAnimationFrame(() => setSelectedAgentId(first.id));
+      return () => cancelAnimationFrame(frame);
     }
   }, [agents, selectedAgentId]);
 
@@ -306,15 +319,19 @@ function LiveRoom({
   useEffect(() => {
     let cancelled = false;
     if (selectedBackend === "claude-code") {
-      setModels(CLAUDE_MODELS);
       setCachedModels(modelsCacheKey, CLAUDE_MODELS);
-      setModelError("");
-      return;
+      const frame = requestAnimationFrame(() => {
+        setModels(CLAUDE_MODELS);
+        setModelError("");
+      });
+      return () => cancelAnimationFrame(frame);
     }
 
     const cached = getCachedModels(modelsCacheKey);
-    if (cached?.length) setModels(cached);
-    else setModels(FALLBACK_MODELS);
+    const initialModels = cached?.length ? cached : FALLBACK_MODELS;
+    const initialModelsFrame = requestAnimationFrame(() => {
+      setModels(initialModels);
+    });
 
     fetchRoomModels(roomId, selectedAgent?.id)
       .then((list) => {
@@ -334,6 +351,7 @@ function LiveRoom({
       });
     return () => {
       cancelled = true;
+      cancelAnimationFrame(initialModelsFrame);
     };
   }, [roomId, modelsCacheKey, selectedBackend, selectedAgent?.id]);
 
@@ -478,119 +496,153 @@ function LiveRoom({
   const fileCount = selectedDiff
     ? (selectedDiff.match(/^diff --git /gm) || []).length
     : 0;
+  const visibleMessageCount =
+    agents.length > 1 && chatFilterAgentId
+      ? messages.filter((m) => !m.agentId || m.agentId === chatFilterAgentId)
+          .length
+      : messages.length;
 
   return (
-    <div className="room-shell fixed inset-0 h-[100dvh] max-h-[100dvh] w-full flex flex-col bg-[#141414] overflow-hidden overscroll-none">
-      <header className="flex items-center justify-between gap-2 px-2 sm:px-3 h-11 sm:h-10 border-b border-[#2b2b2b] bg-[#1a1a1a] shrink-0 pt-[env(safe-area-inset-top)]">
-        <div className="flex items-center gap-1.5 sm:gap-2.5 min-w-0 flex-1">
+    <div className="room-shell fixed inset-0 h-[100dvh] max-h-[100dvh] w-full flex flex-col bg-[#111111] text-[#e4e4e4] overflow-hidden overscroll-none">
+      <div className="absolute inset-0 pointer-events-none bg-[radial-gradient(circle_at_20%_0%,rgba(77,159,255,0.07),transparent_28%),radial-gradient(circle_at_84%_12%,rgba(62,207,142,0.045),transparent_26%)]" />
+
+      <header className="relative z-20 shrink-0 border-b border-[#2b2b2b]/90 bg-[#171717]/95 backdrop-blur-xl pt-[env(safe-area-inset-top)]">
+        <div className="flex items-center justify-between gap-3 px-3 sm:px-4 h-14">
+          <div className="flex items-center gap-2.5 min-w-0 flex-1">
           <Link
             href="/"
-            className="flex items-center gap-2 shrink-0 hover:opacity-80 transition-opacity"
+            className="flex h-8 w-8 items-center justify-center rounded-lg border border-[#2b2b2b] bg-[#1f1f1f] text-[#a0a0a0] hover:text-[#e4e4e4] hover:border-[#3c3c3c] transition-colors shrink-0"
             aria-label="Steer home"
           >
-            <div className="w-5 h-5 rounded-[4px] bg-[#e4e4e4] flex items-center justify-center">
-              <span className="text-[#141414] text-[9px] font-semibold">S</span>
-            </div>
-            <span className="hidden sm:inline text-[12px] text-[#a0a0a0]">
-              Steer
-            </span>
+            <Home className="h-4 w-4" strokeWidth={1.75} />
           </Link>
-          <span className="text-[#2b2b2b] hidden sm:inline">/</span>
-          <span className="text-[13px] text-[#e4e4e4] truncate min-w-0">
-            {roomInfo?.name || roomId}
-          </span>
-          <span
-            className={`w-1.5 h-1.5 rounded-full shrink-0 ${
-              connected ? "bg-[#3ecf8e]" : "bg-[#f07070]"
-            }`}
-            title={connected ? "Connected" : "Disconnected"}
-          />
-          {selectedStatus === "running" && (
-            <span className="text-[11px] text-[#4d9fff] hidden xs:inline sm:inline">
-              Running
-            </span>
-          )}
-        </div>
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 min-w-0">
+                <h1 className="text-[13px] sm:text-[14px] font-medium text-[#f0f0f0] truncate min-w-0">
+                  {roomInfo?.name || roomId}
+                </h1>
+                <span
+                  className={`hidden sm:inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px] font-medium border ${
+                    connected
+                      ? "border-[#234337] bg-[#17251f] text-[#3ecf8e]"
+                      : "border-[#4a2d2d] bg-[#241818] text-[#f07070]"
+                  }`}
+                  title={connected ? "Connected" : "Disconnected"}
+                >
+                  {connected ? (
+                    <Wifi className="h-3 w-3" strokeWidth={1.8} />
+                  ) : (
+                    <WifiOff className="h-3 w-3" strokeWidth={1.8} />
+                  )}
+                  {connected ? "Live" : "Offline"}
+                </span>
+              </div>
+              <div className="hidden sm:flex items-center gap-2 mt-0.5 text-[11px] text-[#6e6e6e]">
+                <span className="inline-flex items-center gap-1">
+                  {runtime === "cloud" ? (
+                    <Cloud className="h-3 w-3" strokeWidth={1.75} />
+                  ) : (
+                    <Bot className="h-3 w-3" strokeWidth={1.75} />
+                  )}
+                  {runtime === "cloud" ? "Cloud room" : "Local room"}
+                </span>
+                <span className="text-[#3c3c3c]">•</span>
+                <span>{agents.length || 1} agent{(agents.length || 1) === 1 ? "" : "s"}</span>
+                <span className="text-[#3c3c3c]">•</span>
+                <span>{visibleMessageCount} message{visibleMessageCount === 1 ? "" : "s"}</span>
+                {selectedStatus === "running" && (
+                  <>
+                    <span className="text-[#3c3c3c]">•</span>
+                    <span className="inline-flex items-center gap-1 text-[#4d9fff]">
+                      <Activity className="h-3 w-3 animate-pulse" strokeWidth={1.75} />
+                      Running
+                    </span>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
 
-        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-          <button
-            type="button"
-            onClick={() => setChangesOpen(true)}
-            className="lg:hidden h-7 px-2 rounded-md text-[11px] text-[#a0a0a0] hover:text-[#e4e4e4] border border-[#2b2b2b]"
-          >
-            {runtime === "cloud"
-              ? "Cloud"
-              : `Changes${fileCount > 0 ? ` · ${fileCount}` : ""}`}
-          </button>
-          <button
-            type="button"
-            onClick={() => setInviteOpen(true)}
-            className="h-7 px-2 sm:px-2.5 rounded-md text-[11px] sm:text-[12px] text-[#a0a0a0] hover:text-[#e4e4e4] border border-[#2b2b2b] hover:border-[#3c3c3c] transition-colors"
-          >
-            Invite
-          </button>
-          {selectedStatus === "running" && (
+          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
             <button
               type="button"
-              onClick={() => void handleAbortRun()}
-              disabled={aborting}
-              className="h-7 px-2 sm:px-2.5 rounded-md text-[11px] sm:text-[12px] text-[#f07070] hover:text-[#ff8a8a] border border-[#3c2b2b] hover:border-[#5a3a3a] transition-colors disabled:opacity-50"
+              onClick={() => setChangesOpen(true)}
+              className="lg:hidden inline-flex h-8 items-center gap-1.5 px-2.5 rounded-lg text-[11px] text-[#a0a0a0] hover:text-[#e4e4e4] border border-[#2b2b2b] hover:border-[#3c3c3c] bg-[#1f1f1f] transition-colors"
             >
-              {aborting ? "Stopping…" : "Abort"}
+              <PanelRightOpen className="h-3.5 w-3.5" strokeWidth={1.75} />
+              {runtime === "cloud"
+                ? "Cloud"
+                : `Changes${fileCount > 0 ? ` · ${fileCount}` : ""}`}
             </button>
-          )}
-          {amHost && (
             <button
               type="button"
-              onClick={() => void handleStopSession()}
-              disabled={stopping}
-              className="h-7 px-2 sm:px-2.5 rounded-md text-[11px] sm:text-[12px] text-[#a0a0a0] hover:text-[#f07070] border border-[#2b2b2b] hover:border-[#3c3c3c] transition-colors disabled:opacity-50"
+              onClick={() => setInviteOpen(true)}
+              className="inline-flex h-8 items-center gap-1.5 px-2.5 sm:px-3 rounded-lg text-[11px] sm:text-[12px] text-[#a0a0a0] hover:text-[#e4e4e4] border border-[#2b2b2b] hover:border-[#3c3c3c] bg-[#1f1f1f] transition-colors"
             >
-              {stopping ? "…" : "Stop"}
+              <Share2 className="h-3.5 w-3.5" strokeWidth={1.75} />
+              <span className="hidden sm:inline">Invite</span>
             </button>
-          )}
-          {!amHost && (
-            <button
-              type="button"
-              onClick={() => {
-                if (window.confirm("Leave this session?")) leaveRoom();
+            {selectedStatus === "running" && (
+              <button
+                type="button"
+                onClick={() => void handleAbortRun()}
+                disabled={aborting}
+                className="inline-flex h-8 items-center gap-1.5 px-2.5 sm:px-3 rounded-lg text-[11px] sm:text-[12px] text-[#f07070] hover:text-[#ff8a8a] border border-[#3c2b2b] hover:border-[#5a3a3a] bg-[#1f1818] transition-colors disabled:opacity-50"
+              >
+                <Square className="h-3 w-3" strokeWidth={2} />
+                <span className="hidden sm:inline">{aborting ? "Stopping…" : "Abort"}</span>
+              </button>
+            )}
+            {amHost && (
+              <button
+                type="button"
+                onClick={() => void handleStopSession()}
+                disabled={stopping}
+                className="hidden sm:inline-flex h-8 items-center gap-1.5 px-3 rounded-lg text-[12px] text-[#a0a0a0] hover:text-[#f07070] border border-[#2b2b2b] hover:border-[#3c3c3c] bg-[#1f1f1f] transition-colors disabled:opacity-50"
+              >
+                <StopCircle className="h-3.5 w-3.5" strokeWidth={1.75} />
+                {stopping ? "Stopping…" : "Stop"}
+              </button>
+            )}
+            {!amHost && (
+              <button
+                type="button"
+                onClick={() => {
+                  if (window.confirm("Leave this session?")) leaveRoom();
+                }}
+                className="hidden sm:inline-flex h-8 items-center px-3 rounded-lg text-[12px] text-[#a0a0a0] hover:text-[#f07070] border border-[#2b2b2b] hover:border-[#3c3c3c] bg-[#1f1f1f] transition-colors"
+              >
+                Leave
+              </button>
+            )}
+            <PresenceBar
+              participants={participants}
+              mySocketId={mySocketId}
+              amHost={amHost}
+              onRemoveMember={(uid) => {
+                if (window.confirm("Remove this member from the session?")) {
+                  removeMember(uid);
+                }
               }}
-              className="hidden sm:inline-flex h-7 px-2.5 rounded-md text-[12px] text-[#a0a0a0] hover:text-[#f07070] border border-[#2b2b2b] hover:border-[#3c3c3c] transition-colors"
-            >
-              Leave
-            </button>
-          )}
-          <PresenceBar
-            participants={participants}
-            mySocketId={mySocketId}
-            amHost={amHost}
-            onRemoveMember={(uid) => {
-              if (window.confirm("Remove this member from the session?")) {
-                removeMember(uid);
+            />
+            <DriverControls
+              amDriver={amDrivingSelected || amHost}
+              pendingRequest={
+                !pendingRequest?.agentId ||
+                pendingRequest.agentId === selectedAgentId
+                  ? (pendingRequest?.name ?? null)
+                  : null
               }
-            }}
-          />
-          <div className="hidden sm:block w-px h-4 bg-[#2b2b2b]" />
-          <span className="text-[11px] text-[#6e6e6e] hidden md:inline">
-            {amHost ? "Host" : amDrivingSelected ? "Driving" : "Joined"}
-          </span>
-          <DriverControls
-            amDriver={amDrivingSelected || amHost}
-            pendingRequest={
-              !pendingRequest?.agentId ||
-              pendingRequest.agentId === selectedAgentId
-                ? (pendingRequest?.name ?? null)
-                : null
-            }
-            onRequestDrive={() =>
-              requestDrive(selectedAgentId || undefined)
-            }
-            onReleaseDrive={() =>
-              releaseDrive(selectedAgentId || undefined)
-            }
-            onGrantDrive={handleGrantDrive}
-            onDismissRequest={dismissDriveRequest}
-          />
+              onRequestDrive={() =>
+                requestDrive(selectedAgentId || undefined)
+              }
+              onReleaseDrive={() =>
+                releaseDrive(selectedAgentId || undefined)
+              }
+              onGrantDrive={handleGrantDrive}
+              onDismissRequest={dismissDriveRequest}
+            />
+          </div>
         </div>
       </header>
 
@@ -621,8 +673,8 @@ function LiveRoom({
         onForceRelease={handleForceRelease}
       />
 
-      <main className="flex flex-1 min-h-0 min-w-0 overflow-hidden overscroll-none">
-        <div className="flex-1 flex flex-col min-h-0 min-w-0 overflow-hidden">
+      <main className="relative z-10 flex flex-1 min-h-0 min-w-0 overflow-hidden overscroll-none">
+        <div className="flex-1 flex flex-col min-h-0 min-w-0 overflow-hidden bg-[#121212]/80">
           <ChatPanel
             messages={messages}
             agentStatus={selectedStatus}
@@ -673,7 +725,7 @@ function LiveRoom({
         runtime={runtime}
       />
 
-      <footer className="relative z-10 border-t border-[#2b2b2b] bg-[#1a1a1a] shrink-0 overflow-hidden pb-[env(safe-area-inset-bottom)]">
+      <footer className="relative z-20 border-t border-[#2b2b2b]/90 bg-[#171717]/95 backdrop-blur-xl shrink-0 overflow-hidden pb-[env(safe-area-inset-bottom)] shadow-[0_-20px_60px_rgba(0,0,0,0.24)]">
         {(modelError || cursorSessionError || actionError || agentError) && (
           <p className="px-3 pt-2 text-[11px] text-[#f07070]">
             {actionError || agentError || modelError || cursorSessionError}
