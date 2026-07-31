@@ -583,6 +583,7 @@ app.post("/api/rooms/:id/agents", requireAuth, (req, res) => {
         anthropicApiKey: req.body?.anthropicApiKey
           ? String(req.body.anthropicApiKey)
           : undefined,
+        apiKey: req.body?.apiKey ? String(req.body.apiKey) : undefined,
       },
       req.user!.id,
     );

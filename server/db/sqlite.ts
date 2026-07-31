@@ -264,6 +264,9 @@ const stmts = {
   ),
   updatePrUrl: db.prepare(`UPDATE rooms SET pr_url = ? WHERE id = ?`),
   updateModelId: db.prepare(`UPDATE rooms SET model_id = ? WHERE id = ?`),
+  updateRoomByokKey: db.prepare(
+    `UPDATE rooms SET key_ciphertext = ?, key_hint = ? WHERE id = ?`,
+  ),
   insertSteer: db.prepare(`
     INSERT INTO steer_messages (room_id, sender_name, sender_color, text, ts)
     VALUES (?, ?, ?, ?, ?)
@@ -631,6 +634,15 @@ export function setPrUrl(roomId: string, prUrl: string): void {
 
 export function setModelId(roomId: string, modelId: string): void {
   stmts.updateModelId.run(modelId, roomId);
+}
+
+/** Attach / replace an encrypted Cursor BYOK key on an existing room. */
+export function setRoomByokKey(
+  roomId: string,
+  keyCiphertext: string,
+  keyHint: string,
+): void {
+  stmts.updateRoomByokKey.run(keyCiphertext, keyHint, roomId);
 }
 
 export function insertSteerMessage(

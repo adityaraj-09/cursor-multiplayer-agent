@@ -206,23 +206,59 @@ function normalizeAuthMode(
   return "server";
 }
 
-function resolveApiKey(row: db.RoomRow): string {
+/**
+ * Resolve a Cursor API key for SDK agents / model listing.
+ * Order: room-stored BYOK → server CURSOR_API_KEY → owner's saved user BYOK.
+ * Claude cloud rooms start as auth_mode=server with no Cursor key; attaching a
+ * Cursor agent later can reuse the owner's saved BYOK from previous sessions.
+ */
+function resolveApiKey(row: db.RoomRow, userId?: string): string {
   if (row.auth_mode === "cli") {
     throw new Error("CLI auth does not use an API key");
   }
-  if (row.auth_mode === "byok") {
-    if (!row.key_ciphertext) {
-      throw new Error("BYOK room is missing encrypted API key");
+  if (row.key_ciphertext) {
+    try {
+      const key = decryptApiKey(row.key_ciphertext);
+      if (key) return key;
+    } catch (err) {
+      console.error(
+        `Failed to decrypt room BYOK key for ${row.id}:`,
+        err,
+      );
+      if (row.auth_mode === "byok") {
+        throw new Error("BYOK room has an invalid encrypted API key");
+      }
     }
-    return decryptApiKey(row.key_ciphertext);
+  }
+  if (row.auth_mode === "byok") {
+    throw new Error("BYOK room is missing encrypted API key");
   }
   const serverKey = getServerApiKey();
-  if (!serverKey) {
+  if (serverKey) return serverKey;
+
+  const uid = userId || row.owner_id || undefined;
+  if (uid) {
+    const userKey = getUserByokKey(uid);
+    if (userKey) return userKey;
+  }
+
+  throw new Error(
+    "No Cursor API key configured — paste a Cursor API key (saved from previous sessions) or set CURSOR_API_KEY on the server",
+  );
+}
+
+/** Persist a Cursor BYOK key onto the room so later agents / model lists can reuse it. */
+function attachRoomCursorByok(row: db.RoomRow, apiKey: string): void {
+  if (!encryptionConfigured()) {
     throw new Error(
-      "Server API key is not configured — set CURSOR_API_KEY or pick one up in Create session",
+      "KEY_ENCRYPTION_SECRET is required to store a Cursor API key",
     );
   }
-  return serverKey;
+  const ciphertext = encryptApiKey(apiKey);
+  const hint = maskApiKey(apiKey);
+  db.setRoomByokKey(row.id, ciphertext, hint);
+  row.key_ciphertext = ciphertext;
+  row.key_hint = hint;
 }
 
 // ---------------------------------------------------------------------------
@@ -531,7 +567,7 @@ export class RoomManager {
           agentRow.backend === "claude-code" ? "claude-code" : "cursor",
         );
       } else {
-        const apiKey = resolveApiKey(row);
+        const apiKey = resolveApiKey(row, row.owner_id || undefined);
         const cwd = row.runtime === "local"
           ? resolveAgentCwd(row.repo_path, agentRow.scope_path)
           : "";
@@ -2163,6 +2199,8 @@ export class RoomManager {
       modelId?: string;
       /** Optional Anthropic API key (Claude Code cloud BYOK). Saved to the user account when provided. */
       anthropicApiKey?: string;
+      /** Optional Cursor API key (BYOK). Reuses / saves the user's Cursor key from previous sessions. */
+      apiKey?: string;
     },
     actorUserId: string,
   ): AgentInfo {
@@ -2213,6 +2251,40 @@ export class RoomManager {
       }
     }
 
+    let cursorApiKey = "";
+    if (backendKind === "cursor" && row.auth_mode !== "cli") {
+      const pasted = opts.apiKey?.trim() || "";
+      if (pasted) {
+        if (!encryptionConfigured()) {
+          throw new Error(
+            "KEY_ENCRYPTION_SECRET is required to store a Cursor API key",
+          );
+        }
+        setUserByokKey(actorUserId, pasted);
+        attachRoomCursorByok(row, pasted);
+        cursorApiKey = pasted;
+      } else {
+        try {
+          cursorApiKey = resolveApiKey(row, actorUserId);
+        } catch {
+          cursorApiKey = "";
+        }
+        if (!cursorApiKey) {
+          throw new Error(
+            "Paste your Cursor API key to add a Cursor agent (or reuse the key saved from a previous session)",
+          );
+        }
+        // Claude-created rooms have no Cursor key yet — persist the owner's
+        // saved BYOK so reloads and model listing keep working.
+        if (
+          !row.key_ciphertext &&
+          getUserByokKey(actorUserId) === cursorApiKey
+        ) {
+          attachRoomCursorByok(row, cursorApiKey);
+        }
+      }
+    }
+
     if (opts.scopePath) {
       const scopeCheck = this.validateAgentScope(roomId, opts.scopePath);
       if (!scopeCheck.ok) throw new Error(scopeCheck.error);
@@ -2246,7 +2318,7 @@ export class RoomManager {
     } else if (row.auth_mode === "cli" || backendKind === "claude-code") {
       backend = new AgentRunner(cwd, null, modelId, backendKind);
     } else {
-      const apiKey = resolveApiKey(row);
+      const apiKey = cursorApiKey || resolveApiKey(row, actorUserId);
       backend = new SdkAgentSession({
         runtime: row.runtime === "cloud" ? "cloud" : "local",
         apiKey,
@@ -2711,14 +2783,13 @@ export class RoomManager {
       }
     }
 
-    // Cursor SDK listing — may fail for Claude-only rooms with no Cursor key
-    // (Claude backends already returned above).
+    // Cursor SDK listing — Claude-only rooms can reuse the owner's saved BYOK.
     try {
-      const apiKey = resolveApiKey(row);
+      const apiKey = resolveApiKey(row, row.owner_id || undefined);
       return listModelsForKey(apiKey);
     } catch {
       throw new Error(
-        "No Cursor API key configured for this room — switch to a Claude agent or set a server/BYOK key",
+        "No Cursor API key configured for this room — paste a Cursor BYOK key when adding a Cursor agent, or set CURSOR_API_KEY on the server",
       );
     }
   }
