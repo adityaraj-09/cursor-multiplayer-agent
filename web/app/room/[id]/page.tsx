@@ -32,6 +32,10 @@ import AgentTabs from "../../../components/AgentTabs";
 import AddAgentDialog from "../../../components/AddAgentDialog";
 import LockPanel from "../../../components/LockPanel";
 import type { ModelInfo, RoomInfo } from "../../../../shared/events";
+import {
+  CLAUDE_MODELS,
+  DEFAULT_CLAUDE_MODEL,
+} from "../../../../shared/claudeModels";
 
 export default function RoomPage() {
   const params = useParams();
@@ -230,11 +234,7 @@ function LiveRoom({
   const amHost = Boolean(
     user?.id && roomInfo?.ownerId && user.id === roomInfo.ownerId,
   );
-  const cacheKey = `room:${roomId}`;
-
-  const [models, setModels] = useState<ModelInfo[]>(
-    () => getCachedModels(cacheKey) || FALLBACK_MODELS,
-  );
+  const [models, setModels] = useState<ModelInfo[]>(FALLBACK_MODELS);
   const [modelError, setModelError] = useState("");
   const [savingModel, setSavingModel] = useState(false);
   const [inviteOpen, setInviteOpen] = useState(false);
@@ -265,7 +265,11 @@ function LiveRoom({
 
   const selectedAgent =
     agents.find((a) => a.id === selectedAgentId) || agents[0] || null;
-  const selectedModelId = selectedAgent?.modelId || modelId;
+  const selectedBackend = selectedAgent?.backend || "cursor";
+  const selectedModelId =
+    selectedAgent?.modelId ||
+    (selectedBackend === "claude-code" ? DEFAULT_CLAUDE_MODEL : modelId);
+  const modelsCacheKey = `room:${roomId}:agent:${selectedAgent?.id || "default"}:${selectedBackend}`;
   const selectedStatus: typeof agentStatus =
     (selectedAgentId && statusByAgent[selectedAgentId]) ||
     (selectedAgent?.status === "running"
@@ -301,20 +305,28 @@ function LiveRoom({
 
   useEffect(() => {
     let cancelled = false;
-    const cached = getCachedModels(cacheKey);
-    if (cached?.length) setModels(cached);
+    if (selectedBackend === "claude-code") {
+      setModels(CLAUDE_MODELS);
+      setCachedModels(modelsCacheKey, CLAUDE_MODELS);
+      setModelError("");
+      return;
+    }
 
-    fetchRoomModels(roomId)
+    const cached = getCachedModels(modelsCacheKey);
+    if (cached?.length) setModels(cached);
+    else setModels(FALLBACK_MODELS);
+
+    fetchRoomModels(roomId, selectedAgent?.id)
       .then((list) => {
         if (cancelled || !list.length) return;
-        setCachedModels(cacheKey, list);
+        setCachedModels(modelsCacheKey, list);
         setModels(list);
         setModelError("");
       })
       .catch((err) => {
         if (cancelled) return;
         // Keep cached / fallback models — don't block chatting
-        if (!getCachedModels(cacheKey)?.length) {
+        if (!getCachedModels(modelsCacheKey)?.length) {
           setModelError(
             err instanceof Error ? err.message : "Failed to load models",
           );
@@ -323,7 +335,7 @@ function LiveRoom({
     return () => {
       cancelled = true;
     };
-  }, [roomId, cacheKey]);
+  }, [roomId, modelsCacheKey, selectedBackend, selectedAgent?.id]);
 
   const handleModelChange = useCallback(
     async (next: string) => {
@@ -667,7 +679,10 @@ function LiveRoom({
             {actionError || agentError || modelError || cursorSessionError}
           </p>
         )}
-        {runtime === "local" && roomInfo?.authMode === "cli" && roomInfo.repoPath && (
+        {runtime === "local" &&
+          roomInfo?.authMode === "cli" &&
+          roomInfo.repoPath &&
+          selectedBackend !== "claude-code" && (
           <div className="px-2 sm:px-3 pt-2">
             <CursorSessionPicker
               roomId={roomId}
@@ -685,6 +700,14 @@ function LiveRoom({
                 : "First message starts a new Cursor chat; reopening this Steer session resumes it."}
             </p>
           </div>
+        )}
+        {runtime === "local" &&
+          selectedBackend === "claude-code" &&
+          selectedAgent?.sessionId && (
+          <p className="px-3 pt-2 text-[10px] text-[#6e6e6e]">
+            Claude Code resumes session {selectedAgent.sessionId.slice(0, 12)}…
+            automatically on the next message.
+          </p>
         )}
         <SteerInput
           onSend={(text) => sendSteer(text, selectedAgentId || undefined)}

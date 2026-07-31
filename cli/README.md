@@ -1,13 +1,20 @@
 # @oblivihon/steer
 
-CLI worker for **Steer** — runs local Cursor agents on your machine for multiplayer sessions hosted in the web app.
+CLI worker for **Steer** — runs local **Cursor** and **Claude Code** agents on your machine for multiplayer sessions hosted in the web app.
 
-When you create a **Local** session in Steer, prompts are relayed to this worker, which executes `cursor agent` against a folder on your machine.
+When you create a **Local** session in Steer, prompts are relayed to this worker, which executes `cursor agent` or `claude` against a folder on your machine.
+
+**Protocol 3** is required for Claude Code backends and multi-agent file locks. Install/update:
+
+```bash
+npm i -g @oblivihon/steer@latest
+```
 
 ## Requirements
 
 - Node.js 18+
-- [Cursor CLI](https://cursor.com) on your `PATH` (`cursor` command)
+- [Cursor CLI](https://cursor.com) on your `PATH` (`cursor` command) for Cursor agents
+- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) (`claude`) for Claude Code agents
 - A Steer account (sign in on the web app)
 
 ## Install
@@ -37,6 +44,8 @@ steer login
 # Paste the pairing code
 
 cursor agent login   # if not already logged into Cursor CLI
+# For Claude Code local agents, ensure `claude` works in your shell
+
 steer start
 ```
 
@@ -47,7 +56,7 @@ Credentials are stored at `~/.config/steer/config.json`.
 ## Commands
 
 | Command | Description |
-|---------|-------------|
+|----------------|-------------|
 | `steer login` | Pair with your Steer account via a one-time web code |
 | `steer logout` | Clear stored credentials |
 | `steer status` | Show logged-in user, server URL, and your rooms |
@@ -77,8 +86,8 @@ While `steer start` is connected, the API can ask your machine to:
 
 - List Cursor models (`cursor agent --list-models`)
 - Open a native folder picker for Local session create
-- Run agent prompts in the selected repo and stream events back to the room
-- **Protocol 3+**: acquire exclusive file locks before edit tools run (multi-agent conflict resolution)
+- Run **Cursor** or **Claude Code** prompts in the selected repo and stream events back to the room
+- **Protocol 3+**: Claude Code backend + exclusive file locks before edit tools run (multi-agent conflict resolution)
 
 ## Development
 

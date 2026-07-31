@@ -7,6 +7,7 @@ export type {
   BuildArgsOptions,
   NormalizedAgentEvent,
   ParseLineContext,
+  RunGitInfo,
   WorkerBackend,
 } from "./types.js";
 export { CursorAgentBackend, cursorAgentBackend, isEditTool, diffFromToolArgs } from "./cursor.js";

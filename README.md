@@ -6,7 +6,9 @@ Multiplayer Cursor agent sessions where multiple people can watch, redirect, and
 
 - **Node.js** 22+
 - **pnpm** 9+
-- **Cursor CLI** with `cursor agent` (for local runtime / CLI worker)
+- **Cursor CLI** with `cursor agent` (for local Cursor runtime / CLI worker)
+- **Claude Code CLI** (`claude`) when using local Claude Code agents
+- **E2B** account + `E2B_API_KEY` when using Claude Code cloud
 
 ## Quick Start
 
@@ -28,8 +30,9 @@ Express API (:3000)                 Next.js App (:3001)
 ├─ Socket.IO (rooms + workers) ──── /room/[id]
 │
 ├─ RoomManager
-│   ├─ SdkAgentSession ──────────── Cloud / BYOK / server-key agents
-│   ├─ WorkerRelay ──────────────── Local CLI via `steer start`
+│   ├─ SdkAgentSession ──────────── Cursor Cloud / BYOK / server-key agents
+│   ├─ ClaudeSandboxSession ─────── Claude Code cloud via E2B
+│   ├─ WorkerRelay ──────────────── Local Cursor + Claude CLI via `steer start`
 │   ├─ DiffWatcher ──────────────── git diffs for local SDK rooms
 │   └─ SQLite / Postgres ────────── rooms, chat, invites, keys
 ```
@@ -44,8 +47,11 @@ Copy `.env.example` to `.env`:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PORT` | `3000` | Express API port |
-| `CURSOR_API_KEY` | | Shared server key for Cloud / server auth mode |
-| `KEY_ENCRYPTION_SECRET` | | Encrypt BYOK + stored server keys |
+| `CURSOR_API_KEY` | | Shared server key for Cursor Cloud / server auth mode |
+| `ANTHROPIC_API_KEY` | | Optional fallback for Claude Code cloud (prefer user BYOK) |
+| `E2B_API_KEY` | | Required for Claude Code cloud sandboxes |
+| `GITHUB_TOKEN` / `GH_TOKEN` | | Clone/push/PR for Claude Code cloud agents |
+| `KEY_ENCRYPTION_SECRET` | | Encrypt Cursor/Anthropic BYOK + stored server keys |
 | `ADMIN_USER_IDS` | | Comma-separated Clerk user IDs allowed to manage the server key |
 | `CLERK_SECRET_KEY` | | Clerk backend secret |
 | `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | | Clerk publishable key |
@@ -58,12 +64,13 @@ Copy `.env.example` to `.env`:
 ## Features
 
 - **Multi-room** — Independent Steer sessions with durable chat history
-- **Cloud + local** — Cloud agents via Cursor SDK; local via CLI worker
+- **Cloud + local** — Cursor Cloud via SDK; Claude Code cloud via E2B; local via CLI worker
+- **Claude Code** — Local `claude` CLI (protocol 3 worker) or E2B sandbox with Anthropic BYOK, branch push, optional PR
 - **Steering** — Attributed prompts from anyone in the room
 - **Driver control** — Request, grant, and release the driver seat
-- **Live diffs** — File changes stream into the room
+- **Live diffs** — File changes stream into the room (sandbox `git diff` for cloud Claude)
 - **Invites** — Host-managed invite links with max uses + expiry
-- **BYOK** — Per-user saved Cursor API keys for cloud sessions
+- **BYOK** — Per-user saved Cursor and Anthropic API keys
 
 ## Scripts
 
@@ -77,10 +84,16 @@ Copy `.env.example` to `.env`:
 
 ## CLI worker (local agents)
 
+Protocol **3+** is required for Claude Code and multi-agent file locks. Publish/install the latest `@oblivihon/steer`:
+
 ```bash
+npm i -g @oblivihon/steer
 # Sign in on the web → /cli-pair → generate code
 steer login     # server URL + pairing code
 steer start     # worker stays online for your account
+
+# Optional: Claude Code local also needs the Anthropic CLI on PATH
+# npm i -g @anthropic-ai/claude-code
 ```
 
 ## Socket.IO scaling

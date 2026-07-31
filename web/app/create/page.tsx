@@ -4,6 +4,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
+  clearAnthropicByokKey,
   clearByokKey,
   createRoom,
   fetchAuthStatus,
@@ -17,6 +18,12 @@ import type {
   AuthMode,
   RepoInfo,
 } from "../../../shared/events";
+import {
+  CLAUDE_MODELS,
+  DEFAULT_CLAUDE_MODEL,
+} from "../../../shared/claudeModels";
+
+type AgentBackendKind = "cursor" | "claude-code";
 
 function authLabel(mode: AuthMode): string {
   if (mode === "cli") return "Local login";
@@ -27,9 +34,12 @@ function authLabel(mode: AuthMode): string {
 export default function CreateSession() {
   const router = useRouter();
   const [name, setName] = useState("");
+  const [backend, setBackend] = useState<AgentBackendKind>("cursor");
   const [runtime, setRuntime] = useState<AgentRuntime>("local");
   const [authMode, setAuthMode] = useState<AuthMode>("cli");
   const [apiKey, setApiKey] = useState("");
+  const [anthropicApiKey, setAnthropicApiKey] = useState("");
+  const [modelId, setModelId] = useState("auto");
   const [serverKeyInput, setServerKeyInput] = useState("");
   const [repoPath, setRepoPath] = useState("");
   const [repoUrl, setRepoUrl] = useState("");
@@ -44,13 +54,21 @@ export default function CreateSession() {
   const [byokAvailable, setByokAvailable] = useState(false);
   const [userByokConfigured, setUserByokConfigured] = useState(false);
   const [userByokHint, setUserByokHint] = useState<string | null>(null);
+  const [anthropicConfigured, setAnthropicConfigured] = useState(false);
+  const [anthropicHint, setAnthropicHint] = useState<string | null>(null);
+  const [e2bConfigured, setE2bConfigured] = useState(false);
   const [canManageServerKey, setCanManageServerKey] = useState(false);
   const [savingServerKey, setSavingServerKey] = useState(false);
   const [clearingByok, setClearingByok] = useState(false);
+  const [clearingAnthropic, setClearingAnthropic] = useState(false);
   const [error, setError] = useState("");
   const [creating, setCreating] = useState(false);
   const [pickingFolder, setPickingFolder] = useState(false);
   const [workerOnline, setWorkerOnline] = useState(false);
+
+  const isClaude = backend === "claude-code";
+  const isClaudeCloud = isClaude && runtime === "cloud";
+  const isClaudeLocal = isClaude && runtime === "local";
 
   const refreshAuth = () =>
     fetchAuthStatus()
@@ -61,6 +79,9 @@ export default function CreateSession() {
         setByokAvailable(s.byokAvailable);
         setUserByokConfigured(Boolean(s.userByokConfigured));
         setUserByokHint(s.userByokHint ?? null);
+        setAnthropicConfigured(Boolean(s.userAnthropicByokConfigured));
+        setAnthropicHint(s.userAnthropicByokHint ?? null);
+        setE2bConfigured(Boolean(s.e2bConfigured));
         setCanManageServerKey(Boolean(s.canManageServerKey));
       })
       .catch(() => {});
@@ -101,12 +122,27 @@ export default function CreateSession() {
     }
   };
 
+  const selectBackend = (next: AgentBackendKind) => {
+    setBackend(next);
+    setError("");
+    if (next === "claude-code") {
+      setModelId(DEFAULT_CLAUDE_MODEL);
+      if (runtime === "local") setAuthMode("cli");
+    } else if (modelId !== "auto" && CLAUDE_MODELS.some((m) => m.id === modelId)) {
+      setModelId("auto");
+    }
+  };
+
   const selectRuntime = (r: AgentRuntime) => {
     setRuntime(r);
     setRepos([]);
+    setError("");
+    if (backend === "claude-code") {
+      if (r === "local") setAuthMode("cli");
+      return;
+    }
     if (r === "local") setAuthMode("cli");
     else if (authMode === "cli") {
-      // Prefer saved BYOK when switching to cloud if available.
       setAuthMode(userByokConfigured ? "byok" : "server");
     }
   };
@@ -155,10 +191,34 @@ export default function CreateSession() {
     }
   };
 
-  // Only cloud needs a repo catalog — models default to "auto" (change in-room).
+  const handleClearAnthropic = async () => {
+    if (
+      !window.confirm(
+        "Remove your saved Anthropic API key? You’ll need it again for Claude Code cloud.",
+      )
+    ) {
+      return;
+    }
+    setClearingAnthropic(true);
+    setError("");
+    try {
+      await clearAnthropicByokKey();
+      setAnthropicConfigured(false);
+      setAnthropicHint(null);
+      setAnthropicApiKey("");
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Failed to clear Anthropic key",
+      );
+    } finally {
+      setClearingAnthropic(false);
+    }
+  };
+
+  // Cursor cloud only — Claude cloud uses a pasted GitHub URL (no Cursor repo catalog).
   useEffect(() => {
     let cancelled = false;
-    if (runtime !== "cloud") {
+    if (runtime !== "cloud" || backend === "claude-code") {
       setRepos([]);
       return;
     }
@@ -166,7 +226,6 @@ export default function CreateSession() {
       setRepos([]);
       return;
     }
-    // BYOK: allow listing with a pasted key OR a saved account key.
     if (authMode === "byok" && !apiKey.trim() && !userByokConfigured) {
       setRepos([]);
       return;
@@ -194,7 +253,14 @@ export default function CreateSession() {
       cancelled = true;
       clearTimeout(t);
     };
-  }, [authMode, apiKey, runtime, serverKeyConfigured, userByokConfigured]);
+  }, [
+    authMode,
+    apiKey,
+    runtime,
+    backend,
+    serverKeyConfigured,
+    userByokConfigured,
+  ]);
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -202,14 +268,27 @@ export default function CreateSession() {
       setError("Session name is required");
       return;
     }
-    if (authMode === "byok" && !apiKey.trim() && !userByokConfigured) {
-      setError("Paste your Cursor API key for BYOK");
-      return;
+
+    if (isClaudeCloud) {
+      if (!e2bConfigured) {
+        setError("Server is missing E2B_API_KEY — Claude Code cloud cannot start");
+        return;
+      }
+      if (!anthropicApiKey.trim() && !anthropicConfigured) {
+        setError("Paste your Anthropic API key for Claude Code");
+        return;
+      }
+    } else if (!isClaude) {
+      if (authMode === "byok" && !apiKey.trim() && !userByokConfigured) {
+        setError("Paste your Cursor API key for BYOK");
+        return;
+      }
+      if (authMode === "server" && !serverKeyConfigured) {
+        setError("Server key is not configured");
+        return;
+      }
     }
-    if (authMode === "server" && !serverKeyConfigured) {
-      setError("Server key is not configured");
-      return;
-    }
+
     if (runtime === "cloud" && !repoUrl.trim()) {
       setError("Choose or paste a GitHub repo URL");
       return;
@@ -218,24 +297,42 @@ export default function CreateSession() {
       setError("Select a local repository folder");
       return;
     }
+    if (isClaudeLocal && !workerOnline) {
+      setError("Start your CLI worker first (`steer start`) for local Claude Code");
+      return;
+    }
 
     setCreating(true);
     setError("");
 
     try {
+      const effectiveAuth: AuthMode = isClaudeLocal
+        ? "cli"
+        : isClaudeCloud
+          ? "server"
+          : authMode;
+
       const room = await createRoom({
         name: name.trim(),
         runtime,
-        authMode,
-        modelId: "auto",
+        authMode: effectiveAuth,
+        backend,
+        modelId: isClaude
+          ? modelId || DEFAULT_CLAUDE_MODEL
+          : modelId || "auto",
         repoPath: runtime === "local" ? repoPath.trim() || undefined : undefined,
         repoUrl: runtime === "cloud" ? repoUrl.trim() : undefined,
         startingRef:
           runtime === "cloud" ? startingRef.trim() || "main" : undefined,
         autoCreatePR: runtime === "cloud" ? autoCreatePR : undefined,
-        // Omit apiKey when reusing the saved account key — server falls back.
         apiKey:
-          authMode === "byok" && apiKey.trim() ? apiKey.trim() : undefined,
+          !isClaude && authMode === "byok" && apiKey.trim()
+            ? apiKey.trim()
+            : undefined,
+        anthropicApiKey:
+          isClaudeCloud && anthropicApiKey.trim()
+            ? anthropicApiKey.trim()
+            : undefined,
       });
       router.push(`/room/${room.id}`);
     } catch (err: unknown) {
@@ -249,6 +346,12 @@ export default function CreateSession() {
 
   const authOptions: AuthMode[] =
     runtime === "local" ? ["cli", "server", "byok"] : ["server", "byok"];
+
+  const subtitle = isClaude
+    ? runtime === "cloud"
+      ? "Claude Code in an E2B sandbox — bring your Anthropic API key. Server needs E2B_API_KEY (and GITHUB_TOKEN for push/PR)."
+      : "Claude Code on your machine via the Steer CLI worker — requires the claude CLI and protocol 3+ (`npm i -g @oblivihon/steer`)."
+    : "Local sessions use your Cursor CLI login — no API key. Cloud needs a server key or BYOK.";
 
   return (
     <div className="min-h-screen bg-[#141414]">
@@ -275,10 +378,7 @@ export default function CreateSession() {
         <h1 className="text-[22px] font-medium tracking-tight mb-1">
           Create session
         </h1>
-        <p className="text-[13px] text-[#6e6e6e] mb-8">
-          Local sessions use your Cursor CLI login — no API key. Cloud needs a
-          server key or BYOK.
-        </p>
+        <p className="text-[13px] text-[#6e6e6e] mb-8">{subtitle}</p>
 
         <form onSubmit={handleSubmit} className="space-y-5">
           <div>
@@ -297,6 +397,33 @@ export default function CreateSession() {
 
           <fieldset>
             <legend className="block text-[12px] text-[#a0a0a0] mb-1.5">
+              Agent backend
+            </legend>
+            <div className="flex gap-2">
+              {(
+                [
+                  { id: "cursor" as const, label: "Cursor" },
+                  { id: "claude-code" as const, label: "Claude Code" },
+                ] as const
+              ).map((opt) => (
+                <button
+                  key={opt.id}
+                  type="button"
+                  onClick={() => selectBackend(opt.id)}
+                  className={`h-9 px-3 rounded-md text-[13px] border transition-colors ${
+                    backend === opt.id
+                      ? "bg-[#252525] border-[#4d9fff] text-[#e4e4e4]"
+                      : "bg-[#1a1a1a] border-[#2b2b2b] text-[#6e6e6e]"
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          </fieldset>
+
+          <fieldset>
+            <legend className="block text-[12px] text-[#a0a0a0] mb-1.5">
               Runtime
             </legend>
             <div className="flex gap-2">
@@ -311,127 +438,244 @@ export default function CreateSession() {
                       : "bg-[#1a1a1a] border-[#2b2b2b] text-[#6e6e6e]"
                   }`}
                 >
-                  {r === "local" ? "Local" : "Cloud"}
+                  {r === "local"
+                    ? isClaude
+                      ? "Local (CLI)"
+                      : "Local"
+                    : isClaude
+                      ? "Cloud (E2B)"
+                      : "Cloud"}
                 </button>
               ))}
             </div>
           </fieldset>
 
-          <fieldset>
-            <legend className="block text-[12px] text-[#a0a0a0] mb-1.5">
-              Auth
-            </legend>
-            <div className="flex flex-wrap gap-2 mb-2">
-              {authOptions.map((mode) => (
-                <button
-                  key={mode}
-                  type="button"
-                  disabled={mode === "byok" && !byokAvailable}
-                  onClick={() => {
-                    setAuthMode(mode);
-                  }}
-                  className={`h-9 px-3 rounded-md text-[13px] border transition-colors disabled:opacity-40 ${
-                    authMode === mode
-                      ? "bg-[#252525] border-[#4d9fff] text-[#e4e4e4]"
-                      : "bg-[#1a1a1a] border-[#2b2b2b] text-[#6e6e6e]"
+          {isClaude && (
+            <div>
+              <label className="block text-[12px] text-[#a0a0a0] mb-1.5">
+                Model
+              </label>
+              <select
+                value={modelId}
+                onChange={(e) => setModelId(e.target.value)}
+                className={inputClass}
+              >
+                {CLAUDE_MODELS.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.displayName}
+                  </option>
+                ))}
+              </select>
+              <p className="text-[11px] text-[#6e6e6e] mt-1.5">
+                {CLAUDE_MODELS.find((m) => m.id === modelId)?.description}
+              </p>
+            </div>
+          )}
+
+          {isClaudeLocal && (
+            <div className="rounded-md border border-[#2b2b2b] bg-[#1a1a1a] px-3 py-2.5 space-y-1">
+              <p className="text-[12px] text-[#e4e4e4]">Local Claude Code</p>
+              <p className="text-[11px] text-[#6e6e6e]">
+                Uses your paired Steer worker (protocol 3+) and the{" "}
+                <code className="text-[#a0a0a0]">claude</code> CLI on that
+                machine. No Anthropic key is stored on the server.
+              </p>
+              <p
+                className={`text-[11px] ${
+                  workerOnline ? "text-[#3ecf8e]" : "text-[#f07070]"
+                }`}
+              >
+                {workerOnline
+                  ? "CLI worker online"
+                  : "CLI worker offline — run `steer start`"}
+              </p>
+            </div>
+          )}
+
+          {isClaudeCloud && (
+            <div className="space-y-3">
+              <div className="rounded-md border border-[#2b2b2b] bg-[#1a1a1a] px-3 py-2.5 space-y-1">
+                <p className="text-[12px] text-[#e4e4e4]">Cloud Claude Code</p>
+                <p className="text-[11px] text-[#6e6e6e]">
+                  Runs in an E2B sandbox. Anthropic key is BYOK (encrypted to
+                  your account). Push/PR needs{" "}
+                  <code className="text-[#a0a0a0]">GITHUB_TOKEN</code> on the
+                  server.
+                </p>
+                <p
+                  className={`text-[11px] ${
+                    e2bConfigured ? "text-[#3ecf8e]" : "text-[#f07070]"
                   }`}
                 >
-                  {authLabel(mode)}
-                </button>
-              ))}
-            </div>
-            {authMode === "cli" && (
-              <p className="text-[11px] text-[#6e6e6e]">
-                Uses the Cursor account already logged in on this machine (
-                <code className="text-[#a0a0a0]">cursor agent</code>). No API
-                key required.
-              </p>
-            )}
-            {authMode === "server" && (
-              <div className="space-y-2">
-                {serverKeyConfigured ? (
-                  <p className="text-[11px] text-[#6e6e6e]">
-                    Using server key {serverKeyHint}{" "}
-                    {serverKeySource === "env"
-                      ? "(from CURSOR_API_KEY)"
-                      : "(picked up & encrypted in DB)"}
-                  </p>
-                ) : (
-                  <p className="text-[11px] text-[#6e6e6e]">
-                    No server key configured. Set CURSOR_API_KEY in the server
-                    environment
-                    {canManageServerKey
-                      ? ", or paste one below to pick it up."
-                      : " (admins only can pick up a key in the UI)."}
-                  </p>
-                )}
-                {canManageServerKey && (
-                  <div className="flex gap-2">
-                    <input
-                      type="password"
-                      value={serverKeyInput}
-                      onChange={(e) => setServerKeyInput(e.target.value)}
-                      placeholder={
-                        serverKeyConfigured
-                          ? "Replace server key…"
-                          : "cursor_… (server key)"
-                      }
-                      className={`${inputClass} font-mono flex-1`}
-                      autoComplete="off"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => void handlePickupServerKey()}
-                      disabled={savingServerKey || !serverKeyInput.trim()}
-                      className="h-10 px-3 rounded-md bg-[#252525] border border-[#2b2b2b] text-[13px] text-[#e4e4e4] hover:border-[#3c3c3c] disabled:opacity-40 shrink-0"
-                    >
-                      {savingServerKey ? "Saving…" : "Save"}
-                    </button>
-                  </div>
-                )}
+                  {e2bConfigured
+                    ? "E2B configured on server"
+                    : "Server missing E2B_API_KEY"}
+                </p>
               </div>
-            )}
-            {authMode === "byok" && (
-              <div className="space-y-2">
-                {userByokConfigured && !apiKey.trim() ? (
-                  <p className="text-[11px] text-[#6e6e6e]">
-                    Using your saved key {userByokHint}. Paste a new key below
+
+              <div>
+                <label className="block text-[12px] text-[#a0a0a0] mb-1.5">
+                  Anthropic API key
+                </label>
+                {anthropicConfigured && !anthropicApiKey.trim() ? (
+                  <p className="text-[11px] text-[#6e6e6e] mb-1.5">
+                    Using your saved key {anthropicHint}. Paste a new key below
                     only if you want to replace it.
                   </p>
                 ) : (
-                  <p className="text-[11px] text-[#6e6e6e]">
-                    {userByokConfigured
-                      ? `Replacing saved key ${userByokHint}. Saved to your account for future sessions.`
-                      : "Saved to your account (encrypted) so you don’t re-paste for every cloud session."}
+                  <p className="text-[11px] text-[#6e6e6e] mb-1.5">
+                    {anthropicConfigured
+                      ? `Replacing saved key ${anthropicHint}.`
+                      : byokAvailable
+                        ? "Saved to your account (encrypted) for future Claude agents."
+                        : "Paste your Anthropic API key (sk-ant-…)."}
                   </p>
                 )}
                 <div className="flex gap-2">
                   <input
                     type="password"
-                    value={apiKey}
-                    onChange={(e) => setApiKey(e.target.value)}
+                    value={anthropicApiKey}
+                    onChange={(e) => setAnthropicApiKey(e.target.value)}
                     placeholder={
-                      userByokConfigured
+                      anthropicConfigured
                         ? "Replace saved key…"
-                        : "cursor_…"
+                        : "sk-ant-…"
                     }
                     className={`${inputClass} font-mono flex-1`}
                     autoComplete="off"
                   />
-                  {userByokConfigured && (
+                  {anthropicConfigured && (
                     <button
                       type="button"
-                      onClick={() => void handleClearByok()}
-                      disabled={clearingByok}
+                      onClick={() => void handleClearAnthropic()}
+                      disabled={clearingAnthropic}
                       className="h-10 px-3 rounded-md bg-[#252525] border border-[#2b2b2b] text-[13px] text-[#a0a0a0] hover:text-[#f07070] hover:border-[#3c3c3c] disabled:opacity-40 shrink-0"
                     >
-                      {clearingByok ? "…" : "Clear"}
+                      {clearingAnthropic ? "…" : "Clear"}
                     </button>
                   )}
                 </div>
               </div>
-            )}
-          </fieldset>
+            </div>
+          )}
+
+          {!isClaude && (
+            <fieldset>
+              <legend className="block text-[12px] text-[#a0a0a0] mb-1.5">
+                Auth
+              </legend>
+              <div className="flex flex-wrap gap-2 mb-2">
+                {authOptions.map((mode) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    disabled={mode === "byok" && !byokAvailable}
+                    onClick={() => {
+                      setAuthMode(mode);
+                    }}
+                    className={`h-9 px-3 rounded-md text-[13px] border transition-colors disabled:opacity-40 ${
+                      authMode === mode
+                        ? "bg-[#252525] border-[#4d9fff] text-[#e4e4e4]"
+                        : "bg-[#1a1a1a] border-[#2b2b2b] text-[#6e6e6e]"
+                    }`}
+                  >
+                    {authLabel(mode)}
+                  </button>
+                ))}
+              </div>
+              {authMode === "cli" && (
+                <p className="text-[11px] text-[#6e6e6e]">
+                  Uses the Cursor account already logged in on this machine (
+                  <code className="text-[#a0a0a0]">cursor agent</code>). No API
+                  key required.
+                </p>
+              )}
+              {authMode === "server" && (
+                <div className="space-y-2">
+                  {serverKeyConfigured ? (
+                    <p className="text-[11px] text-[#6e6e6e]">
+                      Using server key {serverKeyHint}{" "}
+                      {serverKeySource === "env"
+                        ? "(from CURSOR_API_KEY)"
+                        : "(picked up & encrypted in DB)"}
+                    </p>
+                  ) : (
+                    <p className="text-[11px] text-[#6e6e6e]">
+                      No server key configured. Set CURSOR_API_KEY in the server
+                      environment
+                      {canManageServerKey
+                        ? ", or paste one below to pick it up."
+                        : " (admins only can pick up a key in the UI)."}
+                    </p>
+                  )}
+                  {canManageServerKey && (
+                    <div className="flex gap-2">
+                      <input
+                        type="password"
+                        value={serverKeyInput}
+                        onChange={(e) => setServerKeyInput(e.target.value)}
+                        placeholder={
+                          serverKeyConfigured
+                            ? "Replace server key…"
+                            : "cursor_… (server key)"
+                        }
+                        className={`${inputClass} font-mono flex-1`}
+                        autoComplete="off"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => void handlePickupServerKey()}
+                        disabled={savingServerKey || !serverKeyInput.trim()}
+                        className="h-10 px-3 rounded-md bg-[#252525] border border-[#2b2b2b] text-[13px] text-[#e4e4e4] hover:border-[#3c3c3c] disabled:opacity-40 shrink-0"
+                      >
+                        {savingServerKey ? "Saving…" : "Save"}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+              {authMode === "byok" && (
+                <div className="space-y-2">
+                  {userByokConfigured && !apiKey.trim() ? (
+                    <p className="text-[11px] text-[#6e6e6e]">
+                      Using your saved key {userByokHint}. Paste a new key below
+                      only if you want to replace it.
+                    </p>
+                  ) : (
+                    <p className="text-[11px] text-[#6e6e6e]">
+                      {userByokConfigured
+                        ? `Replacing saved key ${userByokHint}. Saved to your account for future sessions.`
+                        : "Saved to your account (encrypted) so you don’t re-paste for every cloud session."}
+                    </p>
+                  )}
+                  <div className="flex gap-2">
+                    <input
+                      type="password"
+                      value={apiKey}
+                      onChange={(e) => setApiKey(e.target.value)}
+                      placeholder={
+                        userByokConfigured
+                          ? "Replace saved key…"
+                          : "cursor_…"
+                      }
+                      className={`${inputClass} font-mono flex-1`}
+                      autoComplete="off"
+                    />
+                    {userByokConfigured && (
+                      <button
+                        type="button"
+                        onClick={() => void handleClearByok()}
+                        disabled={clearingByok}
+                        className="h-10 px-3 rounded-md bg-[#252525] border border-[#2b2b2b] text-[13px] text-[#a0a0a0] hover:text-[#f07070] hover:border-[#3c3c3c] disabled:opacity-40 shrink-0"
+                      >
+                        {clearingByok ? "…" : "Clear"}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+            </fieldset>
+          )}
 
           {runtime === "local" ? (
             <div>
@@ -468,7 +712,7 @@ export default function CreateSession() {
                 <label className="block text-[12px] text-[#a0a0a0] mb-1.5">
                   GitHub repository
                 </label>
-                {repos.length > 0 && (
+                {repos.length > 0 && !isClaude && (
                   <select
                     value={repos.some((r) => r.url === repoUrl) ? repoUrl : ""}
                     onChange={(e) => setRepoUrl(e.target.value)}
@@ -489,6 +733,13 @@ export default function CreateSession() {
                   placeholder="https://github.com/org/repo"
                   className={`${inputClass} font-mono`}
                 />
+                {isClaude && (
+                  <p className="text-[11px] text-[#6e6e6e] mt-1.5">
+                    Paste any https://github.com/… URL. Private repos require{" "}
+                    <code className="text-[#a0a0a0]">GITHUB_TOKEN</code> on the
+                    server.
+                  </p>
+                )}
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
@@ -513,6 +764,13 @@ export default function CreateSession() {
                   Auto-create PR
                 </label>
               </div>
+              {isClaude && autoCreatePR && (
+                <p className="text-[11px] text-[#6e6e6e] -mt-2">
+                  Opens a GitHub PR after each successful turn when{" "}
+                  <code className="text-[#a0a0a0]">GITHUB_TOKEN</code> /{" "}
+                  <code className="text-[#a0a0a0]">GH_TOKEN</code> is set.
+                </p>
+              )}
             </>
           )}
 

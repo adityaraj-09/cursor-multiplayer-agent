@@ -398,6 +398,8 @@ export async function createRoom(data: {
   startingRef?: string;
   autoCreatePR?: boolean;
   apiKey?: string;
+  backend?: "cursor" | "claude-code";
+  anthropicApiKey?: string;
 }): Promise<RoomInfo> {
   const res = await fetch(`${API_BASE}/rooms`, {
     method: "POST",
@@ -443,8 +445,12 @@ export async function abortRoomRun(
   }
 }
 
-export async function fetchRoomModels(roomId: string): Promise<ModelInfo[]> {
-  const res = await fetch(`${API_BASE}/rooms/${roomId}/models`, {
+export async function fetchRoomModels(
+  roomId: string,
+  agentId?: string,
+): Promise<ModelInfo[]> {
+  const qs = agentId ? `?agentId=${encodeURIComponent(agentId)}` : "";
+  const res = await fetch(`${API_BASE}/rooms/${roomId}/models${qs}`, {
     headers: await authHeaders(),
   });
   if (!res.ok) {
