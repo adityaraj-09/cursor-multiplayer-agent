@@ -458,6 +458,7 @@ function LiveRoom({
       scopePath?: string;
       modelId?: string;
       anthropicApiKey?: string;
+      apiKey?: string;
     }) => {
       const agent = await addRoomAgent(roomId, data);
       setSelectedAgentId(agent.id);

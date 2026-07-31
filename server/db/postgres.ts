@@ -415,6 +415,18 @@ export function setModelId(roomId: string, modelId: string): void {
   syncQuery(`UPDATE rooms SET model_id = $1 WHERE id = $2`, [modelId, roomId]);
 }
 
+/** Attach / replace an encrypted Cursor BYOK key on an existing room. */
+export function setRoomByokKey(
+  roomId: string,
+  keyCiphertext: string,
+  keyHint: string,
+): void {
+  syncQuery(
+    `UPDATE rooms SET key_ciphertext = $1, key_hint = $2 WHERE id = $3`,
+    [keyCiphertext, keyHint, roomId],
+  );
+}
+
 export function insertSteerMessage(
   roomId: string,
   sender: string,

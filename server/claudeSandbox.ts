@@ -114,7 +114,7 @@ export class ClaudeSandboxSession {
   }
 
   setModel(modelId: string): void {
-    this.config.model = modelId || "sonnet";
+    this.config.model = modelId || "claude-sonnet-4-6";
   }
 
   getModel(): string {

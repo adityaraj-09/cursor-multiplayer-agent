@@ -21,6 +21,7 @@ import type {
 import {
   CLAUDE_MODELS,
   DEFAULT_CLAUDE_MODEL,
+  isClaudeModelId,
 } from "../../../shared/claudeModels";
 
 type AgentBackendKind = "cursor" | "claude-code";
@@ -128,7 +129,7 @@ export default function CreateSession() {
     if (next === "claude-code") {
       setModelId(DEFAULT_CLAUDE_MODEL);
       if (runtime === "local") setAuthMode("cli");
-    } else if (modelId !== "auto" && CLAUDE_MODELS.some((m) => m.id === modelId)) {
+    } else if (modelId !== "auto" && isClaudeModelId(modelId)) {
       setModelId("auto");
     }
   };

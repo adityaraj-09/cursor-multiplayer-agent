@@ -519,6 +519,8 @@ export async function addRoomAgent(
     scopePath?: string;
     modelId?: string;
     anthropicApiKey?: string;
+    /** Cursor BYOK — reuse/replace the key saved from previous sessions. */
+    apiKey?: string;
   },
 ): Promise<import("../../shared/events").AgentInfo> {
   const res = await fetch(`${API_BASE}/rooms/${roomId}/agents`, {
