@@ -7,7 +7,12 @@ import {
   findScopeOverlap,
   formatScopeOverlapError,
 } from "../server/agentConflicts.js";
-import { CursorAgentBackend } from "../shared/backends/cursor.js";
+import {
+  CursorAgentBackend,
+  diffFromToolArgs,
+  isTodoTool,
+  todosFromToolArgs,
+} from "../shared/backends/cursor.js";
 
 describe("normalizePath", () => {
   it("normalizes slashes and trailing separators", () => {
@@ -216,5 +221,110 @@ describe("CursorAgentBackend", () => {
       parentCallId: "parent",
       callId: "child",
     });
+  });
+
+  it("parses TodoWrite tools with full structured todos", () => {
+    const events = backend.parseLine({
+      type: "tool_call",
+      subtype: "completed",
+      call_id: "t1",
+      tool_call: {
+        todoWriteToolCall: {
+          args: {
+            todos: [
+              { id: "1", content: "Explore chat rendering", status: "completed" },
+              {
+                id: "2",
+                content: "Show edit diffs in chat",
+                status: "in_progress",
+              },
+              { id: "3", content: "Open PR", status: "pending" },
+            ],
+            merge: true,
+          },
+        },
+      },
+    });
+    expect(events[0]).toMatchObject({
+      kind: "tool_done",
+      callId: "t1",
+      name: "todoWrite",
+    });
+    expect(events[0].kind === "tool_done" && events[0].todos).toEqual([
+      {
+        id: "1",
+        content: "Explore chat rendering",
+        status: "completed",
+      },
+      {
+        id: "2",
+        content: "Show edit diffs in chat",
+        status: "in_progress",
+      },
+      { id: "3", content: "Open PR", status: "pending" },
+    ]);
+    expect(
+      events[0].kind === "tool_done" && events[0].detail,
+    ).toContain("3 todos");
+  });
+
+  it("synthesizes a unified diff for StrReplace tool args", () => {
+    const events = backend.parseLine({
+      type: "tool_call",
+      subtype: "completed",
+      call_id: "e1",
+      tool_call: {
+        strReplaceToolCall: {
+          args: {
+            path: "web/components/ChatPanel.tsx",
+            old_string: "const [open, setOpen] = useState(false);",
+            new_string: "const [open, setOpen] = useState(true);",
+          },
+        },
+      },
+    });
+    expect(events[0]).toMatchObject({
+      kind: "tool_done",
+      name: "strReplace",
+      path: "web/components/ChatPanel.tsx",
+    });
+    expect(events[0].kind === "tool_done" && events[0].diffPatch).toContain(
+      "-const [open, setOpen] = useState(false);",
+    );
+    expect(events[0].kind === "tool_done" && events[0].diffPatch).toContain(
+      "+const [open, setOpen] = useState(true);",
+    );
+  });
+});
+
+describe("todo helpers", () => {
+  it("detects todo tool names", () => {
+    expect(isTodoTool("todoWrite")).toBe(true);
+    expect(isTodoTool("TodoWriteToolCall")).toBe(true);
+    expect(isTodoTool("write")).toBe(false);
+  });
+
+  it("normalizes todo statuses from mixed arg shapes", () => {
+    const todos = todosFromToolArgs({
+      items: [
+        { id: "a", text: "One", status: "complete" },
+        { content: "Two", status: "IN_PROGRESS" },
+        { title: "Three", status: "canceled" },
+      ],
+    });
+    expect(todos).toEqual([
+      { id: "a", content: "One", status: "completed" },
+      { id: "todo-2", content: "Two", status: "in_progress" },
+      { id: "todo-3", content: "Three", status: "cancelled" },
+    ]);
+  });
+
+  it("builds write diffs from contents", () => {
+    const patch = diffFromToolArgs("Write", {
+      path: "hello.ts",
+      contents: "export const x = 1;\n",
+    });
+    expect(patch).toContain("new file mode");
+    expect(patch).toContain("+export const x = 1;");
   });
 });

@@ -4,7 +4,13 @@ import type {
   ParseLineContext,
   WorkerBackend,
 } from "./types.js";
-import { diffFromToolArgs, isEditTool } from "./cursor.js";
+import {
+  diffFromToolArgs,
+  isEditTool,
+  isTodoTool,
+  todoStatusSummary,
+  todosFromToolArgs,
+} from "./cursor.js";
 
 interface PendingTool {
   name: string;
@@ -54,6 +60,12 @@ function toolDetail(
   path?: string,
 ): string {
   if (!args) return name;
+  if (isTodoTool(name)) {
+    const todos = todosFromToolArgs(args);
+    return todos.length
+      ? `${todos.length} todo${todos.length === 1 ? "" : "s"} · ${todoStatusSummary(todos)}`
+      : "Updating todos";
+  }
   const command =
     typeof args.command === "string"
       ? args.command
@@ -180,6 +192,8 @@ export class ClaudeCodeBackend implements WorkerBackend {
 
           this.pendingTools.set(callId, { name, path, args });
 
+          const todos =
+            isTodoTool(name) && args ? todosFromToolArgs(args) : undefined;
           if (parentCallId) {
             out.push({
               kind: "subagent_nested",
@@ -197,6 +211,7 @@ export class ClaudeCodeBackend implements WorkerBackend {
               name,
               detail: toolDetail(name, args, path),
               path,
+              todos: todos?.length ? todos : undefined,
             });
           }
         }
@@ -247,13 +262,21 @@ export class ClaudeCodeBackend implements WorkerBackend {
             isEditTool(name) && pending?.args
               ? diffFromToolArgs(name, pending.args)
               : undefined;
+          const todos =
+            isTodoTool(name) && pending?.args
+              ? todosFromToolArgs(pending.args)
+              : undefined;
           out.push({
             kind: "tool_done",
             callId,
             name,
-            detail,
+            detail:
+              todos?.length
+                ? `${todos.length} todo${todos.length === 1 ? "" : "s"} · ${todoStatusSummary(todos)}`
+                : detail,
             path,
             diffPatch: diffPatch || undefined,
+            todos: todos?.length ? todos : undefined,
           });
         }
       }

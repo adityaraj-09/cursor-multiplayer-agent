@@ -69,6 +69,13 @@ export interface AgentConflictBlocked {
   action: "aborted" | "queued";
 }
 
+/** Structured todo item from TodoWrite / todo tools. */
+export interface AgentTodoItem {
+  id: string;
+  content: string;
+  status: "pending" | "in_progress" | "completed" | "cancelled";
+}
+
 export interface ChatMessage {
   id: string;
   roomId: string;
@@ -79,6 +86,8 @@ export interface ChatMessage {
   toolName?: string;
   /** Unified diff when this message is a file edit. */
   diffPatch?: string;
+  /** Full todo list when this message is a TodoWrite / todo tool call. */
+  todos?: AgentTodoItem[];
   status: ChatStatus;
   ts: number;
   /** Room-level agent that produced or received this message. */
@@ -287,6 +296,8 @@ export interface AgentStreamEventPayload {
   path?: string;
   /** Unified diff for edit tools (local git or synthetic from tool args). */
   diffPatch?: string;
+  /** Structured todos for TodoWrite / todo tools. */
+  todos?: AgentTodoItem[];
   message?: string;
   result?: string;
   parentCallId?: string;

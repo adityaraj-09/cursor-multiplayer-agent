@@ -7,7 +7,12 @@ import {
   type SDKAgent,
   type SDKMessage,
 } from "@cursor/sdk";
-import type { AgentRuntime } from "../shared/events.js";
+import type { AgentRuntime, AgentTodoItem } from "../shared/events.js";
+import {
+  isTodoTool,
+  todoStatusSummary,
+  todosFromToolArgs,
+} from "../shared/backends/cursor.js";
 import { diffFromToolArgs, isEditTool } from "./gitDiff.js";
 
 export interface RunGitInfo {
@@ -28,6 +33,7 @@ export type SdkStreamEvent =
       name: string;
       detail: string;
       path?: string;
+      todos?: AgentTodoItem[];
     }
   | {
       kind: "tool_done";
@@ -37,6 +43,7 @@ export type SdkStreamEvent =
       path?: string;
       /** Synthetic or tool-provided unified diff for chat display. */
       diffPatch?: string;
+      todos?: AgentTodoItem[];
     }
   | { kind: "error"; message: string }
   | { kind: "done"; result: string; git?: RunGitInfo };
@@ -67,9 +74,15 @@ function extractAssistantText(message: SDKMessage): string {
     .join("");
 }
 
-function toolDetail(args: unknown): string {
+function toolDetail(name: string, args: unknown): string {
   if (!args || typeof args !== "object") return "";
   const a = args as Record<string, unknown>;
+  if (isTodoTool(name)) {
+    const todos = todosFromToolArgs(a);
+    return todos.length
+      ? `${todos.length} todo${todos.length === 1 ? "" : "s"} · ${todoStatusSummary(todos)}`
+      : "Updating todos";
+  }
   const v =
     a.command ??
     a.globPattern ??
@@ -278,11 +291,15 @@ export class SdkAgentSession {
         }
 
         if (event.type === "tool_call") {
-          const detail = toolDetail(event.args);
-          const path = toolPath(event.args);
           const args =
             event.args && typeof event.args === "object"
               ? (event.args as Record<string, unknown>)
+              : undefined;
+          const detail = toolDetail(event.name, event.args);
+          const path = toolPath(event.args);
+          const todos =
+            isTodoTool(event.name) && args
+              ? todosFromToolArgs(args)
               : undefined;
           if (event.status === "running") {
             item.onEvent({
@@ -291,6 +308,7 @@ export class SdkAgentSession {
               name: event.name,
               detail,
               path,
+              todos: todos?.length ? todos : undefined,
             });
           } else {
             const diffPatch =
@@ -304,6 +322,7 @@ export class SdkAgentSession {
               detail: detail || (event.status === "error" ? "error" : "done"),
               path,
               diffPatch: diffPatch || undefined,
+              todos: todos?.length ? todos : undefined,
             });
           }
         }

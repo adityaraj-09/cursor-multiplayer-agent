@@ -138,7 +138,12 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
         const idx = prev.findIndex((m) => m.id === msg.id);
         if (idx >= 0) {
           const next = [...prev];
-          next[idx] = { ...next[idx], ...msg };
+          // Omit undefined fields so a later file-diff update doesn't wipe
+          // structured todos (or vice versa) that were already on the message.
+          const patch = Object.fromEntries(
+            Object.entries(msg).filter(([, v]) => v !== undefined),
+          ) as ChatMessage;
+          next[idx] = { ...next[idx], ...patch };
           return next;
         }
         return [...prev, msg];
