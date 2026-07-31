@@ -131,6 +131,10 @@ interface RoomState {
   /** Legacy room-level driver — prefer per-agent drivers. Kept as fallback for single-agent rooms. */
   driverSocketId: string | null;
   pendingDriveRequest: { socketId: string; name: string } | null;
+  /** socketId → agent ids they are currently typing toward. */
+  typingBySocket: Map<string, Set<string>>;
+  /** Auto-expire typing if the client goes quiet (`socketId:agentId` → timer). */
+  typingTimeouts: Map<string, ReturnType<typeof setTimeout>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -646,6 +650,8 @@ export class RoomManager {
       agents,
       driverSocketId: null,
       pendingDriveRequest: null,
+      typingBySocket: new Map(),
+      typingTimeouts: new Map(),
     });
   }
 
@@ -1164,6 +1170,7 @@ export class RoomManager {
     if (!room) return;
 
     const p = room.participants.get(socket.id);
+    this.clearTypingForSocket(room, socket.id);
     room.participants.delete(socket.id);
     this.socketRooms.delete(socket.id);
 
@@ -1274,6 +1281,101 @@ export class RoomManager {
   }
 
   // -----------------------------------------------------------------------
+  // Typing indicators (per agent)
+  // -----------------------------------------------------------------------
+
+  private typingKey(socketId: string, agentId: string): string {
+    return `${socketId}:${agentId}`;
+  }
+
+  private clearTypingTimer(room: RoomState, socketId: string, agentId: string): void {
+    const key = this.typingKey(socketId, agentId);
+    const timer = room.typingTimeouts.get(key);
+    if (timer) {
+      clearTimeout(timer);
+      room.typingTimeouts.delete(key);
+    }
+  }
+
+  private clearTypingForSocket(room: RoomState, socketId: string): void {
+    const agents = room.typingBySocket.get(socketId);
+    if (!agents?.size) {
+      room.typingBySocket.delete(socketId);
+      return;
+    }
+    for (const agentId of agents) {
+      this.clearTypingTimer(room, socketId, agentId);
+    }
+    room.typingBySocket.delete(socketId);
+    this.io.to(room.id).emit("typing-stop", { socketId });
+  }
+
+  private stopTypingAgent(
+    room: RoomState,
+    socketId: string,
+    agentId: string,
+  ): void {
+    const agents = room.typingBySocket.get(socketId);
+    if (!agents?.has(agentId)) {
+      this.clearTypingTimer(room, socketId, agentId);
+      return;
+    }
+    agents.delete(agentId);
+    this.clearTypingTimer(room, socketId, agentId);
+    if (agents.size === 0) room.typingBySocket.delete(socketId);
+    this.io.to(room.id).emit("typing-stop", { socketId, agentId });
+  }
+
+  handleTyping(socket: Socket, agentIdRaw: string): void {
+    const room = this.getRoomForSocket(socket.id);
+    if (!room) return;
+    const p = room.participants.get(socket.id);
+    if (!p) return;
+
+    const agentId = String(agentIdRaw || "").trim();
+    if (!agentId || !room.agents.has(agentId)) return;
+
+    let agents = room.typingBySocket.get(socket.id);
+    if (!agents) {
+      agents = new Set();
+      room.typingBySocket.set(socket.id, agents);
+    }
+    const wasTyping = agents.has(agentId);
+    agents.add(agentId);
+
+    this.clearTypingTimer(room, socket.id, agentId);
+    const key = this.typingKey(socket.id, agentId);
+    room.typingTimeouts.set(
+      key,
+      setTimeout(() => {
+        this.stopTypingAgent(room, socket.id, agentId);
+      }, 4000),
+    );
+
+    if (!wasTyping) {
+      socket.to(room.id).emit("typing", {
+        socketId: socket.id,
+        name: p.name,
+        agentId,
+      });
+    }
+  }
+
+  handleTypingStop(socket: Socket, agentIdRaw?: string): void {
+    const room = this.getRoomForSocket(socket.id);
+    if (!room) return;
+    const agentId =
+      agentIdRaw === undefined || agentIdRaw === null
+        ? ""
+        : String(agentIdRaw).trim();
+    if (!agentId) {
+      this.clearTypingForSocket(room, socket.id);
+      return;
+    }
+    this.stopTypingAgent(room, socket.id, agentId);
+  }
+
+  // -----------------------------------------------------------------------
   // handleSteerMessage — parse (textOrAgentId, text?) overload
   // -----------------------------------------------------------------------
 
@@ -1299,6 +1401,9 @@ export class RoomManager {
     if (!prompt || typeof prompt !== "string") return;
     const sanitized = prompt.replace(/^\s+|\s+$/g, "");
     if (!sanitized) return;
+
+    // Sending clears the typist's indicator for this agent.
+    this.stopTypingAgent(room, socket.id, agentId);
 
     const agent = this.getAgentState(room, agentId);
     if (!agent) {

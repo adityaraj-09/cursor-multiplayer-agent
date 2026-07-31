@@ -841,6 +841,10 @@ io.on("connection", (socket) => {
   socket.on("steer-message", (textOrAgentId, text) =>
     roomManager.handleSteerMessage(socket, textOrAgentId, text),
   );
+  socket.on("typing", (agentId) => roomManager.handleTyping(socket, agentId));
+  socket.on("typing-stop", (agentId) =>
+    roomManager.handleTypingStop(socket, agentId),
+  );
   socket.on("request-drive", (agentId) =>
     roomManager.handleRequestDrive(socket, agentId),
   );

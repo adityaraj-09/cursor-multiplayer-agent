@@ -1,6 +1,12 @@
 "use client";
 
-import { useState, type FormEvent, type KeyboardEvent } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type FormEvent,
+  type KeyboardEvent,
+} from "react";
 import {
   Bot,
   ChevronDown,
@@ -25,7 +31,17 @@ interface SteerInputProps {
   modelLockReason?: string;
   /** Shown in the model row when steering a named agent. */
   agentName?: string;
+  /** Current agent id — used to scope typing start/stop. */
+  agentId?: string;
+  /** Throttled by this component while the user drafts. */
+  onTyping?: (agentId: string) => void;
+  onTypingStop?: (agentId?: string) => void;
+  /** e.g. "Jae is typing to Agent A…" */
+  typingIndicator?: string;
 }
+
+const TYPING_THROTTLE_MS = 1500;
+const TYPING_IDLE_STOP_MS = 2000;
 
 export default function SteerInput({
   onSend,
@@ -38,8 +54,65 @@ export default function SteerInput({
   modelDisabled = false,
   modelLockReason,
   agentName,
+  agentId,
+  onTyping,
+  onTypingStop,
+  typingIndicator,
 }: SteerInputProps) {
   const [text, setText] = useState("");
+  const lastTypingEmitRef = useRef(0);
+  const idleStopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const typingActiveRef = useRef(false);
+  const agentIdRef = useRef(agentId);
+  agentIdRef.current = agentId;
+
+  const clearIdleTimer = () => {
+    if (idleStopTimerRef.current) {
+      clearTimeout(idleStopTimerRef.current);
+      idleStopTimerRef.current = null;
+    }
+  };
+
+  const stopTyping = () => {
+    clearIdleTimer();
+    if (!typingActiveRef.current) return;
+    typingActiveRef.current = false;
+    lastTypingEmitRef.current = 0;
+    const id = agentIdRef.current;
+    if (id) onTypingStop?.(id);
+    else onTypingStop?.();
+  };
+
+  const bumpTyping = () => {
+    const id = agentIdRef.current;
+    if (!id || !onTyping || !connected) return;
+    const now = Date.now();
+    if (
+      !typingActiveRef.current ||
+      now - lastTypingEmitRef.current >= TYPING_THROTTLE_MS
+    ) {
+      typingActiveRef.current = true;
+      lastTypingEmitRef.current = now;
+      onTyping(id);
+    }
+    clearIdleTimer();
+    idleStopTimerRef.current = setTimeout(() => {
+      stopTyping();
+    }, TYPING_IDLE_STOP_MS);
+  };
+
+  // Switching agents or unmounting should clear the previous indicator.
+  useEffect(() => {
+    return () => {
+      stopTyping();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only re-run when agent changes
+  }, [agentId]);
+
+  useEffect(() => {
+    if (!connected) stopTyping();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connected]);
 
   const canSend =
     connected && !agentBusy && text.trim().length > 0;
@@ -56,6 +129,7 @@ export default function SteerInput({
     // don't leave sticky empty lines after send.
     const trimmed = text.replace(/^\s+|\s+$/g, "");
     if (!trimmed) return;
+    stopTyping();
     onSend(trimmed);
     setText("");
   };
@@ -71,6 +145,12 @@ export default function SteerInput({
       e.preventDefault();
       submit();
     }
+  };
+
+  const handleChange = (value: string) => {
+    setText(value);
+    if (value.trim()) bumpTyping();
+    else stopTyping();
   };
 
   const modelOptions =
@@ -141,8 +221,9 @@ export default function SteerInput({
           {/* Fixed height — long text / paste scrolls inside, never grows the footer */}
           <textarea
             value={text}
-            onChange={(e) => setText(e.target.value)}
+            onChange={(e) => handleChange(e.target.value)}
             onKeyDown={handleKeyDown}
+            onBlur={() => stopTyping()}
             placeholder={livePlaceholder}
             rows={1}
             // Keep editable while busy/disconnected so users can draft
@@ -161,8 +242,10 @@ export default function SteerInput({
       </div>
 
       <div className="mt-2 px-1 flex items-center justify-between gap-2 min-h-[1rem]">
-        <p className="text-[11px] text-[#6e6e6e]">
-          {statusHint ? (
+        <p className="text-[11px] text-[#6e6e6e] truncate">
+          {typingIndicator ? (
+            <span className="text-[#4d9fff]">{typingIndicator}</span>
+          ) : statusHint ? (
             <span className={!connected ? "text-[#f07070]" : "text-[#4d9fff]"}>
               {statusHint}
             </span>
