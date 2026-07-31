@@ -40,6 +40,8 @@ import {
 } from "./keyCrypto.js";
 import { getServerApiKey } from "./serverKey.js";
 import { getUserByokKey, setUserByokKey } from "./userByok.js";
+import { getOrgCursorKey } from "./orgKeys.js";
+import { canManageOrg, type OrgRole } from "../shared/orgs.js";
 import { detectAgentConflicts, resolveAgentCwd, findScopeOverlap, formatScopeOverlapError } from "./agentConflicts.js";
 import { FileLockRegistry, broadcastFileLocks } from "./fileLocks.js";
 import type {
@@ -84,6 +86,8 @@ export interface CreateRoomRequest {
   autoCreatePR?: boolean;
   apiKey?: string;
   ownerId?: string;
+  /** Organization that owns this session (null = personal). */
+  orgId?: string;
   /** Primary agent backend. Defaults to cursor. */
   backend?: AgentBackendKind;
   /** Anthropic API key when backend is claude-code (cloud). Saved as user BYOK. */
@@ -208,9 +212,7 @@ function normalizeAuthMode(
 
 /**
  * Resolve a Cursor API key for SDK agents / model listing.
- * Order: room-stored BYOK → server CURSOR_API_KEY → owner's saved user BYOK.
- * Claude cloud rooms start as auth_mode=server with no Cursor key; attaching a
- * Cursor agent later can reuse the owner's saved BYOK from previous sessions.
+ * Order: room BYOK → org shared key → server CURSOR_API_KEY → user BYOK.
  */
 function resolveApiKey(row: db.RoomRow, userId?: string): string {
   if (row.auth_mode === "cli") {
@@ -233,6 +235,10 @@ function resolveApiKey(row: db.RoomRow, userId?: string): string {
   if (row.auth_mode === "byok") {
     throw new Error("BYOK room is missing encrypted API key");
   }
+  if (row.org_id) {
+    const orgKey = getOrgCursorKey(row.org_id);
+    if (orgKey) return orgKey;
+  }
   const serverKey = getServerApiKey();
   if (serverKey) return serverKey;
 
@@ -243,7 +249,9 @@ function resolveApiKey(row: db.RoomRow, userId?: string): string {
   }
 
   throw new Error(
-    "No Cursor API key configured — paste a Cursor API key (saved from previous sessions) or set CURSOR_API_KEY on the server",
+    row.org_id
+      ? "No Cursor API key configured — set an org shared key in Team settings, or paste a BYOK key"
+      : "No Cursor API key configured — paste a Cursor API key (saved from previous sessions) or set CURSOR_API_KEY on the server",
   );
 }
 
@@ -405,10 +413,14 @@ export class RoomManager {
         setUserByokKey(ownerId, pasted);
       }
     } else if (authMode === "server") {
-      apiKey = getServerApiKey();
+      const orgId = req.orgId?.trim() || "";
+      apiKey =
+        (orgId ? getOrgCursorKey(orgId) : "") || getServerApiKey();
       if (!apiKey) {
         throw new Error(
-          "Server key is not configured — set CURSOR_API_KEY or pick one up in Create session",
+          orgId
+            ? "Org shared Cursor key is not configured — set it in Team settings"
+            : "Server key is not configured — set CURSOR_API_KEY or pick one up in Create session",
         );
       }
     }
@@ -466,6 +478,11 @@ export class RoomManager {
       throw new Error("Sign in required to create a local CLI session");
     }
 
+    const orgId = req.orgId?.trim() || null;
+    if (orgId && ownerId && !db.isOrganizationMember(orgId, ownerId)) {
+      throw new Error("Not a member of that organization");
+    }
+
     const row = db.createRoom({
       id,
       name,
@@ -482,6 +499,7 @@ export class RoomManager {
       keyCiphertext,
       keyHint,
       ownerId,
+      orgId,
     });
 
     if (ownerId) {
@@ -2700,11 +2718,37 @@ export class RoomManager {
     });
   }
 
+  listPersonalRoomsForUser(userId: string): RoomInfo[] {
+    return db.listPersonalRoomsByUser(userId).map((row) => {
+      const room = this.rooms.get(row.id);
+      return this.toRoomInfo(row, room?.participants.size || 0);
+    });
+  }
+
+  listRoomsForOrg(orgId: string): RoomInfo[] {
+    return db.listRoomsByOrg(orgId).map((row) => {
+      const room = this.rooms.get(row.id);
+      return this.toRoomInfo(row, room?.participants.size || 0);
+    });
+  }
+
   userCanAccessRoom(roomId: string, userId: string): boolean {
     const row = db.getRoom(roomId);
     if (!row) return false;
     if (row.owner_id === userId) return true;
-    return db.isRoomMember(roomId, userId);
+    if (db.isRoomMember(roomId, userId)) return true;
+    if (row.org_id && db.isOrganizationMember(row.org_id, userId)) return true;
+    return false;
+  }
+
+  /** Host / org admin can manage room-level settings. */
+  userCanManageRoom(roomId: string, userId: string): boolean {
+    const row = db.getRoom(roomId);
+    if (!row) return false;
+    if (row.owner_id === userId) return true;
+    if (!row.org_id) return false;
+    const member = db.getOrganizationMember(row.org_id, userId);
+    return canManageOrg((member?.role as OrgRole) || null);
   }
 
   joinAsMember(roomId: string, userId: string): RoomInfo {
@@ -2712,7 +2756,24 @@ export class RoomManager {
     if (!row || row.status !== "active") {
       throw new Error("Room not found");
     }
-    if (row.owner_id !== userId && !db.isRoomMember(roomId, userId)) {
+    // Org members can open org rooms without a separate invite; still track room membership.
+    const isOrgMember =
+      Boolean(row.org_id) && db.isOrganizationMember(row.org_id!, userId);
+    if (
+      row.owner_id !== userId &&
+      !db.isRoomMember(roomId, userId) &&
+      !isOrgMember
+    ) {
+      // Keep legacy personal-room shared-link join for non-org rooms.
+      if (row.org_id) {
+        throw new Error("Join this organization to access team sessions");
+      }
+      db.addRoomMember(roomId, userId, "member");
+    } else if (
+      isOrgMember &&
+      row.owner_id !== userId &&
+      !db.isRoomMember(roomId, userId)
+    ) {
       db.addRoomMember(roomId, userId, "member");
     }
     return this.toRoomInfo(
@@ -2878,6 +2939,7 @@ export class RoomManager {
       ? [...room.agents.values()].map((a) => this.toAgentInfo(a.row))
       : undefined;
 
+    const org = row.org_id ? db.getOrganization(row.org_id) : undefined;
     return {
       id: row.id,
       name: row.name,
@@ -2895,6 +2957,8 @@ export class RoomManager {
       autoCreatePR: Boolean(row.auto_create_pr),
       keyHint: row.key_hint || undefined,
       ownerId: row.owner_id || undefined,
+      orgId: row.org_id || undefined,
+      orgName: org?.name,
       cursorSessionId: row.cursor_session_id || undefined,
       agents: agentInfos,
     };

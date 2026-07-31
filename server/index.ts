@@ -12,7 +12,13 @@ import { listCliModels } from "./cliModels.js";
 import { encryptionConfigured } from "./keyCrypto.js";
 import { authMiddleware, hashSessionToken, requireAuth, resolveAuthToken } from "./auth.js";
 import authRoutes from "./authRoutes.js";
+import orgRoutes from "./orgRoutes.js";
 import * as db from "./db.js";
+import {
+  getOrgCursorKey,
+  orgCursorKeyConfigured,
+  orgCursorKeyHint,
+} from "./orgKeys.js";
 import {
   clearServerApiKey,
   getServerApiKey,
@@ -151,6 +157,7 @@ function resolveRequestKey(
   bodyKey?: string,
   headerKey?: string,
   userId?: string,
+  orgId?: string,
 ): string {
   if (authMode === "cli") {
     throw new Error("CLI auth does not use an API key");
@@ -164,18 +171,31 @@ function resolveRequestKey(
     }
     throw new Error("BYOK requires an API key");
   }
-  const serverKey = getServerApiKey();
-  if (!serverKey) {
-    throw new Error("Server API key is not configured");
+  if (orgId && userId && db.isOrganizationMember(orgId, userId)) {
+    const orgKey = getOrgCursorKey(orgId);
+    if (orgKey) return orgKey;
   }
-  return serverKey;
+  const serverKey = getServerApiKey();
+  if (serverKey) return serverKey;
+  throw new Error(
+    orgId
+      ? "Org shared Cursor key is not configured"
+      : "Server API key is not configured",
+  );
 }
 
 // User auth routes
 app.use("/api/auth", authRoutes);
+app.use("/api/orgs", orgRoutes);
 
 app.get("/api/auth/status", (req, res) => {
   const userId = req.user?.id;
+  const orgId =
+    typeof req.query.orgId === "string" ? req.query.orgId.trim() : "";
+  const orgKeyConfigured =
+    orgId && userId && db.isOrganizationMember(orgId, userId)
+      ? orgCursorKeyConfigured(orgId)
+      : false;
   res.json({
     serverKeyConfigured: serverKeyConfigured(),
     serverKeySource: serverKeySource(),
@@ -190,6 +210,9 @@ app.get("/api/auth/status", (req, res) => {
     userAnthropicByokHint: userId ? userAnthropicByokHint(userId) : null,
     e2bConfigured: isClaudeSandboxConfigured(),
     canManageServerKey: isAdminUser(userId),
+    orgCursorKeyConfigured: orgKeyConfigured,
+    orgCursorKeyHint:
+      orgKeyConfigured && orgId ? orgCursorKeyHint(orgId) : null,
   });
 });
 
@@ -325,6 +348,7 @@ app.post("/api/models", requireAuth, async (req, res) => {
         ? req.headers["x-cursor-api-key"]
         : undefined,
       req.user?.id,
+      typeof req.body?.orgId === "string" ? req.body.orgId : undefined,
     );
     const models = await listModelsForKey(apiKey);
     res.json({ models });
@@ -351,6 +375,7 @@ app.post("/api/repositories", requireAuth, async (req, res) => {
         ? req.headers["x-cursor-api-key"]
         : undefined,
       req.user?.id,
+      typeof req.body?.orgId === "string" ? req.body.orgId : undefined,
     );
     const repositories = await listReposForKey(apiKey);
     res.json({ repositories });
@@ -417,6 +442,21 @@ app.get("/api/cursor-sessions", requireAuth, async (req, res) => {
 });
 
 app.get("/api/rooms", requireAuth, (req, res) => {
+  const orgIdRaw = req.query.orgId;
+  const orgId =
+    typeof orgIdRaw === "string" ? orgIdRaw.trim() : undefined;
+  if (orgId === "personal" || orgId === "") {
+    res.json(roomManager.listPersonalRoomsForUser(req.user!.id));
+    return;
+  }
+  if (orgId) {
+    if (!db.isOrganizationMember(orgId, req.user!.id)) {
+      res.status(404).json({ error: "Organization not found" });
+      return;
+    }
+    res.json(roomManager.listRoomsForOrg(orgId));
+    return;
+  }
   res.json(roomManager.listRoomsForUser(req.user!.id));
 });
 
@@ -455,6 +495,14 @@ app.post("/api/rooms", requireAuth, async (req, res) => {
       runtime === "local" && !req.body?.authMode
         ? "cli"
         : parseAuthMode(req.body?.authMode);
+    const orgIdRaw =
+      typeof req.body?.orgId === "string" ? req.body.orgId.trim() : "";
+    const orgId =
+      orgIdRaw && orgIdRaw !== "personal" ? orgIdRaw : undefined;
+    if (orgId && !db.isOrganizationMember(orgId, req.user!.id)) {
+      res.status(403).json({ error: "Not a member of that organization" });
+      return;
+    }
     const room = await roomManager.createRoom({
       name: req.body?.name,
       runtime,
@@ -466,6 +514,7 @@ app.post("/api/rooms", requireAuth, async (req, res) => {
       autoCreatePR: Boolean(req.body?.autoCreatePR),
       apiKey: req.body?.apiKey,
       ownerId: req.user!.id,
+      orgId,
       backend:
         req.body?.backend === "claude-code" ? "claude-code" : "cursor",
       anthropicApiKey: req.body?.anthropicApiKey

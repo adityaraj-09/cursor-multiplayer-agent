@@ -9,9 +9,11 @@ import {
   createRoom,
   fetchAuthStatus,
   fetchOnlineWorkers,
+  fetchOrgs,
   fetchRepositories,
   pickLocalFolder,
   setServerKey,
+  type OrgInfo,
 } from "../../lib/api";
 import type {
   AgentRuntime,
@@ -23,13 +25,18 @@ import {
   DEFAULT_CLAUDE_MODEL,
   isClaudeModelId,
 } from "../../../shared/claudeModels";
+import {
+  readSelectedWorkspace,
+  writeSelectedWorkspace,
+  type WorkspaceScope,
+} from "../../lib/workspace";
 
 type AgentBackendKind = "cursor" | "claude-code";
 
-function authLabel(mode: AuthMode): string {
+function authLabel(mode: AuthMode, inOrg: boolean): string {
   if (mode === "cli") return "Local login";
   if (mode === "byok") return "Bring your own";
-  return "Server key";
+  return inOrg ? "Team key" : "Server key";
 }
 
 export default function CreateSession() {
@@ -52,6 +59,8 @@ export default function CreateSession() {
   const [serverKeySource, setServerKeySource] = useState<
     "env" | "stored" | "none"
   >("none");
+  const [orgCursorKeyConfigured, setOrgCursorKeyConfigured] = useState(false);
+  const [orgCursorKeyHint, setOrgCursorKeyHint] = useState<string | null>(null);
   const [byokAvailable, setByokAvailable] = useState(false);
   const [userByokConfigured, setUserByokConfigured] = useState(false);
   const [userByokHint, setUserByokHint] = useState<string | null>(null);
@@ -66,17 +75,26 @@ export default function CreateSession() {
   const [creating, setCreating] = useState(false);
   const [pickingFolder, setPickingFolder] = useState(false);
   const [workerOnline, setWorkerOnline] = useState(false);
+  const [orgs, setOrgs] = useState<OrgInfo[]>([]);
+  const [workspace, setWorkspace] = useState<WorkspaceScope>("personal");
 
   const isClaude = backend === "claude-code";
   const isClaudeCloud = isClaude && runtime === "cloud";
   const isClaudeLocal = isClaude && runtime === "local";
+  const inOrg = workspace !== "personal";
+  const activeOrg = orgs.find((o) => o.id === workspace) || null;
+  const teamKeyReady = inOrg
+    ? orgCursorKeyConfigured || serverKeyConfigured
+    : serverKeyConfigured;
 
-  const refreshAuth = () =>
-    fetchAuthStatus()
+  const refreshAuth = (orgId?: string | null) =>
+    fetchAuthStatus({ orgId: orgId && orgId !== "personal" ? orgId : null })
       .then((s) => {
         setServerKeyConfigured(s.serverKeyConfigured);
         setServerKeyHint(s.serverKeyHint);
         setServerKeySource(s.serverKeySource);
+        setOrgCursorKeyConfigured(Boolean(s.orgCursorKeyConfigured));
+        setOrgCursorKeyHint(s.orgCursorKeyHint ?? null);
         setByokAvailable(s.byokAvailable);
         setUserByokConfigured(Boolean(s.userByokConfigured));
         setUserByokHint(s.userByokHint ?? null);
@@ -88,8 +106,31 @@ export default function CreateSession() {
       .catch(() => {});
 
   useEffect(() => {
-    void refreshAuth();
+    const params = new URLSearchParams(window.location.search);
+    const fromQuery = params.get("org")?.trim();
+    const initial =
+      fromQuery && fromQuery !== "personal"
+        ? fromQuery
+        : readSelectedWorkspace();
+    setWorkspace(initial);
+    writeSelectedWorkspace(initial);
+    void fetchOrgs()
+      .then((list) => {
+        setOrgs(list);
+        if (
+          initial !== "personal" &&
+          !list.some((o) => o.id === initial)
+        ) {
+          setWorkspace("personal");
+          writeSelectedWorkspace("personal");
+        }
+      })
+      .catch(() => {});
   }, []);
+
+  useEffect(() => {
+    void refreshAuth(workspace);
+  }, [workspace]);
 
   useEffect(() => {
     let cancelled = false;
@@ -223,7 +264,7 @@ export default function CreateSession() {
       setRepos([]);
       return;
     }
-    if (authMode === "server" && !serverKeyConfigured) {
+    if (authMode === "server" && !teamKeyReady) {
       setRepos([]);
       return;
     }
@@ -236,6 +277,7 @@ export default function CreateSession() {
       fetchRepositories({
         authMode,
         apiKey: authMode === "byok" && apiKey.trim() ? apiKey.trim() : undefined,
+        orgId: inOrg ? workspace : undefined,
       })
         .then((r) => {
           if (!cancelled) setRepos(r);
@@ -259,8 +301,10 @@ export default function CreateSession() {
     apiKey,
     runtime,
     backend,
-    serverKeyConfigured,
+    teamKeyReady,
     userByokConfigured,
+    inOrg,
+    workspace,
   ]);
 
   const handleSubmit = async (e: FormEvent) => {
@@ -284,8 +328,12 @@ export default function CreateSession() {
         setError("Paste your Cursor API key for BYOK");
         return;
       }
-      if (authMode === "server" && !serverKeyConfigured) {
-        setError("Server key is not configured");
+      if (authMode === "server" && !teamKeyReady) {
+        setError(
+          inOrg
+            ? "Team shared Cursor key is not configured — set it in Team settings"
+            : "Server key is not configured",
+        );
         return;
       }
     }
@@ -334,6 +382,7 @@ export default function CreateSession() {
           isClaudeCloud && anthropicApiKey.trim()
             ? anthropicApiKey.trim()
             : undefined,
+        orgId: inOrg ? workspace : undefined,
       });
       router.push(`/room/${room.id}`);
     } catch (err: unknown) {
@@ -395,6 +444,34 @@ export default function CreateSession() {
               autoFocus
             />
           </div>
+
+          <fieldset>
+            <legend className="block text-[12px] text-[#a0a0a0] mb-1.5">
+              Workspace
+            </legend>
+            <select
+              value={workspace}
+              onChange={(e) => {
+                const next = e.target.value as WorkspaceScope;
+                setWorkspace(next);
+                writeSelectedWorkspace(next);
+                setError("");
+              }}
+              className={inputClass}
+            >
+              <option value="personal">Personal</option>
+              {orgs.map((org) => (
+                <option key={org.id} value={org.id}>
+                  {org.name}
+                </option>
+              ))}
+            </select>
+            <p className="text-[11px] text-[#6e6e6e] mt-1.5">
+              {inOrg
+                ? "Team sessions appear on every member’s shared dashboard."
+                : "Personal sessions stay under your account."}
+            </p>
+          </fieldset>
 
           <fieldset>
             <legend className="block text-[12px] text-[#a0a0a0] mb-1.5">
@@ -580,7 +657,7 @@ export default function CreateSession() {
                         : "bg-[#1a1a1a] border-[#2b2b2b] text-[#6e6e6e]"
                     }`}
                   >
-                    {authLabel(mode)}
+                    {authLabel(mode, inOrg)}
                   </button>
                 ))}
               </div>
@@ -593,7 +670,44 @@ export default function CreateSession() {
               )}
               {authMode === "server" && (
                 <div className="space-y-2">
-                  {serverKeyConfigured ? (
+                  {inOrg ? (
+                    orgCursorKeyConfigured ? (
+                      <p className="text-[11px] text-[#6e6e6e]">
+                        Using team shared key {orgCursorKeyHint}
+                        {activeOrg ? ` (${activeOrg.name})` : ""}. Configure in{" "}
+                        <Link
+                          href={`/org/${workspace}/settings`}
+                          className="text-[#4d9fff] hover:underline"
+                        >
+                          Team settings
+                        </Link>
+                        .
+                      </p>
+                    ) : serverKeyConfigured ? (
+                      <p className="text-[11px] text-[#6e6e6e]">
+                        No team key yet — falling back to server key{" "}
+                        {serverKeyHint}. Prefer setting a shared key in{" "}
+                        <Link
+                          href={`/org/${workspace}/settings`}
+                          className="text-[#4d9fff] hover:underline"
+                        >
+                          Team settings
+                        </Link>
+                        .
+                      </p>
+                    ) : (
+                      <p className="text-[11px] text-[#f07070]">
+                        No team shared Cursor key. Set one in{" "}
+                        <Link
+                          href={`/org/${workspace}/settings`}
+                          className="text-[#4d9fff] hover:underline"
+                        >
+                          Team settings
+                        </Link>{" "}
+                        so the whole team can create cloud sessions.
+                      </p>
+                    )
+                  ) : serverKeyConfigured ? (
                     <p className="text-[11px] text-[#6e6e6e]">
                       Using server key {serverKeyHint}{" "}
                       {serverKeySource === "env"
@@ -609,7 +723,7 @@ export default function CreateSession() {
                         : " (admins only can pick up a key in the UI)."}
                     </p>
                   )}
-                  {canManageServerKey && (
+                  {!inOrg && canManageServerKey && (
                     <div className="flex gap-2">
                       <input
                         type="password"

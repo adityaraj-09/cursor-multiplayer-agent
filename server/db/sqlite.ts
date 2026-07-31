@@ -63,7 +63,8 @@ db.exec(`
     auto_create_pr INTEGER NOT NULL DEFAULT 0,
     key_ciphertext TEXT,
     key_hint TEXT,
-    owner_id TEXT
+    owner_id TEXT,
+    org_id TEXT
   );
 
   CREATE TABLE IF NOT EXISTS steer_messages (
@@ -181,9 +182,38 @@ db.exec(`
     PRIMARY KEY (room_id, path)
   );
 
+  CREATE TABLE IF NOT EXISTS organizations (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    slug TEXT NOT NULL UNIQUE,
+    allowed_domains TEXT NOT NULL DEFAULT '',
+    created_by TEXT NOT NULL REFERENCES users(id),
+    created_at INTEGER NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS organization_members (
+    org_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    role TEXT NOT NULL DEFAULT 'member',
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (org_id, user_id)
+  );
+
+  CREATE TABLE IF NOT EXISTS organization_invites (
+    code TEXT PRIMARY KEY,
+    org_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    created_by TEXT NOT NULL REFERENCES users(id),
+    role TEXT NOT NULL DEFAULT 'member',
+    created_at INTEGER NOT NULL,
+    max_uses INTEGER,
+    use_count INTEGER NOT NULL DEFAULT 0,
+    expires_at INTEGER
+  );
+
   CREATE INDEX IF NOT EXISTS idx_steer_room_ts ON steer_messages(room_id, ts);
   CREATE INDEX IF NOT EXISTS idx_messages_room_ts ON messages(room_id, ts);
   CREATE INDEX IF NOT EXISTS idx_agents_room ON agents(room_id, sort_order);
+  CREATE INDEX IF NOT EXISTS idx_org_members_user ON organization_members(user_id);
 `);
 
 const migrations = [
@@ -203,6 +233,7 @@ const migrations = [
   `ALTER TABLE invite_links ADD COLUMN expires_at INTEGER`,
   `ALTER TABLE messages ADD COLUMN agent_id TEXT`,
   `ALTER TABLE messages ADD COLUMN todos_json TEXT`,
+  `ALTER TABLE rooms ADD COLUMN org_id TEXT`,
 ];
 
 for (const sql of migrations) {
@@ -241,13 +272,47 @@ try {
   // ignore
 }
 
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS organizations (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      slug TEXT NOT NULL UNIQUE,
+      allowed_domains TEXT NOT NULL DEFAULT '',
+      created_by TEXT NOT NULL REFERENCES users(id),
+      created_at INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS organization_members (
+      org_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      role TEXT NOT NULL DEFAULT 'member',
+      created_at INTEGER NOT NULL,
+      PRIMARY KEY (org_id, user_id)
+    );
+    CREATE TABLE IF NOT EXISTS organization_invites (
+      code TEXT PRIMARY KEY,
+      org_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      created_by TEXT NOT NULL REFERENCES users(id),
+      role TEXT NOT NULL DEFAULT 'member',
+      created_at INTEGER NOT NULL,
+      max_uses INTEGER,
+      use_count INTEGER NOT NULL DEFAULT 0,
+      expires_at INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_org_members_user ON organization_members(user_id);
+    CREATE INDEX IF NOT EXISTS idx_rooms_org ON rooms(org_id);
+  `);
+} catch {
+  // ignore
+}
+
 const stmts = {
   insertRoom: db.prepare(`
     INSERT INTO rooms (
       id, name, repo_path, agent_command, created_at, last_active_at, status,
       runtime, auth_mode, model_id, repo_url, starting_ref, cursor_agent_id,
-      cursor_session_id, pr_url, auto_create_pr, key_ciphertext, key_hint, owner_id
-    ) VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      cursor_session_id, pr_url, auto_create_pr, key_ciphertext, key_hint, owner_id, org_id
+    ) VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `),
   updateRoomOwner: db.prepare(`UPDATE rooms SET owner_id = ? WHERE id = ?`),
   listRooms: db.prepare(`SELECT * FROM rooms ORDER BY last_active_at DESC`),
@@ -453,8 +518,82 @@ const stmts = {
   listRoomsByUser: db.prepare(`
     SELECT DISTINCT r.* FROM rooms r
     LEFT JOIN room_members rm ON rm.room_id = r.id
-    WHERE r.owner_id = ? OR rm.user_id = ?
+    LEFT JOIN organization_members om ON om.org_id = r.org_id
+    WHERE r.owner_id = ? OR rm.user_id = ? OR om.user_id = ?
     ORDER BY r.last_active_at DESC
+  `),
+  listPersonalRoomsByUser: db.prepare(`
+    SELECT DISTINCT r.* FROM rooms r
+    LEFT JOIN room_members rm ON rm.room_id = r.id
+    WHERE (r.org_id IS NULL OR r.org_id = '')
+      AND (r.owner_id = ? OR rm.user_id = ?)
+    ORDER BY r.last_active_at DESC
+  `),
+  listRoomsByOrg: db.prepare(`
+    SELECT * FROM rooms WHERE org_id = ? ORDER BY last_active_at DESC
+  `),
+  insertOrg: db.prepare(`
+    INSERT INTO organizations (id, name, slug, allowed_domains, created_by, created_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `),
+  getOrg: db.prepare(`SELECT * FROM organizations WHERE id = ?`),
+  getOrgBySlug: db.prepare(`SELECT * FROM organizations WHERE slug = ?`),
+  updateOrg: db.prepare(`
+    UPDATE organizations SET name = ?, slug = ?, allowed_domains = ? WHERE id = ?
+  `),
+  deleteOrg: db.prepare(`DELETE FROM organizations WHERE id = ?`),
+  listOrgsForUser: db.prepare(`
+    SELECT o.*, om.role AS member_role
+    FROM organizations o
+    INNER JOIN organization_members om ON om.org_id = o.id
+    WHERE om.user_id = ?
+    ORDER BY o.name COLLATE NOCASE ASC
+  `),
+  listOrgsByDomain: db.prepare(`
+    SELECT * FROM organizations
+    WHERE allowed_domains != ''
+    ORDER BY name COLLATE NOCASE ASC
+  `),
+  addOrgMember: db.prepare(`
+    INSERT OR REPLACE INTO organization_members (org_id, user_id, role, created_at)
+    VALUES (?, ?, ?, ?)
+  `),
+  getOrgMember: db.prepare(`
+    SELECT * FROM organization_members WHERE org_id = ? AND user_id = ?
+  `),
+  listOrgMembers: db.prepare(`
+    SELECT om.org_id, om.user_id, om.role, om.created_at, u.email, u.name
+    FROM organization_members om
+    INNER JOIN users u ON u.id = om.user_id
+    WHERE om.org_id = ?
+    ORDER BY
+      CASE om.role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 ELSE 2 END,
+      u.name COLLATE NOCASE ASC
+  `),
+  countOrgMembers: db.prepare(`
+    SELECT COUNT(*) AS c FROM organization_members WHERE org_id = ?
+  `),
+  updateOrgMemberRole: db.prepare(`
+    UPDATE organization_members SET role = ? WHERE org_id = ? AND user_id = ?
+  `),
+  removeOrgMember: db.prepare(`
+    DELETE FROM organization_members WHERE org_id = ? AND user_id = ?
+  `),
+  insertOrgInvite: db.prepare(`
+    INSERT INTO organization_invites
+      (code, org_id, created_by, role, created_at, max_uses, use_count, expires_at)
+    VALUES (?, ?, ?, ?, ?, ?, 0, ?)
+  `),
+  getOrgInvite: db.prepare(`SELECT * FROM organization_invites WHERE code = ?`),
+  listOrgInvites: db.prepare(`
+    SELECT * FROM organization_invites WHERE org_id = ? ORDER BY created_at DESC
+  `),
+  deleteOrgInvite: db.prepare(`DELETE FROM organization_invites WHERE code = ?`),
+  bumpOrgInviteUse: db.prepare(`
+    UPDATE organization_invites SET use_count = use_count + 1
+    WHERE code = ?
+      AND (max_uses IS NULL OR use_count < max_uses)
+      AND (expires_at IS NULL OR expires_at > ?)
   `),
 };
 
@@ -478,6 +617,7 @@ export interface RoomRow {
   key_ciphertext: string | null;
   key_hint: string | null;
   owner_id: string | null;
+  org_id: string | null;
 }
 
 export interface CreateRoomInput {
@@ -497,6 +637,36 @@ export interface CreateRoomInput {
   keyCiphertext?: string | null;
   keyHint?: string | null;
   ownerId?: string | null;
+  orgId?: string | null;
+}
+
+export type OrgRoleRow = "owner" | "admin" | "member";
+
+export interface OrganizationRow {
+  id: string;
+  name: string;
+  slug: string;
+  allowed_domains: string;
+  created_by: string;
+  created_at: number;
+}
+
+export interface OrganizationMemberRow {
+  org_id: string;
+  user_id: string;
+  role: OrgRoleRow;
+  created_at: number;
+}
+
+export interface OrganizationInviteRow {
+  code: string;
+  org_id: string;
+  created_by: string;
+  role: OrgRoleRow;
+  created_at: number;
+  max_uses: number | null;
+  use_count: number;
+  expires_at: number | null;
 }
 
 function parseTodosJson(
@@ -596,6 +766,7 @@ export function createRoom(input: CreateRoomInput): RoomRow {
     input.keyCiphertext ?? null,
     input.keyHint ?? null,
     input.ownerId ?? null,
+    input.orgId ?? null,
   );
   return stmts.getRoom.get(input.id) as RoomRow;
 }
@@ -980,7 +1151,167 @@ export function getOnlineWorkers(
 }
 
 export function listRoomsByUser(userId: string): RoomRow[] {
-  return stmts.listRoomsByUser.all(userId, userId) as RoomRow[];
+  return stmts.listRoomsByUser.all(userId, userId, userId) as RoomRow[];
+}
+
+export function listPersonalRoomsByUser(userId: string): RoomRow[] {
+  return stmts.listPersonalRoomsByUser.all(userId, userId) as RoomRow[];
+}
+
+export function listRoomsByOrg(orgId: string): RoomRow[] {
+  return stmts.listRoomsByOrg.all(orgId) as RoomRow[];
+}
+
+export function createOrganization(input: {
+  id: string;
+  name: string;
+  slug: string;
+  allowedDomains?: string;
+  createdBy: string;
+}): OrganizationRow {
+  const now = Date.now();
+  stmts.insertOrg.run(
+    input.id,
+    input.name,
+    input.slug,
+    input.allowedDomains ?? "",
+    input.createdBy,
+    now,
+  );
+  return stmts.getOrg.get(input.id) as OrganizationRow;
+}
+
+export function getOrganization(id: string): OrganizationRow | undefined {
+  return stmts.getOrg.get(id) as OrganizationRow | undefined;
+}
+
+export function getOrganizationBySlug(
+  slug: string,
+): OrganizationRow | undefined {
+  return stmts.getOrgBySlug.get(slug) as OrganizationRow | undefined;
+}
+
+export function updateOrganization(
+  id: string,
+  input: { name: string; slug: string; allowedDomains: string },
+): void {
+  stmts.updateOrg.run(input.name, input.slug, input.allowedDomains, id);
+}
+
+export function deleteOrganization(id: string): void {
+  stmts.deleteOrg.run(id);
+}
+
+export function listOrganizationsForUser(
+  userId: string,
+): Array<OrganizationRow & { member_role: OrgRoleRow }> {
+  return stmts.listOrgsForUser.all(userId) as Array<
+    OrganizationRow & { member_role: OrgRoleRow }
+  >;
+}
+
+export function listOrganizationsWithDomains(): OrganizationRow[] {
+  return stmts.listOrgsByDomain.all() as OrganizationRow[];
+}
+
+export function addOrganizationMember(
+  orgId: string,
+  userId: string,
+  role: OrgRoleRow,
+): void {
+  stmts.addOrgMember.run(orgId, userId, role, Date.now());
+}
+
+export function getOrganizationMember(
+  orgId: string,
+  userId: string,
+): OrganizationMemberRow | undefined {
+  return stmts.getOrgMember.get(orgId, userId) as
+    | OrganizationMemberRow
+    | undefined;
+}
+
+export function listOrganizationMembers(orgId: string): Array<{
+  org_id: string;
+  user_id: string;
+  role: OrgRoleRow;
+  created_at: number;
+  email: string;
+  name: string;
+}> {
+  return stmts.listOrgMembers.all(orgId) as Array<{
+    org_id: string;
+    user_id: string;
+    role: OrgRoleRow;
+    created_at: number;
+    email: string;
+    name: string;
+  }>;
+}
+
+export function countOrganizationMembers(orgId: string): number {
+  const row = stmts.countOrgMembers.get(orgId) as { c: number };
+  return row?.c ?? 0;
+}
+
+export function updateOrganizationMemberRole(
+  orgId: string,
+  userId: string,
+  role: OrgRoleRow,
+): void {
+  stmts.updateOrgMemberRole.run(role, orgId, userId);
+}
+
+export function removeOrganizationMember(
+  orgId: string,
+  userId: string,
+): void {
+  stmts.removeOrgMember.run(orgId, userId);
+}
+
+export function createOrganizationInvite(input: {
+  code: string;
+  orgId: string;
+  createdBy: string;
+  role?: OrgRoleRow;
+  maxUses?: number | null;
+  expiresAt?: number | null;
+}): OrganizationInviteRow {
+  stmts.insertOrgInvite.run(
+    input.code,
+    input.orgId,
+    input.createdBy,
+    input.role ?? "member",
+    Date.now(),
+    input.maxUses ?? null,
+    input.expiresAt ?? null,
+  );
+  return stmts.getOrgInvite.get(input.code) as OrganizationInviteRow;
+}
+
+export function getOrganizationInvite(
+  code: string,
+): OrganizationInviteRow | undefined {
+  return stmts.getOrgInvite.get(code) as OrganizationInviteRow | undefined;
+}
+
+export function listOrganizationInvites(
+  orgId: string,
+): OrganizationInviteRow[] {
+  return stmts.listOrgInvites.all(orgId) as OrganizationInviteRow[];
+}
+
+export function deleteOrganizationInvite(code: string): void {
+  stmts.deleteOrgInvite.run(code);
+}
+
+export function useOrganizationInvite(code: string): boolean {
+  const result = stmts.bumpOrgInviteUse.run(code, Date.now());
+  return result.changes > 0;
+}
+
+export function isOrganizationMember(orgId: string, userId: string): boolean {
+  return Boolean(getOrganizationMember(orgId, userId));
 }
 
 // --- Agents ---
