@@ -389,11 +389,17 @@ export class RoomManager {
           setUserAnthropicByokKey(ownerId, pasted);
           anthropicApiKey = pasted;
         } else {
-          anthropicApiKey = resolveAnthropicApiKey(ownerId);
+          anthropicApiKey = resolveAnthropicApiKey(
+            ownerId,
+            null,
+            req.orgId?.trim() || null,
+          );
         }
         if (!anthropicApiKey) {
           throw new Error(
-            "Paste your Anthropic API key for Claude Code (or set ANTHROPIC_API_KEY on the server)",
+            req.orgId?.trim()
+              ? "Set a shared Anthropic key in Team settings, paste your key, or set ANTHROPIC_API_KEY on the server"
+              : "Paste your Anthropic API key for Claude Code (or set ANTHROPIC_API_KEY on the server)",
           );
         }
       } else if (!ownerId) {
@@ -723,7 +729,7 @@ export class RoomManager {
   ): ClaudeSandboxSession {
     const apiKey =
       anthropicApiKey?.trim() ||
-      resolveAnthropicApiKey(row.owner_id) ||
+      resolveAnthropicApiKey(row.owner_id, null, row.org_id) ||
       "";
     const agentId = agentRow.id;
     const roomId = row.id;
@@ -2360,11 +2366,17 @@ export class RoomManager {
           setUserAnthropicByokKey(actorUserId, pasted);
           anthropicApiKey = pasted;
         } else {
-          anthropicApiKey = resolveAnthropicApiKey(actorUserId);
+          anthropicApiKey = resolveAnthropicApiKey(
+            actorUserId,
+            null,
+            row.org_id,
+          );
         }
         if (!anthropicApiKey) {
           throw new Error(
-            "Paste your Anthropic API key for Claude Code (or set ANTHROPIC_API_KEY on the server)",
+            row.org_id
+              ? "Set a shared Anthropic key in Team settings, paste your key, or set ANTHROPIC_API_KEY on the server"
+              : "Paste your Anthropic API key for Claude Code (or set ANTHROPIC_API_KEY on the server)",
           );
         }
       } else if (row.auth_mode !== "cli") {

@@ -86,7 +86,39 @@ describe("organization persistence", () => {
     expect(orgKeys.orgCursorKeyConfigured(org.id)).toBe(true);
     expect(orgKeys.getOrgCursorKey(org.id)).toBe("cursor_org_shared_key");
 
+    const anth = orgKeys.setOrgAnthropicKey(org.id, "sk-ant-org-shared");
+    expect(anth.hint.length).toBeGreaterThan(0);
+    expect(orgKeys.orgAnthropicKeyConfigured(org.id)).toBe(true);
+    expect(orgKeys.getOrgAnthropicKey(org.id)).toBe("sk-ant-org-shared");
+
     orgKeys.clearOrgCursorKey(org.id);
+    orgKeys.clearOrgAnthropicKey(org.id);
     expect(orgKeys.orgCursorKeyConfigured(org.id)).toBe(false);
+    expect(orgKeys.orgAnthropicKeyConfigured(org.id)).toBe(false);
+  });
+
+  it("resolves Anthropic key with org shared key before user BYOK", async () => {
+    const anthropic = await import("../server/userAnthropicByok.js");
+    const ownerId = `user_org_anth_${Date.now()}`;
+    db.createUser(ownerId, `${ownerId}@acme.com`, "Owner", "x");
+    const org = db.createOrganization({
+      id: `org_anth_${Date.now()}`,
+      name: "Anth Org",
+      slug: `anth-org-${Date.now()}`,
+      createdBy: ownerId,
+    });
+    db.addOrganizationMember(org.id, ownerId, "owner");
+    anthropic.setUserAnthropicByokKey(ownerId, "sk-ant-user-personal");
+    orgKeys.setOrgAnthropicKey(org.id, "sk-ant-team-shared");
+
+    expect(anthropic.resolveAnthropicApiKey(ownerId, null, org.id)).toBe(
+      "sk-ant-team-shared",
+    );
+    expect(anthropic.resolveAnthropicApiKey(ownerId, "sk-ant-pasted", org.id)).toBe(
+      "sk-ant-pasted",
+    );
+    expect(anthropic.resolveAnthropicApiKey(ownerId)).toBe(
+      "sk-ant-user-personal",
+    );
   });
 });

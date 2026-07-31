@@ -6,22 +6,40 @@ import {
   maskApiKey,
 } from "./keyCrypto.js";
 
-function settingKey(orgId: string): string {
+const CLEARED_SENTINEL = "__cleared__";
+
+function cursorSettingKey(orgId: string): string {
   return `org_cursor_key:${orgId}`;
 }
 
-const CLEARED_SENTINEL = "__cleared__";
+function anthropicSettingKey(orgId: string): string {
+  return `org_anthropic_key:${orgId}`;
+}
 
-/** Decrypt the org's shared Cursor API key, or empty string. */
-export function getOrgCursorKey(orgId: string): string {
-  const stored = db.getSetting(settingKey(orgId));
+function readOrgKey(setting: string, label: string): string {
+  const stored = db.getSetting(setting);
   if (!stored || stored === CLEARED_SENTINEL) return "";
   try {
     return decryptApiKey(stored);
   } catch (err) {
-    console.error(`Failed to decrypt org Cursor key for ${orgId}:`, err);
+    console.error(`Failed to decrypt ${label}:`, err);
     return "";
   }
+}
+
+function writeOrgKey(setting: string, apiKey: string): { hint: string } {
+  const trimmed = apiKey.trim();
+  if (!trimmed) throw new Error("apiKey is required");
+  if (!encryptionConfigured()) {
+    throw new Error("KEY_ENCRYPTION_SECRET is required to store an org key");
+  }
+  db.setSetting(setting, encryptApiKey(trimmed));
+  return { hint: maskApiKey(trimmed) };
+}
+
+/** Decrypt the org's shared Cursor API key, or empty string. */
+export function getOrgCursorKey(orgId: string): string {
+  return readOrgKey(cursorSettingKey(orgId), `org Cursor key for ${orgId}`);
 }
 
 export function orgCursorKeyConfigured(orgId: string): boolean {
@@ -37,15 +55,37 @@ export function setOrgCursorKey(
   orgId: string,
   apiKey: string,
 ): { hint: string } {
-  const trimmed = apiKey.trim();
-  if (!trimmed) throw new Error("apiKey is required");
-  if (!encryptionConfigured()) {
-    throw new Error("KEY_ENCRYPTION_SECRET is required to store an org key");
-  }
-  db.setSetting(settingKey(orgId), encryptApiKey(trimmed));
-  return { hint: maskApiKey(trimmed) };
+  return writeOrgKey(cursorSettingKey(orgId), apiKey);
 }
 
 export function clearOrgCursorKey(orgId: string): void {
-  db.setSetting(settingKey(orgId), CLEARED_SENTINEL);
+  db.setSetting(cursorSettingKey(orgId), CLEARED_SENTINEL);
+}
+
+/** Decrypt the org's shared Anthropic API key, or empty string. */
+export function getOrgAnthropicKey(orgId: string): string {
+  return readOrgKey(
+    anthropicSettingKey(orgId),
+    `org Anthropic key for ${orgId}`,
+  );
+}
+
+export function orgAnthropicKeyConfigured(orgId: string): boolean {
+  return getOrgAnthropicKey(orgId).length > 0;
+}
+
+export function orgAnthropicKeyHint(orgId: string): string | null {
+  const key = getOrgAnthropicKey(orgId);
+  return key ? maskApiKey(key) : null;
+}
+
+export function setOrgAnthropicKey(
+  orgId: string,
+  apiKey: string,
+): { hint: string } {
+  return writeOrgKey(anthropicSettingKey(orgId), apiKey);
+}
+
+export function clearOrgAnthropicKey(orgId: string): void {
+  db.setSetting(anthropicSettingKey(orgId), CLEARED_SENTINEL);
 }

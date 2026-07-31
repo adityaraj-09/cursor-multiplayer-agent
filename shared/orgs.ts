@@ -14,6 +14,9 @@ export interface OrgInfo {
   /** Masked Cursor key hint when an org shared key is configured. */
   cursorKeyHint?: string | null;
   cursorKeyConfigured: boolean;
+  /** Masked Anthropic key hint when an org shared key is configured. */
+  anthropicKeyHint?: string | null;
+  anthropicKeyConfigured: boolean;
 }
 
 export interface OrgMemberInfo {
@@ -58,6 +61,23 @@ export function formatAllowedDomains(domains: string[]): string {
 
 export function canManageOrg(role: OrgRole | null | undefined): boolean {
   return role === "owner" || role === "admin";
+}
+
+export function orgRoleLabel(role: OrgRole): string {
+  if (role === "owner") return "Owner";
+  if (role === "admin") return "Admin";
+  return "Member";
+}
+
+/** Short permission blurb for the team settings UI. */
+export function orgRoleDescription(role: OrgRole): string {
+  if (role === "owner") {
+    return "Full control — transfer ownership and delete the team";
+  }
+  if (role === "admin") {
+    return "Manage keys, invites, and member roles";
+  }
+  return "Create and join team sessions";
 }
 
 export function slugifyOrgName(name: string): string {

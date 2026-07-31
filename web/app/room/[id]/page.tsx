@@ -728,6 +728,7 @@ function LiveRoom({
         models={models}
         defaultModelId={selectedModelId}
         runtime={runtime}
+        orgId={roomInfo?.orgId}
       />
 
       <footer className="relative z-20 border-t border-[#2b2b2b]/90 bg-[#171717]/95 backdrop-blur-xl shrink-0 overflow-hidden pb-[env(safe-area-inset-bottom)] shadow-[0_-20px_60px_rgba(0,0,0,0.24)]">
