@@ -148,6 +148,165 @@ body {
   }
 }
 
+/* Scroll-triggered reveal (see Reveal.tsx) */
+.landing-reveal {
+  opacity: 0;
+  transition:
+    opacity 0.7s cubic-bezier(0.16, 1, 0.3, 1),
+    transform 0.7s cubic-bezier(0.16, 1, 0.3, 1);
+  will-change: opacity, transform;
+}
+
+.landing-reveal-up {
+  transform: translateY(28px);
+}
+
+.landing-reveal-left {
+  transform: translateX(-28px);
+}
+
+.landing-reveal-right {
+  transform: translateX(28px);
+}
+
+.landing-reveal-scale {
+  transform: scale(0.94);
+}
+
+.landing-reveal.is-visible {
+  opacity: 1;
+  transform: translate(0, 0) scale(1);
+}
+
+/* Marquee logo strip */
+.landing-marquee {
+  --marquee-gap: 3.5rem;
+  display: flex;
+  width: max-content;
+  gap: var(--marquee-gap);
+  animation: landing-marquee 26s linear infinite;
+}
+
+.landing-marquee:hover {
+  animation-play-state: paused;
+}
+
+@keyframes landing-marquee {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(calc(-50% - var(--marquee-gap) / 2));
+  }
+}
+
+/* Feature / audience card hover lift */
+.landing-card {
+  transition:
+    transform 0.35s cubic-bezier(0.16, 1, 0.3, 1),
+    border-color 0.35s ease,
+    box-shadow 0.35s ease,
+    background-color 0.35s ease;
+}
+
+.landing-card:hover {
+  transform: translateY(-6px);
+  border-color: rgba(25, 25, 25, 0.18);
+  box-shadow: 0 24px 50px rgba(25, 25, 25, 0.08);
+}
+
+.landing-card-icon {
+  transition: transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.landing-card:hover .landing-card-icon {
+  transform: scale(1.08) rotate(-4deg);
+}
+
+/* FAQ accordion */
+.landing-accordion-panel {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.landing-accordion-panel.is-open {
+  grid-template-rows: 1fr;
+}
+
+.landing-accordion-panel > div {
+  overflow: hidden;
+}
+
+.landing-accordion-icon {
+  transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.landing-accordion-icon.is-open {
+  transform: rotate(45deg);
+}
+
+/* Mockup "screenshot" chrome — subtle idle motion so it reads as alive */
+.landing-mockup-float {
+  animation: landing-mockup-float 8s ease-in-out infinite;
+}
+
+@keyframes landing-mockup-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-8px);
+  }
+}
+
+.landing-typing-dot {
+  animation: landing-typing 1.2s ease-in-out infinite;
+}
+
+@keyframes landing-typing {
+  0%,
+  60%,
+  100% {
+    opacity: 0.25;
+    transform: translateY(0);
+  }
+  30% {
+    opacity: 1;
+    transform: translateY(-3px);
+  }
+}
+
+.landing-caret {
+  animation: landing-caret-blink 1s step-end infinite;
+}
+
+@keyframes landing-caret-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+
+.landing-diff-line {
+  animation: landing-diff-in 0.5s ease both;
+}
+
+@keyframes landing-diff-in {
+  from {
+    opacity: 0;
+    transform: translateX(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .landing-fade,
   .landing-rise,
@@ -155,12 +314,23 @@ body {
   .landing-float-delay,
   .landing-float-slow,
   .landing-pulse,
-  .landing-draw {
+  .landing-draw,
+  .landing-marquee,
+  .landing-mockup-float,
+  .landing-typing-dot,
+  .landing-caret,
+  .landing-diff-line {
     animation: none;
   }
 
   .landing-draw {
     stroke-dashoffset: 0;
+  }
+
+  .landing-reveal {
+    opacity: 1;
+    transform: none;
+    transition: none;
   }
 }
 
