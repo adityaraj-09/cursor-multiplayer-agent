@@ -1,4 +1,13 @@
-export type { RoomRow, CreateRoomInput, AgentRow, CreateAgentInput } from "./sqlite.js";
+export type {
+  RoomRow,
+  CreateRoomInput,
+  AgentRow,
+  CreateAgentInput,
+  OrgRoleRow,
+  OrganizationRow,
+  OrganizationMemberRow,
+  OrganizationInviteRow,
+} from "./sqlite.js";
 
 const url = process.env.DATABASE_URL ?? "";
 const usePostgres = url.startsWith("postgres");
@@ -57,6 +66,29 @@ export const registerWorker = backend.registerWorker;
 export const updateWorkerStatus = backend.updateWorkerStatus;
 export const getOnlineWorkers = backend.getOnlineWorkers;
 export const listRoomsByUser = backend.listRoomsByUser;
+export const listPersonalRoomsByUser = backend.listPersonalRoomsByUser;
+export const listRoomsByOrg = backend.listRoomsByOrg;
+
+// Organizations
+export const createOrganization = backend.createOrganization;
+export const getOrganization = backend.getOrganization;
+export const getOrganizationBySlug = backend.getOrganizationBySlug;
+export const updateOrganization = backend.updateOrganization;
+export const deleteOrganization = backend.deleteOrganization;
+export const listOrganizationsForUser = backend.listOrganizationsForUser;
+export const listOrganizationsWithDomains = backend.listOrganizationsWithDomains;
+export const addOrganizationMember = backend.addOrganizationMember;
+export const getOrganizationMember = backend.getOrganizationMember;
+export const listOrganizationMembers = backend.listOrganizationMembers;
+export const countOrganizationMembers = backend.countOrganizationMembers;
+export const updateOrganizationMemberRole = backend.updateOrganizationMemberRole;
+export const removeOrganizationMember = backend.removeOrganizationMember;
+export const createOrganizationInvite = backend.createOrganizationInvite;
+export const getOrganizationInvite = backend.getOrganizationInvite;
+export const listOrganizationInvites = backend.listOrganizationInvites;
+export const deleteOrganizationInvite = backend.deleteOrganizationInvite;
+export const useOrganizationInvite = backend.useOrganizationInvite;
+export const isOrganizationMember = backend.isOrganizationMember;
 
 // Agents
 export const createAgent = backend.createAgent;

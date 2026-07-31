@@ -36,7 +36,8 @@ async function initSchema() {
       auto_create_pr BIGINT NOT NULL DEFAULT 0,
       key_ciphertext TEXT,
       key_hint TEXT,
-      owner_id TEXT
+      owner_id TEXT,
+      org_id TEXT
     );
 
     CREATE TABLE IF NOT EXISTS steer_messages (
@@ -153,6 +154,34 @@ async function initSchema() {
       expires_at BIGINT NOT NULL,
       PRIMARY KEY (room_id, path)
     );
+
+    CREATE TABLE IF NOT EXISTS organizations (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      slug TEXT NOT NULL UNIQUE,
+      allowed_domains TEXT NOT NULL DEFAULT '',
+      created_by TEXT NOT NULL REFERENCES users(id),
+      created_at BIGINT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS organization_members (
+      org_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      role TEXT NOT NULL DEFAULT 'member',
+      created_at BIGINT NOT NULL,
+      PRIMARY KEY (org_id, user_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS organization_invites (
+      code TEXT PRIMARY KEY,
+      org_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      created_by TEXT NOT NULL REFERENCES users(id),
+      role TEXT NOT NULL DEFAULT 'member',
+      created_at BIGINT NOT NULL,
+      max_uses INTEGER,
+      use_count INTEGER NOT NULL DEFAULT 0,
+      expires_at BIGINT
+    );
   `);
 
   await pool.query(`
@@ -163,6 +192,9 @@ async function initSchema() {
   `);
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_agents_room ON agents(room_id, sort_order);
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_org_members_user ON organization_members(user_id);
   `);
 
   const migrations = [
@@ -182,6 +214,7 @@ async function initSchema() {
     `ALTER TABLE invite_links ADD COLUMN IF NOT EXISTS expires_at BIGINT`,
     `ALTER TABLE messages ADD COLUMN IF NOT EXISTS agent_id TEXT`,
     `ALTER TABLE messages ADD COLUMN IF NOT EXISTS todos_json TEXT`,
+    `ALTER TABLE rooms ADD COLUMN IF NOT EXISTS org_id TEXT`,
   ];
 
   for (const sql of migrations) {
@@ -191,6 +224,10 @@ async function initSchema() {
       // column already exists
     }
   }
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_rooms_org ON rooms(org_id);
+  `);
 }
 
 const ready = initSchema();
@@ -220,6 +257,7 @@ export interface RoomRow {
   key_ciphertext: string | null;
   key_hint: string | null;
   owner_id: string | null;
+  org_id: string | null;
 }
 
 export interface CreateRoomInput {
@@ -239,6 +277,36 @@ export interface CreateRoomInput {
   keyCiphertext?: string | null;
   keyHint?: string | null;
   ownerId?: string | null;
+  orgId?: string | null;
+}
+
+export type OrgRoleRow = "owner" | "admin" | "member";
+
+export interface OrganizationRow {
+  id: string;
+  name: string;
+  slug: string;
+  allowed_domains: string;
+  created_by: string;
+  created_at: number;
+}
+
+export interface OrganizationMemberRow {
+  org_id: string;
+  user_id: string;
+  role: OrgRoleRow;
+  created_at: number;
+}
+
+export interface OrganizationInviteRow {
+  code: string;
+  org_id: string;
+  created_by: string;
+  role: OrgRoleRow;
+  created_at: number;
+  max_uses: number | null;
+  use_count: number;
+  expires_at: number | null;
 }
 
 function pgRowToRoom(r: Record<string, unknown>): RoomRow {
@@ -262,6 +330,7 @@ function pgRowToRoom(r: Record<string, unknown>): RoomRow {
     key_ciphertext: (r.key_ciphertext as string) ?? null,
     key_hint: (r.key_hint as string) ?? null,
     owner_id: (r.owner_id as string) ?? null,
+    org_id: (r.org_id as string) ?? null,
   };
 }
 
@@ -292,6 +361,43 @@ function rowToMessage(r: Record<string, unknown>): ChatMessage {
     status: r.status as ChatMessage["status"],
     ts: num(r.ts as string)!,
     agentId: (r.agent_id as string) || undefined,
+  };
+}
+
+function rowToOrganization(r: Record<string, unknown>): OrganizationRow {
+  return {
+    id: r.id as string,
+    name: r.name as string,
+    slug: r.slug as string,
+    allowed_domains: r.allowed_domains as string,
+    created_by: r.created_by as string,
+    created_at: num(r.created_at as string | number)!,
+  };
+}
+
+function rowToOrganizationMember(
+  r: Record<string, unknown>,
+): OrganizationMemberRow {
+  return {
+    org_id: r.org_id as string,
+    user_id: r.user_id as string,
+    role: r.role as OrgRoleRow,
+    created_at: num(r.created_at as string | number)!,
+  };
+}
+
+function rowToOrganizationInvite(
+  r: Record<string, unknown>,
+): OrganizationInviteRow {
+  return {
+    code: r.code as string,
+    org_id: r.org_id as string,
+    created_by: r.created_by as string,
+    role: r.role as OrgRoleRow,
+    created_at: num(r.created_at as string | number)!,
+    max_uses: num(r.max_uses as string | number | null),
+    use_count: num(r.use_count as string | number) ?? 0,
+    expires_at: num(r.expires_at as string | number | null),
   };
 }
 
@@ -337,8 +443,8 @@ export function createRoom(input: CreateRoomInput): RoomRow {
     `INSERT INTO rooms (
       id, name, repo_path, agent_command, created_at, last_active_at, status,
       runtime, auth_mode, model_id, repo_url, starting_ref, cursor_agent_id,
-      cursor_session_id, pr_url, auto_create_pr, key_ciphertext, key_hint, owner_id
-    ) VALUES ($1,$2,$3,$4,$5,$6,'active',$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+      cursor_session_id, pr_url, auto_create_pr, key_ciphertext, key_hint, owner_id, org_id
+    ) VALUES ($1,$2,$3,$4,$5,$6,'active',$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
     RETURNING *`,
     [
       input.id,
@@ -359,6 +465,7 @@ export function createRoom(input: CreateRoomInput): RoomRow {
       input.keyCiphertext ?? null,
       input.keyHint ?? null,
       input.ownerId ?? null,
+      input.orgId ?? null,
     ],
   );
   return pgRowToRoom(result[0]);
@@ -884,10 +991,258 @@ export function listRoomsByUser(userId: string): RoomRow[] {
   return syncQuery<Record<string, unknown>>(
     `SELECT DISTINCT r.* FROM rooms r
      LEFT JOIN room_members rm ON rm.room_id = r.id
-     WHERE r.owner_id = $1 OR rm.user_id = $2
+     LEFT JOIN organization_members om ON om.org_id = r.org_id
+     WHERE r.owner_id = $1 OR rm.user_id = $2 OR om.user_id = $3
+     ORDER BY r.last_active_at DESC`,
+    [userId, userId, userId],
+  ).map(pgRowToRoom);
+}
+
+export function listPersonalRoomsByUser(userId: string): RoomRow[] {
+  return syncQuery<Record<string, unknown>>(
+    `SELECT DISTINCT r.* FROM rooms r
+     LEFT JOIN room_members rm ON rm.room_id = r.id
+     WHERE (r.org_id IS NULL OR r.org_id = '')
+       AND (r.owner_id = $1 OR rm.user_id = $2)
      ORDER BY r.last_active_at DESC`,
     [userId, userId],
   ).map(pgRowToRoom);
+}
+
+export function listRoomsByOrg(orgId: string): RoomRow[] {
+  return syncQuery<Record<string, unknown>>(
+    `SELECT * FROM rooms WHERE org_id = $1 ORDER BY last_active_at DESC`,
+    [orgId],
+  ).map(pgRowToRoom);
+}
+
+export function createOrganization(input: {
+  id: string;
+  name: string;
+  slug: string;
+  allowedDomains?: string;
+  createdBy: string;
+}): OrganizationRow {
+  const now = Date.now();
+  const rows = syncQuery<Record<string, unknown>>(
+    `INSERT INTO organizations (id, name, slug, allowed_domains, created_by, created_at)
+     VALUES ($1,$2,$3,$4,$5,$6)
+     RETURNING *`,
+    [
+      input.id,
+      input.name,
+      input.slug,
+      input.allowedDomains ?? "",
+      input.createdBy,
+      now,
+    ],
+  );
+  return rowToOrganization(rows[0]);
+}
+
+export function getOrganization(id: string): OrganizationRow | undefined {
+  const rows = syncQuery<Record<string, unknown>>(
+    `SELECT * FROM organizations WHERE id = $1`,
+    [id],
+  );
+  return rows.length ? rowToOrganization(rows[0]) : undefined;
+}
+
+export function getOrganizationBySlug(
+  slug: string,
+): OrganizationRow | undefined {
+  const rows = syncQuery<Record<string, unknown>>(
+    `SELECT * FROM organizations WHERE slug = $1`,
+    [slug],
+  );
+  return rows.length ? rowToOrganization(rows[0]) : undefined;
+}
+
+export function updateOrganization(
+  id: string,
+  input: { name: string; slug: string; allowedDomains: string },
+): void {
+  syncQuery(
+    `UPDATE organizations SET name = $1, slug = $2, allowed_domains = $3 WHERE id = $4`,
+    [input.name, input.slug, input.allowedDomains, id],
+  );
+}
+
+export function deleteOrganization(id: string): void {
+  syncQuery(`DELETE FROM organizations WHERE id = $1`, [id]);
+}
+
+export function listOrganizationsForUser(
+  userId: string,
+): Array<OrganizationRow & { member_role: OrgRoleRow }> {
+  const rows = syncQuery<Record<string, unknown>>(
+    `SELECT o.*, om.role AS member_role
+     FROM organizations o
+     INNER JOIN organization_members om ON om.org_id = o.id
+     WHERE om.user_id = $1
+     ORDER BY LOWER(o.name) ASC`,
+    [userId],
+  );
+  return rows.map((r) => ({
+    ...rowToOrganization(r),
+    member_role: r.member_role as OrgRoleRow,
+  }));
+}
+
+export function listOrganizationsWithDomains(): OrganizationRow[] {
+  return syncQuery<Record<string, unknown>>(
+    `SELECT * FROM organizations
+     WHERE allowed_domains != ''
+     ORDER BY LOWER(name) ASC`,
+  ).map(rowToOrganization);
+}
+
+export function addOrganizationMember(
+  orgId: string,
+  userId: string,
+  role: OrgRoleRow,
+): void {
+  syncQuery(
+    `INSERT INTO organization_members (org_id, user_id, role, created_at)
+     VALUES ($1,$2,$3,$4)
+     ON CONFLICT(org_id, user_id) DO UPDATE SET
+       role = excluded.role,
+       created_at = excluded.created_at`,
+    [orgId, userId, role, Date.now()],
+  );
+}
+
+export function getOrganizationMember(
+  orgId: string,
+  userId: string,
+): OrganizationMemberRow | undefined {
+  const rows = syncQuery<Record<string, unknown>>(
+    `SELECT * FROM organization_members WHERE org_id = $1 AND user_id = $2`,
+    [orgId, userId],
+  );
+  return rows.length ? rowToOrganizationMember(rows[0]) : undefined;
+}
+
+export function listOrganizationMembers(orgId: string): Array<{
+  org_id: string;
+  user_id: string;
+  role: OrgRoleRow;
+  created_at: number;
+  email: string;
+  name: string;
+}> {
+  const rows = syncQuery<Record<string, unknown>>(
+    `SELECT om.org_id, om.user_id, om.role, om.created_at, u.email, u.name
+     FROM organization_members om
+     INNER JOIN users u ON u.id = om.user_id
+     WHERE om.org_id = $1
+     ORDER BY
+       CASE om.role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 ELSE 2 END,
+       LOWER(u.name) ASC`,
+    [orgId],
+  );
+  return rows.map((r) => ({
+    ...rowToOrganizationMember(r),
+    email: r.email as string,
+    name: r.name as string,
+  }));
+}
+
+export function countOrganizationMembers(orgId: string): number {
+  const rows = syncQuery<{ c: string }>(
+    `SELECT COUNT(*)::text AS c FROM organization_members WHERE org_id = $1`,
+    [orgId],
+  );
+  return Number(rows[0]?.c ?? 0);
+}
+
+export function updateOrganizationMemberRole(
+  orgId: string,
+  userId: string,
+  role: OrgRoleRow,
+): void {
+  syncQuery(
+    `UPDATE organization_members SET role = $1 WHERE org_id = $2 AND user_id = $3`,
+    [role, orgId, userId],
+  );
+}
+
+export function removeOrganizationMember(
+  orgId: string,
+  userId: string,
+): void {
+  syncQuery(
+    `DELETE FROM organization_members WHERE org_id = $1 AND user_id = $2`,
+    [orgId, userId],
+  );
+}
+
+export function createOrganizationInvite(input: {
+  code: string;
+  orgId: string;
+  createdBy: string;
+  role?: OrgRoleRow;
+  maxUses?: number | null;
+  expiresAt?: number | null;
+}): OrganizationInviteRow {
+  const rows = syncQuery<Record<string, unknown>>(
+    `INSERT INTO organization_invites
+       (code, org_id, created_by, role, created_at, max_uses, use_count, expires_at)
+     VALUES ($1,$2,$3,$4,$5,$6,0,$7)
+     RETURNING *`,
+    [
+      input.code,
+      input.orgId,
+      input.createdBy,
+      input.role ?? "member",
+      Date.now(),
+      input.maxUses ?? null,
+      input.expiresAt ?? null,
+    ],
+  );
+  return rowToOrganizationInvite(rows[0]);
+}
+
+export function getOrganizationInvite(
+  code: string,
+): OrganizationInviteRow | undefined {
+  const rows = syncQuery<Record<string, unknown>>(
+    `SELECT * FROM organization_invites WHERE code = $1`,
+    [code],
+  );
+  return rows.length ? rowToOrganizationInvite(rows[0]) : undefined;
+}
+
+export function listOrganizationInvites(
+  orgId: string,
+): OrganizationInviteRow[] {
+  return syncQuery<Record<string, unknown>>(
+    `SELECT * FROM organization_invites WHERE org_id = $1 ORDER BY created_at DESC`,
+    [orgId],
+  ).map(rowToOrganizationInvite);
+}
+
+export function deleteOrganizationInvite(code: string): void {
+  syncQuery(`DELETE FROM organization_invites WHERE code = $1`, [code]);
+}
+
+export function useOrganizationInvite(code: string): boolean {
+  const rows = syncQuery<{ count: string }>(
+    `WITH updated AS (
+       UPDATE organization_invites SET use_count = use_count + 1
+       WHERE code = $1
+         AND (max_uses IS NULL OR use_count < max_uses)
+         AND (expires_at IS NULL OR expires_at > $2)
+       RETURNING 1
+     )
+     SELECT COUNT(*)::text AS count FROM updated`,
+    [code, Date.now()],
+  );
+  return Number(rows[0]?.count ?? 0) > 0;
+}
+
+export function isOrganizationMember(orgId: string, userId: string): boolean {
+  return Boolean(getOrganizationMember(orgId, userId));
 }
 
 // --- Agents ---

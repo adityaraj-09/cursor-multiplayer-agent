@@ -7,6 +7,14 @@ import type {
   RoomInfo,
   UserInfo,
 } from "../../shared/events";
+import type {
+  OrgInfo,
+  OrgInviteInfo,
+  OrgMemberInfo,
+  OrgRole,
+} from "../../shared/orgs";
+
+export type { OrgInfo, OrgInviteInfo, OrgMemberInfo, OrgRole };
 
 /**
  * Prefer NEXT_PUBLIC_API_URL (direct to Render).
@@ -203,8 +211,14 @@ export async function fetchCursorSessions(
   return data.sessions ?? [];
 }
 
-export async function fetchRooms(): Promise<RoomInfo[]> {
-  const res = await fetch(`${API_BASE}/rooms`, {
+export async function fetchRooms(opts?: {
+  /** `personal` for non-org rooms, an org id for team sessions, or omit for all. */
+  orgId?: string | null;
+}): Promise<RoomInfo[]> {
+  const params = new URLSearchParams();
+  if (opts?.orgId) params.set("orgId", opts.orgId);
+  const qs = params.toString();
+  const res = await fetch(`${API_BASE}/rooms${qs ? `?${qs}` : ""}`, {
     headers: await authHeaders(),
   });
   if (!res.ok) throw new Error("Failed to fetch rooms");
@@ -246,7 +260,7 @@ export async function fetchOrJoinRoom(id: string): Promise<RoomInfo> {
   }
 }
 
-export async function fetchAuthStatus(): Promise<{
+export async function fetchAuthStatus(opts?: { orgId?: string | null }): Promise<{
   serverKeyConfigured: boolean;
   serverKeySource: "env" | "stored" | "none";
   serverKeyHint: string | null;
@@ -258,8 +272,15 @@ export async function fetchAuthStatus(): Promise<{
   userAnthropicByokHint: string | null;
   e2bConfigured: boolean;
   canManageServerKey: boolean;
+  orgCursorKeyConfigured?: boolean;
+  orgCursorKeyHint?: string | null;
 }> {
-  const res = await fetch(`${API_BASE}/auth/status`, {
+  const params = new URLSearchParams();
+  if (opts?.orgId && opts.orgId !== "personal") {
+    params.set("orgId", opts.orgId);
+  }
+  const qs = params.toString();
+  const res = await fetch(`${API_BASE}/auth/status${qs ? `?${qs}` : ""}`, {
     headers: await authHeaders(),
   });
   if (!res.ok) throw new Error("Failed to fetch auth status");
@@ -351,6 +372,7 @@ export async function clearAnthropicByokKey(): Promise<void> {
 export async function fetchModels(opts: {
   authMode: AuthMode;
   apiKey?: string;
+  orgId?: string;
 }): Promise<ModelInfo[]> {
   const res = await fetch(`${API_BASE}/models`, {
     method: "POST",
@@ -371,6 +393,7 @@ export async function fetchModels(opts: {
 export async function fetchRepositories(opts: {
   authMode: AuthMode;
   apiKey?: string;
+  orgId?: string;
 }): Promise<RepoInfo[]> {
   const res = await fetch(`${API_BASE}/repositories`, {
     method: "POST",
@@ -400,6 +423,7 @@ export async function createRoom(data: {
   apiKey?: string;
   backend?: "cursor" | "claude-code";
   anthropicApiKey?: string;
+  orgId?: string;
 }): Promise<RoomInfo> {
   const res = await fetch(`${API_BASE}/rooms`, {
     method: "POST",
@@ -633,6 +657,223 @@ export async function abortRoomAgent(
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.error || "Failed to abort agent");
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Organizations / workspaces
+// ---------------------------------------------------------------------------
+
+export async function fetchOrgs(): Promise<OrgInfo[]> {
+  const res = await fetch(`${API_BASE}/orgs`, {
+    headers: await authHeaders(),
+  });
+  if (!res.ok) throw new Error("Failed to fetch organizations");
+  const data = await res.json();
+  return data.orgs ?? [];
+}
+
+export async function fetchJoinableOrgs(): Promise<
+  Array<{ id: string; name: string; slug: string; allowedDomains: string[] }>
+> {
+  const res = await fetch(`${API_BASE}/orgs/joinable`, {
+    headers: await authHeaders(),
+  });
+  if (!res.ok) throw new Error("Failed to fetch joinable organizations");
+  const data = await res.json();
+  return data.orgs ?? [];
+}
+
+export async function createOrg(data: {
+  name: string;
+  allowedDomains?: string[];
+}): Promise<OrgInfo> {
+  const res = await fetch(`${API_BASE}/orgs`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(await authHeaders()),
+    },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Failed to create organization");
+  }
+  const body = await res.json();
+  return body.org as OrgInfo;
+}
+
+export async function fetchOrg(orgId: string): Promise<OrgInfo> {
+  const res = await fetch(`${API_BASE}/orgs/${orgId}`, {
+    headers: await authHeaders(),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Organization not found");
+  }
+  const body = await res.json();
+  return body.org as OrgInfo;
+}
+
+export async function updateOrg(
+  orgId: string,
+  data: { name?: string; allowedDomains?: string[] },
+): Promise<OrgInfo> {
+  const res = await fetch(`${API_BASE}/orgs/${orgId}`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+      ...(await authHeaders()),
+    },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Failed to update organization");
+  }
+  const body = await res.json();
+  return body.org as OrgInfo;
+}
+
+export async function joinOrgByDomain(orgId: string): Promise<OrgInfo> {
+  const res = await fetch(`${API_BASE}/orgs/${orgId}/join-by-domain`, {
+    method: "POST",
+    headers: await authHeaders(),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Failed to join organization");
+  }
+  const body = await res.json();
+  return body.org as OrgInfo;
+}
+
+export async function fetchOrgMembers(orgId: string): Promise<OrgMemberInfo[]> {
+  const res = await fetch(`${API_BASE}/orgs/${orgId}/members`, {
+    headers: await authHeaders(),
+  });
+  if (!res.ok) throw new Error("Failed to fetch members");
+  const data = await res.json();
+  return data.members ?? [];
+}
+
+export async function updateOrgMemberRole(
+  orgId: string,
+  userId: string,
+  role: OrgRole,
+): Promise<void> {
+  const res = await fetch(`${API_BASE}/orgs/${orgId}/members/${userId}`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+      ...(await authHeaders()),
+    },
+    body: JSON.stringify({ role }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Failed to update member");
+  }
+}
+
+export async function removeOrgMember(
+  orgId: string,
+  userId: string,
+): Promise<void> {
+  const res = await fetch(`${API_BASE}/orgs/${orgId}/members/${userId}`, {
+    method: "DELETE",
+    headers: await authHeaders(),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Failed to remove member");
+  }
+}
+
+export async function fetchOrgInvites(orgId: string): Promise<OrgInviteInfo[]> {
+  const res = await fetch(`${API_BASE}/orgs/${orgId}/invites`, {
+    headers: await authHeaders(),
+  });
+  if (!res.ok) throw new Error("Failed to fetch invites");
+  const data = await res.json();
+  return data.invites ?? [];
+}
+
+export async function createOrgInvite(
+  orgId: string,
+  data?: { role?: OrgRole; maxUses?: number | null },
+): Promise<OrgInviteInfo> {
+  const res = await fetch(`${API_BASE}/orgs/${orgId}/invites`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(await authHeaders()),
+    },
+    body: JSON.stringify(data ?? {}),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Failed to create invite");
+  }
+  const body = await res.json();
+  return body.invite as OrgInviteInfo;
+}
+
+export async function revokeOrgInvite(
+  orgId: string,
+  code: string,
+): Promise<void> {
+  const res = await fetch(`${API_BASE}/orgs/${orgId}/invites/${code}`, {
+    method: "DELETE",
+    headers: await authHeaders(),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Failed to revoke invite");
+  }
+}
+
+export async function joinOrgViaInvite(code: string): Promise<OrgInfo> {
+  const res = await fetch(`${API_BASE}/orgs/invites/${code}/join`, {
+    method: "POST",
+    headers: await authHeaders(),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Failed to join organization");
+  }
+  const body = await res.json();
+  return body.org as OrgInfo;
+}
+
+export async function setOrgCursorKey(
+  orgId: string,
+  apiKey: string,
+): Promise<{ cursorKeyConfigured: boolean; cursorKeyHint: string | null }> {
+  const res = await fetch(`${API_BASE}/orgs/${orgId}/cursor-key`, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+      ...(await authHeaders()),
+    },
+    body: JSON.stringify({ apiKey }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Failed to save org key");
+  }
+  return res.json();
+}
+
+export async function clearOrgCursorKey(orgId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/orgs/${orgId}/cursor-key`, {
+    method: "DELETE",
+    headers: await authHeaders(),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Failed to clear org key");
   }
 }
 

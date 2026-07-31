@@ -48,6 +48,7 @@ export default function RoomCard({ room }: RoomCardProps) {
               ? "BYOK"
               : "Server key"}
         </Badge>
+        {room.orgName && <Badge>{room.orgName}</Badge>}
         <Badge>{room.modelId}</Badge>
       </div>
 

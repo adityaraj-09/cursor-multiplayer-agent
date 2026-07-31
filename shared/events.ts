@@ -119,6 +119,9 @@ export interface RoomInfo {
   autoCreatePR?: boolean;
   keyHint?: string;
   ownerId?: string;
+  /** Organization that owns this session (null/undefined = personal). */
+  orgId?: string;
+  orgName?: string;
   inviteCode?: string;
   /** Active Cursor CLI chat id for the room's default agent (--resume). */
   cursorSessionId?: string;
