@@ -15,8 +15,54 @@ import {
 } from "./agent.js";
 import { listChatSessions } from "./listSessions.js";
 
-const WORKER_PROTOCOL = 2;
+const WORKER_PROTOCOL = 3;
 const MAX_CONCURRENT = Number(process.env.STEER_MAX_CONCURRENT_AGENTS || 4);
+const LOCK_WAIT_MS = 5000;
+
+interface LockResultPayload {
+  requestId: string;
+  granted: boolean;
+  holderAgentId?: string;
+}
+
+function acquireFileLock(
+  socket: Socket,
+  roomId: string,
+  agentId: string,
+  path: string,
+  callId: string,
+): Promise<{ granted: boolean; holderAgentId?: string }> {
+  const requestId = createHash("sha256")
+    .update(`${Date.now()}-${Math.random()}-${path}`)
+    .digest("hex")
+    .slice(0, 16);
+
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      socket.off("worker:lock-result", onResult);
+      resolve({ granted: false });
+    }, LOCK_WAIT_MS);
+
+    const onResult = (data: LockResultPayload) => {
+      if (data.requestId !== requestId) return;
+      clearTimeout(timer);
+      socket.off("worker:lock-result", onResult);
+      resolve({
+        granted: data.granted,
+        holderAgentId: data.holderAgentId,
+      });
+    };
+
+    socket.on("worker:lock-result", onResult);
+    socket.emit("worker:acquire-lock", {
+      requestId,
+      roomId,
+      agentId,
+      path,
+      callId,
+    });
+  });
+}
 
 interface RunPromptPayload {
   roomId: string;
@@ -26,6 +72,8 @@ interface RunPromptPayload {
   cwd?: string;
   modelId: string;
   sessionId?: string | null;
+  /** `cursor` (default) or `claude-code` */
+  backend?: string;
 }
 
 interface AbortPayload {
@@ -159,6 +207,8 @@ export function startWorker(repoPathOverride?: string): void {
       sessionId,
     } = payload;
     const agentId = payload.agentId || "default";
+    const backendKind =
+      payload.backend === "claude-code" ? "claude-code" : "cursor";
     const runKey = makeRunKey(roomId, agentId);
     const repoPath = repoPathOverride || payloadCwd || payloadRepoPath;
     const cwd = payloadCwd || repoPath;
@@ -225,6 +275,7 @@ export function startWorker(repoPathOverride?: string): void {
       ),
     );
     console.log(chalk.gray(`Cwd: ${cwd}`));
+    console.log(chalk.gray(`Backend: ${backendKind}`));
     console.log(chalk.gray(`Model: ${modelId}`));
     console.log(
       chalk.gray(
@@ -233,45 +284,81 @@ export function startWorker(repoPathOverride?: string): void {
     );
 
     const onEvent = (event: AgentStreamEvent) => {
-      const current = activeRuns.get(runKey);
-      if (!current || current.runSeq !== thisRun) return;
-      if (event.kind === "done" || event.kind === "error") {
-        current.emittedTerminal = true;
-      }
-      emitOrQueue("worker:agent-event", { roomId, agentId, event });
+      void (async () => {
+        const current = activeRuns.get(runKey);
+        if (!current || current.runSeq !== thisRun) return;
 
-      if (event.kind === "tool_start") {
-        console.log(chalk.yellow(`  ▸ ${event.name} ${event.detail}`));
-        if (event.path && event.callId) {
-          current.pendingCallPaths.set(event.callId, event.path);
-        }
-      } else if (event.kind === "tool_done") {
-        console.log(chalk.green(`  ✓ ${event.name} ${event.detail}`));
-        const path =
-          event.path ||
-          (event.callId
-            ? current.pendingCallPaths.get(event.callId)
-            : undefined);
-        if (isEditTool(event.name) && path && event.callId) {
-          current.editedPaths.set(path, event.callId);
-          if (event.diffPatch) {
-            emitOrQueue("worker:file-diff", {
+        if (
+          event.kind === "tool_start" &&
+          event.path &&
+          event.callId &&
+          event.name &&
+          isEditTool(event.name)
+        ) {
+          const lock = await acquireFileLock(
+            socket,
+            roomId,
+            agentId,
+            event.path,
+            event.callId,
+          );
+          if (!lock.granted) {
+            const holder = lock.holderAgentId || "another agent";
+            const message = `File \`${event.path}\` is locked by ${holder}. Wait for the other agent to finish or ask the host to release the lock.`;
+            console.error(chalk.red(`  ✗ Lock denied: ${message}`));
+            current.abort();
+            abortRun(runKey);
+            emitOrQueue("worker:agent-event", {
               roomId,
               agentId,
-              callId: event.callId,
-              toolName: event.name || "edit",
-              path,
-              patch: event.diffPatch,
+              event: { kind: "error", message } satisfies AgentStreamEvent,
             });
+            finishRun({ kind: "error", message });
+            return;
           }
         }
-      } else if (event.kind === "assistant_final") {
-        console.log(chalk.white(`  Assistant: ${event.text.slice(0, 120)}…`));
-      } else if (event.kind === "error") {
-        console.error(chalk.red(`  ✗ Error: ${event.message}`));
-      } else if (event.kind === "done") {
-        console.log(chalk.green("  ✓ Agent finished"));
-      }
+
+        if (event.kind === "done" || event.kind === "error") {
+          current.emittedTerminal = true;
+        }
+        emitOrQueue("worker:agent-event", { roomId, agentId, event });
+
+        if (event.kind === "tool_start") {
+          console.log(chalk.yellow(`  ▸ ${event.name} ${event.detail}`));
+          if (event.path && event.callId) {
+            current.pendingCallPaths.set(event.callId, event.path);
+          }
+        } else if (event.kind === "tool_done") {
+          console.log(chalk.green(`  ✓ ${event.name} ${event.detail}`));
+          const path =
+            event.path ||
+            (event.callId
+              ? current.pendingCallPaths.get(event.callId)
+              : undefined);
+          if (path && event.name && isEditTool(event.name)) {
+            emitOrQueue("worker:release-lock", { roomId, agentId, path });
+          }
+          if (isEditTool(event.name) && path && event.callId) {
+            current.editedPaths.set(path, event.callId);
+            if (event.diffPatch) {
+              emitOrQueue("worker:file-diff", {
+                roomId,
+                agentId,
+                callId: event.callId,
+                toolName: event.name || "edit",
+                path,
+                patch: event.diffPatch,
+              });
+            }
+          }
+        } else if (event.kind === "assistant_final") {
+          console.log(chalk.white(`  Assistant: ${event.text.slice(0, 120)}…`));
+        } else if (event.kind === "error") {
+          console.error(chalk.red(`  ✗ Error: ${event.message}`));
+        } else if (event.kind === "done") {
+          console.log(chalk.green("  ✓ Agent finished"));
+        }
+      })();
     };
 
     const finishRun = (terminal?: AgentStreamEvent) => {
@@ -302,6 +389,7 @@ export function startWorker(repoPathOverride?: string): void {
       onEvent,
       sessionId,
       runKey,
+      backendKind,
     );
     runState.abort = handle.abort;
 

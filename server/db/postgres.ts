@@ -142,6 +142,16 @@ async function initSchema() {
       user_id TEXT NOT NULL,
       granted_at BIGINT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS file_locks (
+      room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+      path TEXT NOT NULL,
+      agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+      call_id TEXT,
+      acquired_at BIGINT NOT NULL,
+      expires_at BIGINT NOT NULL,
+      PRIMARY KEY (room_id, path)
+    );
   `);
 
   await pool.query(`
@@ -978,6 +988,117 @@ export function getAgentDrivers(
     user_id: r.user_id,
     granted_at: num(r.granted_at)!,
   }));
+}
+
+export interface FileLockRow {
+  room_id: string;
+  path: string;
+  agent_id: string;
+  call_id: string | null;
+  acquired_at: number;
+  expires_at: number;
+}
+
+export interface UpsertFileLockInput {
+  roomId: string;
+  path: string;
+  agentId: string;
+  callId?: string | null;
+  acquiredAt: number;
+  expiresAt: number;
+}
+
+export function upsertFileLock(input: UpsertFileLockInput): void {
+  syncQuery(
+    `INSERT INTO file_locks (room_id, path, agent_id, call_id, acquired_at, expires_at)
+     VALUES ($1,$2,$3,$4,$5,$6)
+     ON CONFLICT (room_id, path) DO UPDATE SET
+       agent_id = excluded.agent_id,
+       call_id = excluded.call_id,
+       acquired_at = excluded.acquired_at,
+       expires_at = excluded.expires_at`,
+    [
+      input.roomId,
+      input.path,
+      input.agentId,
+      input.callId ?? null,
+      input.acquiredAt,
+      input.expiresAt,
+    ],
+  );
+}
+
+export function getFileLock(
+  roomId: string,
+  path: string,
+): FileLockRow | undefined {
+  const rows = syncQuery<Record<string, unknown>>(
+    `SELECT * FROM file_locks WHERE room_id = $1 AND path = $2`,
+    [roomId, path],
+  );
+  return rows.length ? rowToFileLock(rows[0]) : undefined;
+}
+
+export function listFileLocks(roomId: string): FileLockRow[] {
+  return syncQuery<Record<string, unknown>>(
+    `SELECT * FROM file_locks WHERE room_id = $1 ORDER BY path ASC`,
+    [roomId],
+  ).map(rowToFileLock);
+}
+
+export function listAllFileLocks(): FileLockRow[] {
+  return syncQuery<Record<string, unknown>>(`SELECT * FROM file_locks`).map(
+    rowToFileLock,
+  );
+}
+
+export function deleteFileLock(roomId: string, path: string): void {
+  syncQuery(`DELETE FROM file_locks WHERE room_id = $1 AND path = $2`, [
+    roomId,
+    path,
+  ]);
+}
+
+export function deleteFileLocksForAgent(
+  roomId: string,
+  agentId: string,
+): number {
+  const rows = syncQuery<{ count: string }>(
+    `WITH deleted AS (
+       DELETE FROM file_locks WHERE room_id = $1 AND agent_id = $2 RETURNING 1
+     ) SELECT COUNT(*)::text AS count FROM deleted`,
+    [roomId, agentId],
+  );
+  return Number(rows[0]?.count ?? 0);
+}
+
+export function deleteFileLocksForRoom(roomId: string): void {
+  syncQuery(`DELETE FROM file_locks WHERE room_id = $1`, [roomId]);
+}
+
+export function deleteExpiredFileLocks(now: number): void {
+  syncQuery(`DELETE FROM file_locks WHERE expires_at <= $1`, [now]);
+}
+
+export function deleteExpiredFileLocksForRoom(
+  roomId: string,
+  now: number,
+): void {
+  syncQuery(
+    `DELETE FROM file_locks WHERE room_id = $1 AND expires_at <= $2`,
+    [roomId, now],
+  );
+}
+
+function rowToFileLock(r: Record<string, unknown>): FileLockRow {
+  return {
+    room_id: String(r.room_id),
+    path: String(r.path),
+    agent_id: String(r.agent_id),
+    call_id: (r.call_id as string) ?? null,
+    acquired_at: Number(r.acquired_at),
+    expires_at: Number(r.expires_at),
+  };
 }
 
 export function migrateAgentsV1(): void {

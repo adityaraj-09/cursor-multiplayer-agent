@@ -5,8 +5,9 @@ import { resolve, relative, isAbsolute } from "path";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import {
-  cursorAgentBackend,
+  getBackend,
   isEditTool,
+  type AgentBackendKind,
   type NormalizedAgentEvent,
 } from "../../shared/backends/index.js";
 
@@ -53,6 +54,7 @@ export function runAgent(
   onEvent: (event: AgentStreamEvent) => void,
   sessionId?: string | null,
   runKey = `run_${Date.now()}`,
+  backendKind: AgentBackendKind = "cursor",
 ): Promise<void> {
   return runAgentWithHandle(
     repoPath,
@@ -61,6 +63,7 @@ export function runAgent(
     onEvent,
     sessionId,
     runKey,
+    backendKind,
   ).promise;
 }
 
@@ -71,15 +74,20 @@ export function runAgentWithHandle(
   onEvent: (event: AgentStreamEvent) => void,
   sessionId?: string | null,
   runKey = `run_${Date.now()}`,
+  backendKind: AgentBackendKind = "cursor",
 ): RunHandle {
+  const kind: AgentBackendKind =
+    backendKind === "claude-code" ? "claude-code" : "cursor";
+  const backend = getBackend(kind);
+
   const promise = new Promise<void>((resolvePromise, reject) => {
-    const args = cursorAgentBackend.buildArgs({
+    const args = backend.buildArgs({
       prompt,
       modelId,
       sessionId,
     });
 
-    const child = spawn(cursorAgentBackend.command, args, {
+    const child = spawn(backend.command, args, {
       cwd: repoPath,
       env: process.env as NodeJS.ProcessEnv,
       stdio: ["ignore", "pipe", "pipe"],
@@ -119,16 +127,20 @@ export function runAgentWithHandle(
       } catch {
         return;
       }
-      for (const event of cursorAgentBackend.parseLine(ev, ctx)) {
+      for (const event of backend.parseLine(ev, ctx)) {
         onEvent(event);
       }
     });
 
     child.on("error", (err) => {
+      const message =
+        (err as NodeJS.ErrnoException).code === "ENOENT"
+          ? `${backend.command} CLI not found — install it and ensure it is on PATH`
+          : err.message;
       if (!ctx.gotTerminalEvent.value) {
-        onEvent({ kind: "error", message: err.message });
+        onEvent({ kind: "error", message });
       }
-      finish(err);
+      finish(new Error(message));
     });
 
     child.on("close", (code) => {

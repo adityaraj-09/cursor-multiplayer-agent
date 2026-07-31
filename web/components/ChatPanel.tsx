@@ -9,8 +9,8 @@ interface ChatPanelProps {
   messages: ChatMessage[];
   agentStatus: AgentRunStatus;
   agents?: Array<{ id: string; label: string }>;
+  /** When set with multiple agents, only show this agent's messages. */
   filterAgentId?: string | null;
-  onFilterAgentChange?: (agentId: string | null) => void;
 }
 
 type ChatItem =
@@ -48,9 +48,7 @@ export default function ChatPanel({
   agentStatus,
   agents = [],
   filterAgentId = null,
-  onFilterAgentChange,
 }: ChatPanelProps) {
-  const bottomRef = useRef<HTMLDivElement>(null);
   const scrollerRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
 
@@ -76,14 +74,20 @@ export default function ChatPanel({
   }, []);
 
   useEffect(() => {
-    if (stickToBottom.current) {
-      bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-    }
+    const scroller = scrollerRef.current;
+    if (!scroller || !stickToBottom.current) return;
+
+    // Keep movement inside the chat scroller. scrollIntoView() may scroll all
+    // ancestors, including the document, which shifts the header and composer.
+    const frame = requestAnimationFrame(() => {
+      scroller.scrollTop = scroller.scrollHeight;
+    });
+    return () => cancelAnimationFrame(frame);
   }, [filtered, agentStatus]);
 
   if (filtered.length === 0) {
     return (
-      <div className="flex-1 min-h-0 flex flex-col items-center justify-center gap-2 px-4 sm:px-6">
+      <div className="flex-1 min-h-0 h-full overflow-hidden flex flex-col items-center justify-center gap-2 px-4 sm:px-6">
         <div className="text-[#e4e4e4] text-[14px]">No messages yet</div>
         <div className="text-[#6e6e6e] text-[13px] text-center max-w-sm">
           Send a message below. Anyone in the room can steer the agent — replies
@@ -94,42 +98,12 @@ export default function ChatPanel({
   }
 
   const items = groupMessages(filtered);
-  const showFilter = agents.length > 1 && onFilterAgentChange;
 
   return (
-    <div className="flex-1 min-h-0 flex flex-col">
-      {showFilter && (
-        <div className="flex items-center gap-1 px-3 py-1.5 border-b border-[#2b2b2b] shrink-0">
-          <button
-            type="button"
-            onClick={() => onFilterAgentChange(null)}
-            className={`h-6 px-2 rounded text-[11px] ${
-              !filterAgentId
-                ? "bg-[#252525] text-[#e4e4e4]"
-                : "text-[#6e6e6e] hover:text-[#e4e4e4]"
-            }`}
-          >
-            All agents
-          </button>
-          {agents.map((a) => (
-            <button
-              key={a.id}
-              type="button"
-              onClick={() => onFilterAgentChange(a.id)}
-              className={`h-6 px-2 rounded text-[11px] ${
-                filterAgentId === a.id
-                  ? "bg-[#252525] text-[#e4e4e4]"
-                  : "text-[#6e6e6e] hover:text-[#e4e4e4]"
-              }`}
-            >
-              {a.label}
-            </button>
-          ))}
-        </div>
-      )}
+    <div className="flex-1 min-h-0 h-full overflow-hidden flex flex-col">
       <div
         ref={scrollerRef}
-        className="flex-1 min-h-0 overflow-y-auto overscroll-contain"
+        className="room-chat-scroll flex-1 min-h-0 h-full overflow-y-auto overscroll-contain"
       >
         <div className="max-w-3xl mx-auto px-3 sm:px-4 py-3 sm:py-4 space-y-3 sm:space-y-4">
           {items.map((item) =>
@@ -153,7 +127,6 @@ export default function ChatPanel({
               Agent is working…
             </div>
           )}
-          <div ref={bottomRef} />
         </div>
       </div>
     </div>
@@ -168,16 +141,8 @@ function ToolCallGroup({
   agentLabel?: string;
 }) {
   const anyStreaming = messages.some((m) => m.status === "streaming");
-  const anyDiff = messages.some((m) => Boolean(m.diffPatch));
-  const [open, setOpen] = useState(anyStreaming || anyDiff);
-  const prevStreaming = useRef(anyStreaming);
-
-  // Auto-expand while tools are running, or when a diff lands.
-  useEffect(() => {
-    if (anyStreaming && !prevStreaming.current) setOpen(true);
-    if (anyDiff) setOpen(true);
-    prevStreaming.current = anyStreaming;
-  }, [anyStreaming, anyDiff]);
+  // Tool groups stay collapsed by default, including when new tools/diffs arrive.
+  const [open, setOpen] = useState(false);
 
   const doneCount = messages.filter((m) => m.status === "done").length;
   const label =
@@ -225,13 +190,8 @@ function ToolCallGroup({
 
 function ToolCallRow({ message }: { message: ChatMessage }) {
   const hasDiff = Boolean(message.diffPatch);
-  const [open, setOpen] = useState(
-    message.status === "streaming" || Boolean(message.diffPatch),
-  );
-
-  useEffect(() => {
-    if (message.diffPatch) setOpen(true);
-  }, [message.diffPatch]);
+  // Individual tool rows stay collapsed until the user expands them.
+  const [open, setOpen] = useState(false);
 
   return (
     <div className="bg-[#161616]">

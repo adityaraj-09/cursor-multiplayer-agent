@@ -6,6 +6,7 @@ import { Server } from "socket.io";
 import { PORT, IS_PRODUCTION, CORS_ORIGINS, isAdminUser } from "./config.js";
 import { RoomManager } from "./roomManager.js";
 import { WorkerRelay } from "./workerRelay.js";
+import { FileLockRegistry } from "./fileLocks.js";
 import { listModelsForKey, listReposForKey } from "./sdkAgent.js";
 import { listCliModels } from "./cliModels.js";
 import { encryptionConfigured } from "./keyCrypto.js";
@@ -27,6 +28,13 @@ import {
   userByokConfigured,
   userByokHint,
 } from "./userByok.js";
+import {
+  clearUserAnthropicByokKey,
+  setUserAnthropicByokKey,
+  userAnthropicByokConfigured,
+  userAnthropicByokHint,
+} from "./userAnthropicByok.js";
+import { isClaudeSandboxConfigured } from "./claudeSandbox.js";
 import type {
   ServerToClientEvents,
   ClientToServerEvents,
@@ -86,6 +94,7 @@ const io = new Server<ClientToServerEvents, ServerToClientEvents>(httpServer, {
   allowEIO3: true,
 });
 
+const fileLocks = new FileLockRegistry();
 const workerRelay = new WorkerRelay(io as unknown as Server, (token) => {
   // CLI workers use hashed session tokens (not Clerk JWTs)
   const session =
@@ -97,9 +106,9 @@ const workerRelay = new WorkerRelay(io as unknown as Server, (token) => {
       | undefined);
   if (!session || session.expires_at < Date.now()) return null;
   return { userId: session.user_id, workerId: `w-${session.user_id}` };
-});
+}, fileLocks);
 
-const roomManager = new RoomManager(io, workerRelay);
+const roomManager = new RoomManager(io, workerRelay, fileLocks);
 
 async function attachRedisAdapter(): Promise<void> {
   const redisUrl = process.env.REDIS_URL?.trim();
@@ -126,6 +135,7 @@ async function attachRedisAdapter(): Promise<void> {
 setInterval(() => {
   try {
     db.deleteExpiredSessions();
+    fileLocks.purgeExpired();
   } catch (err) {
     console.error("[auth] deleteExpiredSessions failed:", err);
   }
@@ -174,6 +184,11 @@ app.get("/api/auth/status", (req, res) => {
     byokAvailable: encryptionConfigured(),
     userByokConfigured: userId ? userByokConfigured(userId) : false,
     userByokHint: userId ? userByokHint(userId) : null,
+    userAnthropicByokConfigured: userId
+      ? userAnthropicByokConfigured(userId)
+      : false,
+    userAnthropicByokHint: userId ? userAnthropicByokHint(userId) : null,
+    e2bConfigured: isClaudeSandboxConfigured(),
     canManageServerKey: isAdminUser(userId),
   });
 });
@@ -245,6 +260,35 @@ app.delete("/api/auth/byok-key", requireAuth, (req, res) => {
     ok: true,
     userByokConfigured: false,
     userByokHint: null,
+  });
+});
+
+/** Save / replace the signed-in user's Anthropic API key (Claude Code cloud BYOK). */
+app.post("/api/auth/anthropic-byok-key", requireAuth, (req, res) => {
+  try {
+    const apiKey = String(req.body?.apiKey || "").trim();
+    const result = setUserAnthropicByokKey(req.user!.id, apiKey);
+    res.json({
+      ok: true,
+      userAnthropicByokConfigured: true,
+      userAnthropicByokHint: result.hint,
+    });
+  } catch (err) {
+    res.status(400).json({
+      error:
+        err instanceof Error
+          ? err.message
+          : "Failed to save Anthropic BYOK key",
+    });
+  }
+});
+
+app.delete("/api/auth/anthropic-byok-key", requireAuth, (req, res) => {
+  clearUserAnthropicByokKey(req.user!.id);
+  res.json({
+    ok: true,
+    userAnthropicByokConfigured: false,
+    userAnthropicByokHint: null,
   });
 });
 
@@ -528,6 +572,9 @@ app.post("/api/rooms/:id/agents", requireAuth, (req, res) => {
           ? String(req.body.scopePath)
           : undefined,
         modelId: req.body?.modelId ? String(req.body.modelId) : undefined,
+        anthropicApiKey: req.body?.anthropicApiKey
+          ? String(req.body.anthropicApiKey)
+          : undefined,
       },
       req.user!.id,
     );
@@ -535,6 +582,52 @@ app.post("/api/rooms/:id/agents", requireAuth, (req, res) => {
   } catch (err) {
     res.status(400).json({
       error: err instanceof Error ? err.message : "Failed to add agent",
+    });
+  }
+});
+
+app.post("/api/rooms/:id/agents/validate-scope", requireAuth, (req, res) => {
+  const id = routeParam(req.params.id);
+  if (!roomManager.userCanAccessRoom(id, req.user!.id)) {
+    res.status(404).json({ error: "Room not found" });
+    return;
+  }
+  const scopePath =
+    req.body?.scopePath === null || req.body?.scopePath === undefined
+      ? null
+      : String(req.body.scopePath);
+  const excludeAgentId = req.body?.excludeAgentId
+    ? String(req.body.excludeAgentId)
+    : undefined;
+  const result = roomManager.validateAgentScope(id, scopePath, excludeAgentId);
+  if (result.ok) {
+    res.json({ ok: true });
+    return;
+  }
+  res.status(409).json({ ok: false, error: result.error });
+});
+
+app.post("/api/rooms/:id/file-locks/force-release", requireAuth, (req, res) => {
+  const id = routeParam(req.params.id);
+  if (!roomManager.userCanAccessRoom(id, req.user!.id)) {
+    res.status(404).json({ error: "Room not found" });
+    return;
+  }
+  const path = req.body?.path ? String(req.body.path) : "";
+  if (!path.trim()) {
+    res.status(400).json({ error: "path is required" });
+    return;
+  }
+  try {
+    const released = roomManager.forceReleaseFileLock(
+      id,
+      path,
+      req.user!.id,
+    );
+    res.json({ ok: true, released });
+  } catch (err) {
+    res.status(400).json({
+      error: err instanceof Error ? err.message : "Failed to release lock",
     });
   }
 });
@@ -580,7 +673,7 @@ app.patch("/api/rooms/:id/agents/:agentId", requireAuth, (req, res) => {
   }
 });
 
-app.post("/api/rooms/:id/agents/:agentId/stop", requireAuth, (req, res) => {
+app.post("/api/rooms/:id/agents/:agentId/stop", requireAuth, async (req, res) => {
   const id = routeParam(req.params.id);
   const agentId = routeParam(req.params.agentId);
   if (!roomManager.userCanAccessRoom(id, req.user!.id)) {
@@ -588,7 +681,7 @@ app.post("/api/rooms/:id/agents/:agentId/stop", requireAuth, (req, res) => {
     return;
   }
   try {
-    roomManager.stopAgent(id, agentId, req.user!.id);
+    await roomManager.stopAgent(id, agentId, req.user!.id);
     res.json({ ok: true });
   } catch (err) {
     res.status(400).json({
@@ -597,7 +690,7 @@ app.post("/api/rooms/:id/agents/:agentId/stop", requireAuth, (req, res) => {
   }
 });
 
-app.post("/api/rooms/:id/agents/:agentId/abort", requireAuth, (req, res) => {
+app.post("/api/rooms/:id/agents/:agentId/abort", requireAuth, async (req, res) => {
   const id = routeParam(req.params.id);
   const agentId = routeParam(req.params.agentId);
   if (!roomManager.userCanAccessRoom(id, req.user!.id)) {
@@ -605,7 +698,7 @@ app.post("/api/rooms/:id/agents/:agentId/abort", requireAuth, (req, res) => {
     return;
   }
   try {
-    roomManager.abortRun(id, agentId, req.user!.id);
+    await roomManager.abortRun(id, agentId, req.user!.id);
     res.json({ ok: true });
   } catch (err) {
     res.status(400).json({
@@ -634,14 +727,14 @@ app.post("/api/rooms/:id/stop", requireAuth, (req, res) => {
  * POST /api/rooms/:id/abort — cancel the in-flight agent run (room stays open).
  * Aborts the default agent for backward compatibility.
  */
-app.post("/api/rooms/:id/abort", requireAuth, (req, res) => {
+app.post("/api/rooms/:id/abort", requireAuth, async (req, res) => {
   const id = routeParam(req.params.id);
   if (!roomManager.userCanAccessRoom(id, req.user!.id)) {
     res.status(404).json({ error: "Room not found" });
     return;
   }
   try {
-    roomManager.abortRun(
+    await roomManager.abortRun(
       id,
       req.body?.agentId ? String(req.body.agentId) : undefined,
       req.user!.id,

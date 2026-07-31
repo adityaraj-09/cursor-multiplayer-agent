@@ -4,6 +4,8 @@ import {
   scopesOverlap,
   normalizePath,
   resolveAgentCwd,
+  findScopeOverlap,
+  formatScopeOverlapError,
 } from "../server/agentConflicts.js";
 import { CursorAgentBackend } from "../shared/backends/cursor.js";
 
@@ -31,6 +33,48 @@ describe("resolveAgentCwd", () => {
 
   it("rejects path traversal", () => {
     expect(() => resolveAgentCwd("/repo", "../outside")).toThrow(/escapes/);
+  });
+});
+
+describe("findScopeOverlap", () => {
+  it("rejects overlapping explicit scopes", () => {
+    const overlap = findScopeOverlap(
+      [
+        {
+          id: "a1",
+          label: "Backend",
+          status: "idle",
+          scopePath: "backend",
+        },
+        {
+          id: "a2",
+          label: "API",
+          status: "idle",
+          scopePath: "backend/api",
+        },
+      ],
+      "backend/services",
+    );
+    expect(overlap).toMatchObject({
+      agentId: "a1",
+      scopePath: "backend",
+    });
+    expect(formatScopeOverlapError(overlap!)).toContain("Backend");
+  });
+
+  it("allows whole-repo scope (null proposed)", () => {
+    const overlap = findScopeOverlap(
+      [
+        {
+          id: "a1",
+          label: "Backend",
+          status: "idle",
+          scopePath: "backend",
+        },
+      ],
+      null,
+    );
+    expect(overlap).toBeNull();
   });
 });
 

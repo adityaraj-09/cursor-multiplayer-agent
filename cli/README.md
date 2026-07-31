@@ -78,6 +78,7 @@ While `steer start` is connected, the API can ask your machine to:
 - List Cursor models (`cursor agent --list-models`)
 - Open a native folder picker for Local session create
 - Run agent prompts in the selected repo and stream events back to the room
+- **Protocol 3+**: acquire exclusive file locks before edit tools run (multi-agent conflict resolution)
 
 ## Development
 

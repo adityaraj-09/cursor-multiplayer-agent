@@ -72,3 +72,15 @@ export const setAgentDriver = backend.setAgentDriver;
 export const clearAgentDriver = backend.clearAgentDriver;
 export const getAgentDrivers = backend.getAgentDrivers;
 export const migrateAgentsV1 = backend.migrateAgentsV1;
+
+// File locks
+export const upsertFileLock = backend.upsertFileLock;
+export const getFileLock = backend.getFileLock;
+export const listFileLocks = backend.listFileLocks;
+export const listAllFileLocks = backend.listAllFileLocks;
+export const deleteFileLock = backend.deleteFileLock;
+export const deleteFileLocksForAgent = backend.deleteFileLocksForAgent;
+export const deleteFileLocksForRoom = backend.deleteFileLocksForRoom;
+export const deleteExpiredFileLocks = backend.deleteExpiredFileLocks;
+export const deleteExpiredFileLocksForRoom =
+  backend.deleteExpiredFileLocksForRoom;

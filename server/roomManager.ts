@@ -8,6 +8,14 @@ import {
   listModelsForKey,
   type SdkStreamEvent,
 } from "./sdkAgent.js";
+import {
+  ClaudeSandboxSession,
+  isClaudeSandboxConfigured,
+} from "./claudeSandbox.js";
+import {
+  resolveAnthropicApiKey,
+  setUserAnthropicByokKey,
+} from "./userAnthropicByok.js";
 import { DiffWatcher } from "./diffWatcher.js";
 import { extractToolPath, getFileDiff, isEditTool } from "./gitDiff.js";
 import { listCliModels } from "./cliModels.js";
@@ -26,10 +34,12 @@ import {
 } from "./keyCrypto.js";
 import { getServerApiKey } from "./serverKey.js";
 import { getUserByokKey, setUserByokKey } from "./userByok.js";
-import { detectAgentConflicts, resolveAgentCwd } from "./agentConflicts.js";
+import { detectAgentConflicts, resolveAgentCwd, findScopeOverlap, formatScopeOverlapError } from "./agentConflicts.js";
+import { FileLockRegistry, broadcastFileLocks } from "./fileLocks.js";
 import type {
   AgentInfo,
   AgentConflict,
+  AgentConflictBlocked,
   AgentBackendKind,
   AgentStatus,
   AgentRuntime,
@@ -70,7 +80,7 @@ export interface CreateRoomRequest {
   ownerId?: string;
 }
 
-type AgentBackend = AgentRunner | SdkAgentSession;
+type AgentBackend = AgentRunner | SdkAgentSession | ClaudeSandboxSession;
 
 interface AgentState {
   row: db.AgentRow;
@@ -86,6 +96,11 @@ interface AgentState {
   pendingDriveRequest: { socketId: string; name: string } | null;
   filePatches: Map<string, string>;
   touchedPaths: Set<string>;
+  /**
+   * Incremented at the start of each run and on abort.
+   * In-flight runAgent / worker handlers ignore events when this no longer matches.
+   */
+  runGeneration: number;
 }
 
 interface RoomState {
@@ -200,11 +215,24 @@ function resolveApiKey(row: db.RoomRow): string {
 export class RoomManager {
   private rooms = new Map<string, RoomState>();
   private socketRooms = new Map<string, string>();
+  readonly fileLocks: FileLockRegistry;
 
   constructor(
     private io: Server<ClientToServerEvents, ServerToClientEvents>,
     private workerRelay?: WorkerRelay,
+    fileLocks?: FileLockRegistry,
   ) {
+    this.fileLocks =
+      fileLocks ??
+      new FileLockRegistry((roomId) => {
+        const room = this.rooms.get(roomId);
+        if (room) this.broadcastFileLocks(room);
+      });
+    this.fileLocks.setOnChange((roomId) => {
+      const room = this.rooms.get(roomId);
+      if (room) this.broadcastFileLocks(room);
+    });
+
     this.restoreRooms();
 
     this.workerRelay?.onRunsDisconnected((runs) => {
@@ -421,12 +449,18 @@ export class RoomManager {
 
       if (existing) {
         backend = existing;
-      } else if (row.auth_mode === "cli") {
+      } else if (
+        agentRow.backend === "claude-code" &&
+        row.runtime === "cloud"
+      ) {
+        backend = this.createClaudeSandboxBackend(row, agentRow);
+      } else if (row.auth_mode === "cli" || agentRow.backend === "claude-code") {
         const cwd = resolveAgentCwd(row.repo_path, agentRow.scope_path);
         backend = new AgentRunner(
           cwd,
           agentRow.session_id,
           agentRow.model_id || "auto",
+          agentRow.backend === "claude-code" ? "claude-code" : "cursor",
         );
       } else {
         const apiKey = resolveApiKey(row);
@@ -487,6 +521,7 @@ export class RoomManager {
         pendingDriveRequest: null,
         filePatches: new Map(),
         touchedPaths: new Set(),
+        runGeneration: 0,
       });
     }
 
@@ -550,6 +585,28 @@ export class RoomManager {
     };
   }
 
+  /** Cloud Claude Code via E2B sandbox (E2B_API_KEY server-side; Anthropic key BYOK). */
+  private createClaudeSandboxBackend(
+    row: db.RoomRow,
+    agentRow: db.AgentRow,
+    anthropicApiKey?: string,
+  ): ClaudeSandboxSession {
+    const apiKey =
+      anthropicApiKey?.trim() ||
+      resolveAnthropicApiKey(row.owner_id) ||
+      "";
+    return new ClaudeSandboxSession({
+      apiKey,
+      model: agentRow.model_id || "sonnet",
+      name: `${row.name}/${agentRow.label}`,
+      repoUrl: row.repo_url?.trim() || "",
+      startingRef: row.starting_ref || "main",
+      sessionId: agentRow.session_id,
+      sandboxId: agentRow.sdk_agent_id,
+      githubToken: process.env.GITHUB_TOKEN?.trim() || undefined,
+    });
+  }
+
   listAgentInfos(roomId: string): AgentInfo[] {
     const room = this.rooms.get(roomId);
     if (room) {
@@ -580,6 +637,12 @@ export class RoomManager {
       agentRow.label = opts.label.trim() || agentRow.label;
     }
     if (opts.scopePath !== undefined) {
+      const scopeCheck = this.validateAgentScope(
+        roomId,
+        opts.scopePath,
+        agentId,
+      );
+      if (!scopeCheck.ok) throw new Error(scopeCheck.error);
       if (row.runtime === "local" && opts.scopePath) {
         resolveAgentCwd(row.repo_path, opts.scopePath);
       }
@@ -614,6 +677,124 @@ export class RoomManager {
     }));
     const conflicts = detectAgentConflicts(agentData);
     this.io.to(room.id).emit("agent-conflicts", conflicts);
+  }
+
+  private broadcastFileLocks(room: RoomState): void {
+    broadcastFileLocks(this.io, room.id, this.fileLocks);
+  }
+
+  private agentScopeCandidates(roomId: string): Array<{
+    id: string;
+    label: string;
+    status: string;
+    scopePath?: string | null;
+  }> {
+    const room = this.rooms.get(roomId);
+    if (room) {
+      return [...room.agents.values()].map((a) => ({
+        id: a.row.id,
+        label: a.row.label,
+        status: a.row.status,
+        scopePath: a.row.scope_path,
+      }));
+    }
+    return db.listAgents(roomId).map((a) => ({
+      id: a.id,
+      label: a.label,
+      status: a.status,
+      scopePath: a.scope_path,
+    }));
+  }
+
+  validateAgentScope(
+    roomId: string,
+    proposedScope: string | null | undefined,
+    excludeAgentId?: string,
+  ): { ok: true } | { ok: false; error: string } {
+    const overlap = findScopeOverlap(
+      this.agentScopeCandidates(roomId),
+      proposedScope,
+      excludeAgentId,
+    );
+    if (!overlap) return { ok: true };
+    return { ok: false, error: formatScopeOverlapError(overlap) };
+  }
+
+  private agentLabel(room: RoomState, agentId: string): string {
+    const agent = room.agents.get(agentId);
+    if (agent) return agent.row.label;
+    const row = db.getAgent(agentId);
+    return row?.label || agentId.slice(0, 6);
+  }
+
+  private emitConflictBlocked(
+    room: RoomState,
+    agentId: string,
+    path: string,
+    holderAgentId: string,
+  ): void {
+    const payload: AgentConflictBlocked = {
+      agentId,
+      path,
+      holderAgentId,
+      action: "aborted",
+    };
+    this.io.to(room.id).emit("agent-conflict-blocked", payload);
+  }
+
+  private tryAcquireEditLock(
+    room: RoomState,
+    agent: AgentState,
+    toolName: string | undefined,
+    path: string | undefined,
+    callId?: string,
+  ): boolean {
+    if (!path || !toolName || !isEditTool(toolName)) return true;
+    const result = this.fileLocks.tryAcquire(
+      room.id,
+      agent.row.id,
+      path,
+      callId,
+    );
+    if (result.ok) return true;
+    this.emitConflictBlocked(room, agent.row.id, path, result.holderAgentId);
+    return false;
+  }
+
+  private releaseEditLock(
+    room: RoomState,
+    agent: AgentState,
+    toolName: string | undefined,
+    path: string | undefined,
+  ): void {
+    if (!path || !toolName || !isEditTool(toolName)) return;
+    this.fileLocks.release(room.id, agent.row.id, path);
+  }
+
+  forceReleaseFileLock(
+    roomId: string,
+    rawPath: string,
+    actorUserId: string,
+  ): boolean {
+    const row = db.getRoom(roomId);
+    if (!row || row.status !== "active") {
+      throw new Error("Room not found");
+    }
+    if (row.owner_id && row.owner_id !== actorUserId) {
+      throw new Error("Only the host can force-release file locks");
+    }
+    const released = this.fileLocks.forceRelease(roomId, rawPath);
+    broadcastFileLocks(this.io, roomId, this.fileLocks);
+    return released;
+  }
+
+  private lockConflictMessage(
+    room: RoomState,
+    path: string,
+    holderAgentId: string,
+  ): string {
+    const holder = this.agentLabel(room, holderAgentId);
+    return `\`${path}\` is locked by ${holder}. Wait for the other agent to finish or ask the host to release the lock.`;
   }
 
   private emitAgentStatus(
@@ -728,6 +909,7 @@ export class RoomManager {
       touchedPaths: a.touchedPaths,
     }));
     socket.emit("agent-conflicts", detectAgentConflicts(conflictData));
+    socket.emit("file-locks", this.fileLocks.list(roomId));
 
     if (room.row.runtime === "cloud") {
       socket.emit("cloud-meta", room.cloudMeta);
@@ -961,6 +1143,7 @@ export class RoomManager {
     for (const c of agent.workerRunCleanups) c();
     agent.workerRunCleanups = [];
     agent.workerRunActive = true;
+    const generation = ++agent.runGeneration;
 
     this.emitAgentStatus(room, agent.row.id, "running");
 
@@ -973,6 +1156,8 @@ export class RoomManager {
     agent.toolMsgIds.clear();
     agent.toolPaths.clear();
 
+    const isCurrent = () => agent.runGeneration === generation;
+
     const finishWorkerRun = (
       status: "idle" | "error" = "idle",
       detail?: string,
@@ -981,6 +1166,14 @@ export class RoomManager {
       finished = true;
       agent.workerRunActive = false;
       closeAssistant(status === "error" ? "error" : "done");
+
+      // Aborted — abortRun already finalized messages and set idle.
+      if (!isCurrent()) {
+        this.workerRelay?.releaseRun(room.id, agent.row.id);
+        for (const c of agent.workerRunCleanups) c();
+        agent.workerRunCleanups = [];
+        return;
+      }
 
       db.updateAgentStatus(agent.row.id, status === "error" ? "error" : "idle");
       agent.row.status = status === "error" ? "error" : "idle";
@@ -1068,6 +1261,7 @@ export class RoomManager {
       room.id,
       agent.row.id,
       (_roomId, _agentId, event) => {
+        if (!isCurrent()) return;
         switch (event.kind) {
           case "session":
             if (event.sessionId) {
@@ -1085,6 +1279,26 @@ export class RoomManager {
             closeAssistant("done");
             afterTools = true;
             bubbleBaseLen = seenFullText.length;
+            const toolPath = event.path;
+            if (
+              !this.tryAcquireEditLock(
+                room,
+                agent,
+                event.name,
+                toolPath,
+                event.callId,
+              )
+            ) {
+              const holder =
+                this.fileLocks.list(room.id).find((l) => l.path === toolPath)
+                  ?.agentId || "another agent";
+              finishWorkerRun(
+                "error",
+                this.lockConflictMessage(room, toolPath || "file", holder),
+              );
+              this.workerRelay?.abortRun(room.id, agent.row.id);
+              break;
+            }
             const msg: ChatMessage = {
               id: nanoid(12),
               roomId: room.id,
@@ -1103,6 +1317,15 @@ export class RoomManager {
             break;
           }
           case "tool_done": {
+            const toolPath =
+              event.path ||
+              (event.callId
+                ? agent.toolPaths.get(event.callId)
+                : undefined);
+            this.releaseEditLock(room, agent, event.name, toolPath);
+            if (toolPath && event.name && isEditTool(event.name)) {
+              this.noteTouchedPath(room, agent, toolPath);
+            }
             const id = event.callId
               ? agent.toolMsgIds.get(event.callId)
               : undefined;
@@ -1155,6 +1378,7 @@ export class RoomManager {
       room.id,
       agent.row.id,
       (_roomId, _agentId, callId, toolName, path, patch) => {
+        if (!isCurrent()) return;
         const msgId = agent.toolMsgIds.get(callId);
         if (!msgId) {
           console.warn(
@@ -1194,6 +1418,7 @@ export class RoomManager {
         agent.row.session_id,
         agent.row.id,
         agent.cwd,
+        agent.row.backend,
       );
     } catch (err) {
       // Multi-agent CLI upgrade error
@@ -1249,6 +1474,7 @@ export class RoomManager {
     agent.workerRunActive = false;
     for (const c of agent.workerRunCleanups) c();
     agent.workerRunCleanups = [];
+    this.fileLocks.releaseAllForAgent(roomId, agentId);
     this.workerRelay?.releaseRun(roomId, agentId);
     this.workerRelay?.clearRunListeners(roomId, agentId);
 
@@ -1307,6 +1533,7 @@ export class RoomManager {
 
     this.emitAgentStatus(room, agent.row.id, "running");
     agent.workerRunActive = true;
+    const generation = ++agent.runGeneration;
 
     let assistantId: string | null = null;
     let assistantContent = "";
@@ -1316,6 +1543,8 @@ export class RoomManager {
     agent.toolMsgIds.clear();
     agent.toolPaths.clear();
 
+    const isCurrent = () => agent.runGeneration === generation;
+
     const attachFileDiff = async (
       msgId: string,
       toolName: string,
@@ -1323,12 +1552,14 @@ export class RoomManager {
       pathHint?: string,
       alreadyHasPatch?: boolean,
     ) => {
+      if (!isCurrent()) return;
       if (room.row.runtime !== "local" || !room.row.repo_path) return;
       if (!isEditTool(toolName)) return;
       const path = pathHint || extractToolPath(detail);
       if (!path) return;
 
       await new Promise((r) => setTimeout(r, 120));
+      if (!isCurrent()) return;
       const patch = (await getFileDiff(room.row.repo_path, path)).trim();
       if (!patch) return;
       if (alreadyHasPatch) {
@@ -1448,6 +1679,7 @@ export class RoomManager {
       }
 
       await agent.backend.run(prompt, (event) => {
+        if (!isCurrent()) return;
         switch (event.kind) {
           case "session":
             this.persistAgentSession(room, agent, event.sessionId);
@@ -1466,6 +1698,24 @@ export class RoomManager {
 
             const path =
               event.path || extractToolPath(event.detail) || undefined;
+            if (
+              !this.tryAcquireEditLock(
+                room,
+                agent,
+                event.name,
+                path,
+                event.callId,
+              )
+            ) {
+              const holder =
+                this.fileLocks
+                  .list(room.id)
+                  .find((l) => path && l.path === path)?.agentId ||
+                "another agent";
+              throw new Error(
+                this.lockConflictMessage(room, path || "file", holder),
+              );
+            }
             const msg: ChatMessage = {
               id: nanoid(12),
               roomId: room.id,
@@ -1489,9 +1739,12 @@ export class RoomManager {
               agent.toolPaths.get(event.callId) ||
               extractToolPath(event.detail) ||
               undefined;
+            this.releaseEditLock(room, agent, event.name, path);
             if (path) {
               agent.toolPaths.set(event.callId, path);
-              this.noteTouchedPath(room, agent, path);
+              if (event.name && isEditTool(event.name)) {
+                this.noteTouchedPath(room, agent, path);
+              }
             }
             if (id) {
               const content = event.detail || path || "Done";
@@ -1575,6 +1828,9 @@ export class RoomManager {
         }
       });
 
+      // Aborted while running — abortRun already finalized UI state.
+      if (!isCurrent()) return;
+
       const latestId = agent.backend.getAgentId();
       if (latestId && latestId !== agent.row.sdk_agent_id) {
         db.setAgentSdkId(agent.row.id, latestId);
@@ -1594,12 +1850,19 @@ export class RoomManager {
       agent.workerRunActive = false;
       this.emitAgentStatus(room, agent.row.id, "idle");
     } catch (err) {
+      if (!isCurrent()) return;
       const message = err instanceof Error ? err.message : String(err);
       emitAssistant(message, "error");
       this.emitAgentStatus(room, agent.row.id, "error", message);
       this.emitAgentStatus(room, agent.row.id, "idle");
     } finally {
-      agent.workerRunActive = false;
+      if (isCurrent()) {
+        agent.workerRunActive = false;
+      } else {
+        // Ensure open bubbles are closed even if abort raced with local state.
+        closeAssistant("done");
+        agent.workerRunActive = false;
+      }
     }
 
     db.updateRoomActivity(room.id);
@@ -1766,6 +2029,8 @@ export class RoomManager {
       label: string;
       scopePath?: string;
       modelId?: string;
+      /** Optional Anthropic API key (Claude Code cloud BYOK). Saved to the user account when provided. */
+      anthropicApiKey?: string;
     },
     actorUserId: string,
   ): AgentInfo {
@@ -1778,13 +2043,57 @@ export class RoomManager {
       throw new Error("Only the host can add agents");
     }
 
-    const backendKind: AgentBackendKind = opts.backend || "cursor";
+    const backendKind: AgentBackendKind =
+      opts.backend === "claude-code" ? "claude-code" : "cursor";
+
+    let anthropicApiKey = "";
     if (backendKind === "claude-code") {
-      throw new Error("Claude Code backend is coming soon");
+      if (row.runtime === "cloud") {
+        if (!isClaudeSandboxConfigured()) {
+          throw new Error(
+            "Claude Code cloud agents require E2B_API_KEY on the server",
+          );
+        }
+        if (!row.repo_url?.trim()) {
+          throw new Error("Cloud Claude Code requires a GitHub repo URL");
+        }
+        const pasted = opts.anthropicApiKey?.trim() || "";
+        if (pasted) {
+          if (!encryptionConfigured()) {
+            throw new Error(
+              "KEY_ENCRYPTION_SECRET is required to store an Anthropic API key",
+            );
+          }
+          setUserAnthropicByokKey(actorUserId, pasted);
+          anthropicApiKey = pasted;
+        } else {
+          anthropicApiKey = resolveAnthropicApiKey(actorUserId);
+        }
+        if (!anthropicApiKey) {
+          throw new Error(
+            "Paste your Anthropic API key for Claude Code (or set ANTHROPIC_API_KEY on the server)",
+          );
+        }
+      } else if (row.auth_mode !== "cli") {
+        throw new Error(
+          "Claude Code on local runtime requires CLI auth (run `steer start`)",
+        );
+      }
+    }
+
+    if (opts.scopePath) {
+      const scopeCheck = this.validateAgentScope(roomId, opts.scopePath);
+      if (!scopeCheck.ok) throw new Error(scopeCheck.error);
     }
 
     const modelId =
-      opts.modelId || row.model_id || (row.auth_mode === "cli" ? "auto" : DEFAULT_MODEL);
+      opts.modelId ||
+      row.model_id ||
+      (backendKind === "claude-code"
+        ? "sonnet"
+        : row.auth_mode === "cli"
+          ? "auto"
+          : DEFAULT_MODEL);
 
     const agentRow = db.createAgent({
       roomId,
@@ -1800,8 +2109,10 @@ export class RoomManager {
       : "";
 
     let backend: AgentBackend;
-    if (row.auth_mode === "cli") {
-      backend = new AgentRunner(cwd, null, modelId);
+    if (backendKind === "claude-code" && row.runtime === "cloud") {
+      backend = this.createClaudeSandboxBackend(row, agentRow, anthropicApiKey);
+    } else if (row.auth_mode === "cli" || backendKind === "claude-code") {
+      backend = new AgentRunner(cwd, null, modelId, backendKind);
     } else {
       const apiKey = resolveApiKey(row);
       backend = new SdkAgentSession({
@@ -1852,6 +2163,7 @@ export class RoomManager {
       pendingDriveRequest: null,
       filePatches: new Map(),
       touchedPaths: new Set(),
+      runGeneration: 0,
     };
 
     room.agents.set(agentRow.id, agentState);
@@ -1861,7 +2173,11 @@ export class RoomManager {
     return this.toAgentInfo(agentRow);
   }
 
-  stopAgent(roomId: string, agentId: string, actorUserId?: string): void {
+  async stopAgent(
+    roomId: string,
+    agentId: string,
+    actorUserId?: string,
+  ): Promise<void> {
     const room = this.rooms.get(roomId);
     const row = db.getRoom(roomId);
     if (!room || !row || row.status !== "active") {
@@ -1875,18 +2191,22 @@ export class RoomManager {
     if (!agent) throw new Error("Agent not found");
 
     // Abort running work
+    agent.runGeneration += 1;
     if (agent.workerRunActive) {
       this.workerRelay?.detachRun(roomId, agentId);
       for (const c of agent.workerRunCleanups) c();
       agent.workerRunCleanups = [];
     }
-    agent.backend.abort();
+    this.finalizeStreamingMessages(room, agentId);
+    await agent.backend.abortAndWait();
     agent.workerRunActive = false;
 
-    void agent.backend.dispose();
+    await agent.backend.dispose();
 
     db.updateAgentStatus(agentId, "stopped");
     agent.row.status = "stopped";
+
+    this.fileLocks.releaseAllForAgent(roomId, agentId);
 
     this.emitAgentStatus(room, agentId, "idle");
     this.broadcastAgents(room);
@@ -1894,10 +2214,54 @@ export class RoomManager {
   }
 
   // -----------------------------------------------------------------------
+  // finalizeStreamingMessages — close open assistant/tool bubbles on abort
+  // -----------------------------------------------------------------------
+
+  private finalizeStreamingMessages(
+    room: RoomState,
+    agentId: string,
+  ): void {
+    const messages = db.getMessages(room.id, 200);
+    for (const msg of messages) {
+      if (msg.agentId !== agentId) continue;
+      if (msg.status !== "streaming") continue;
+
+      const content =
+        msg.role === "tool" &&
+        (!msg.content || msg.content === "Running…")
+          ? "Aborted"
+          : msg.content;
+
+      db.updateMessageContent(msg.id, content, "done");
+      if (msg.role === "assistant") {
+        this.io
+          .to(room.id)
+          .emit("chat-delta", msg.id, content, "done");
+      } else {
+        this.io.to(room.id).emit("chat-message", {
+          ...msg,
+          content,
+          status: "done",
+        });
+      }
+    }
+
+    const agent = room.agents.get(agentId);
+    if (agent) {
+      agent.toolMsgIds.clear();
+      agent.toolPaths.clear();
+    }
+  }
+
+  // -----------------------------------------------------------------------
   // abortRun — per agent (compat: default agent if no agentId)
   // -----------------------------------------------------------------------
 
-  abortRun(id: string, agentId?: string, actorUserId?: string): void {
+  async abortRun(
+    id: string,
+    agentId?: string,
+    actorUserId?: string,
+  ): Promise<void> {
     const row = db.getRoom(id);
     if (!row || row.status !== "active") {
       throw new Error("Room not found");
@@ -1918,6 +2282,9 @@ export class RoomManager {
     const wasBusy = agent.workerRunActive || agent.backend.isBusy();
     if (!wasBusy) return;
 
+    // Invalidate in-flight runAgent / worker handlers before teardown.
+    agent.runGeneration += 1;
+
     if (agent.workerRunActive) {
       this.workerRelay?.abortRun(id, resolvedAgentId);
       for (const c of agent.workerRunCleanups) c();
@@ -1926,8 +2293,13 @@ export class RoomManager {
       this.workerRelay?.clearRunListeners(id, resolvedAgentId);
     }
 
-    agent.backend.abort();
+    this.finalizeStreamingMessages(room, resolvedAgentId);
+
+    // Await SDK cancel / CLI process exit before marking idle.
+    await agent.backend.abortAndWait();
+
     agent.workerRunActive = false;
+    this.fileLocks.releaseAllForAgent(id, resolvedAgentId);
 
     const note: ChatMessage = {
       id: nanoid(12),
@@ -1983,13 +2355,20 @@ export class RoomManager {
         agent.row.model_id = modelId;
         agent.backend.setModel(modelId);
       }
+
+      const defaultAgent = this.getDefaultAgent(room);
+      if (resolvedAgentId === defaultAgent.row.id) {
+        db.setModelId(id, modelId);
+        row.model_id = modelId;
+        room.row.model_id = modelId;
+      }
+    } else if (!agentId) {
+      db.setModelId(id, modelId);
+      row.model_id = modelId;
+      if (room) room.row.model_id = modelId;
     }
 
-    // Keep room-level model_id for compat
-    db.setModelId(id, modelId);
-    row.model_id = modelId;
     if (room) {
-      room.row.model_id = modelId;
       this.io.to(id).emit("model-updated", modelId, resolvedAgentId);
       this.broadcastAgents(room);
     }
@@ -2024,7 +2403,10 @@ export class RoomManager {
           );
         }
         this.persistAgentSession(room, agent, next);
-        if (agent.backend instanceof AgentRunner) {
+        if (
+          agent.backend instanceof AgentRunner ||
+          agent.backend instanceof ClaudeSandboxSession
+        ) {
           agent.backend.setSessionId(next);
         }
       }

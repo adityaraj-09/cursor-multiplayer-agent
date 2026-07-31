@@ -10,6 +10,7 @@ import {
   addRoomAgent,
   fetchOrJoinRoom,
   fetchRoomModels,
+  forceReleaseFileLock,
   stopRoom,
   stopRoomAgent,
   updateRoomCursorSession,
@@ -29,7 +30,7 @@ import DriverControls from "../../../components/DriverControls";
 import InvitePanel from "../../../components/InvitePanel";
 import AgentTabs from "../../../components/AgentTabs";
 import AddAgentDialog from "../../../components/AddAgentDialog";
-import ConflictBanner from "../../../components/ConflictBanner";
+import LockPanel from "../../../components/LockPanel";
 import type { ModelInfo, RoomInfo } from "../../../../shared/events";
 
 export default function RoomPage() {
@@ -205,6 +206,8 @@ function LiveRoom({
     statusByAgent,
     diffByAgent,
     conflicts,
+    fileLocks,
+    lastBlocked,
     agentStatus,
     agentError,
     pendingRequest,
@@ -257,12 +260,12 @@ function LiveRoom({
       const first =
         agents.find((a) => a.status !== "stopped") || agents[0];
       setSelectedAgentId(first.id);
-      if (agents.length > 1) setChatFilterAgentId(first.id);
     }
   }, [agents, selectedAgentId]);
 
   const selectedAgent =
     agents.find((a) => a.id === selectedAgentId) || agents[0] || null;
+  const selectedModelId = selectedAgent?.modelId || modelId;
   const selectedStatus: typeof agentStatus =
     (selectedAgentId && statusByAgent[selectedAgentId]) ||
     (selectedAgent?.status === "running"
@@ -324,11 +327,15 @@ function LiveRoom({
 
   const handleModelChange = useCallback(
     async (next: string) => {
-      if (!next || next === modelId) return;
+      if (!selectedAgentId || !next || next === selectedModelId) return;
       setSavingModel(true);
       setModelError("");
       try {
-        const updated = await updateRoomModel(roomId, next);
+        const updated = await updateRoomModel(
+          roomId,
+          next,
+          selectedAgentId,
+        );
         onRoomInfo(updated);
       } catch (err) {
         setModelError(
@@ -338,7 +345,7 @@ function LiveRoom({
         setSavingModel(false);
       }
     },
-    [modelId, onRoomInfo, roomId],
+    [selectedAgentId, selectedModelId, onRoomInfo, roomId],
   );
 
   const handleCursorSessionChange = useCallback(
@@ -420,6 +427,7 @@ function LiveRoom({
       backend: "cursor" | "claude-code";
       scopePath?: string;
       modelId?: string;
+      anthropicApiKey?: string;
     }) => {
       const agent = await addRoomAgent(roomId, data);
       setSelectedAgentId(agent.id);
@@ -442,12 +450,25 @@ function LiveRoom({
     [roomId],
   );
 
+  const handleForceRelease = useCallback(
+    async (path: string) => {
+      try {
+        await forceReleaseFileLock(roomId, path);
+      } catch (err) {
+        setActionError(
+          err instanceof Error ? err.message : "Failed to release lock",
+        );
+      }
+    },
+    [roomId],
+  );
+
   const fileCount = selectedDiff
     ? (selectedDiff.match(/^diff --git /gm) || []).length
     : 0;
 
   return (
-    <div className="h-[100dvh] flex flex-col bg-[#141414] overflow-hidden">
+    <div className="room-shell fixed inset-0 h-[100dvh] max-h-[100dvh] w-full flex flex-col bg-[#141414] overflow-hidden overscroll-none">
       <header className="flex items-center justify-between gap-2 px-2 sm:px-3 h-11 sm:h-10 border-b border-[#2b2b2b] bg-[#1a1a1a] shrink-0 pt-[env(safe-area-inset-top)]">
         <div className="flex items-center gap-1.5 sm:gap-2.5 min-w-0 flex-1">
           <Link
@@ -485,7 +506,9 @@ function LiveRoom({
             onClick={() => setChangesOpen(true)}
             className="lg:hidden h-7 px-2 rounded-md text-[11px] text-[#a0a0a0] hover:text-[#e4e4e4] border border-[#2b2b2b]"
           >
-            Changes{fileCount > 0 ? ` · ${fileCount}` : ""}
+            {runtime === "cloud"
+              ? "Cloud"
+              : `Changes${fileCount > 0 ? ` · ${fileCount}` : ""}`}
           </button>
           <button
             type="button"
@@ -562,31 +585,39 @@ function LiveRoom({
       <AgentTabs
         agents={agents}
         selectedAgentId={selectedAgentId}
-        onSelect={(id) => {
+        chatFilterAgentId={chatFilterAgentId}
+        onSelectAgent={(id) => {
           setSelectedAgentId(id);
-          if (agents.length > 1) setChatFilterAgentId(id);
+          setChatFilterAgentId(id);
         }}
+        onSelectAll={() => setChatFilterAgentId(null)}
         statusByAgent={statusByAgent}
         participants={participants}
+        models={models}
         amHost={amHost}
         onAddAgent={() => setAddAgentOpen(true)}
         onStopAgent={(id) => void handleStopAgent(id)}
       />
 
-      <ConflictBanner
+      <LockPanel
         conflicts={conflicts}
+        fileLocks={fileLocks}
         agents={agents}
         currentAgentId={selectedAgentId}
+        amHost={amHost}
+        lastBlocked={lastBlocked}
+        onForceRelease={handleForceRelease}
       />
 
-      <main className="flex flex-1 min-h-0 min-w-0 overflow-hidden">
+      <main className="flex flex-1 min-h-0 min-w-0 overflow-hidden overscroll-none">
         <div className="flex-1 flex flex-col min-h-0 min-w-0 overflow-hidden">
           <ChatPanel
             messages={messages}
             agentStatus={selectedStatus}
             agents={agents}
-            filterAgentId={chatFilterAgentId}
-            onFilterAgentChange={setChatFilterAgentId}
+            filterAgentId={
+              agents.length > 1 ? chatFilterAgentId : null
+            }
           />
         </div>
 
@@ -623,13 +654,14 @@ function LiveRoom({
       <AddAgentDialog
         open={addAgentOpen}
         onClose={() => setAddAgentOpen(false)}
+        roomId={roomId}
         onSubmit={handleAddAgent}
         models={models}
-        defaultModelId={modelId}
+        defaultModelId={selectedModelId}
         runtime={runtime}
       />
 
-      <footer className="border-t border-[#2b2b2b] bg-[#1a1a1a] shrink-0 pb-[env(safe-area-inset-bottom)]">
+      <footer className="relative z-10 border-t border-[#2b2b2b] bg-[#1a1a1a] shrink-0 overflow-hidden pb-[env(safe-area-inset-bottom)]">
         {(modelError || cursorSessionError || actionError || agentError) && (
           <p className="px-3 pt-2 text-[11px] text-[#f07070]">
             {actionError || agentError || modelError || cursorSessionError}
@@ -659,7 +691,7 @@ function LiveRoom({
           agentBusy={selectedStatus === "running"}
           connected={connected}
           models={models}
-          modelId={selectedAgent?.modelId || modelId}
+          modelId={selectedModelId}
           onModelChange={(id) => void handleModelChange(id)}
           modelDisabled={!amHost || savingModel}
           modelLockReason={
@@ -674,6 +706,7 @@ function LiveRoom({
               ? `Message ${selectedAgent.label}…`
               : "Message the agent…"
           }
+          agentName={selectedAgent?.label}
         />
       </footer>
     </div>

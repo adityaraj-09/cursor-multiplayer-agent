@@ -53,6 +53,22 @@ export interface AgentConflict {
   agentIds: string[];
 }
 
+export interface FileLease {
+  roomId: string;
+  path: string;
+  agentId: string;
+  callId?: string;
+  acquiredAt: number;
+  expiresAt: number;
+}
+
+export interface AgentConflictBlocked {
+  agentId: string;
+  path: string;
+  holderAgentId: string;
+  action: "aborted" | "queued";
+}
+
 export interface ChatMessage {
   id: string;
   roomId: string;
@@ -164,6 +180,8 @@ export interface ServerToClientEvents {
   "drive-released": (agentId?: string) => void;
   agents: (agents: AgentInfo[]) => void;
   "agent-conflicts": (conflicts: AgentConflict[]) => void;
+  "file-locks": (leases: FileLease[]) => void;
+  "agent-conflict-blocked": (payload: AgentConflictBlocked) => void;
   kicked: (reason: string) => void;
   error: (message: string) => void;
 }
@@ -217,6 +235,18 @@ export interface WorkerToServerEvents {
     sessions?: CursorChatSession[];
     error?: string;
   }) => void;
+  "worker:acquire-lock": (data: {
+    requestId: string;
+    roomId: string;
+    agentId: string;
+    path: string;
+    callId?: string;
+  }) => void;
+  "worker:release-lock": (data: {
+    roomId: string;
+    agentId: string;
+    path: string;
+  }) => void;
 }
 
 export interface ServerToWorkerEvents {
@@ -229,6 +259,8 @@ export interface ServerToWorkerEvents {
     cwd?: string;
     modelId: string;
     sessionId?: string | null;
+    /** Agent CLI backend — defaults to cursor when omitted. */
+    backend?: AgentBackendKind;
   }) => void;
   "worker:abort": (data: { roomId: string; agentId?: string }) => void;
   "worker:pick-folder": (data: { requestId: string }) => void;
@@ -238,6 +270,11 @@ export interface ServerToWorkerEvents {
     repoPath: string;
   }) => void;
   "worker:error": (message: string) => void;
+  "worker:lock-result": (data: {
+    requestId: string;
+    granted: boolean;
+    holderAgentId?: string;
+  }) => void;
 }
 
 export interface AgentStreamEventPayload {

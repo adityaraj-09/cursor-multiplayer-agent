@@ -7,6 +7,7 @@ import type {
   CursorChatSession,
 } from "../shared/events.js";
 import * as db from "./db.js";
+import type { FileLockRegistry } from "./fileLocks.js";
 
 export function makeRunKey(roomId: string, agentId: string): string {
   return `${roomId}:${agentId}`;
@@ -108,6 +109,7 @@ export class WorkerRelay {
     private verifyToken: (
       token: string,
     ) => { userId: string; workerId: string } | null,
+    private fileLocks?: FileLockRegistry,
   ) {
     this.setupNamespace();
   }
@@ -275,6 +277,34 @@ export class WorkerRelay {
           } else {
             waiter.resolve(data.sessions || []);
           }
+        });
+
+        socket.on("worker:acquire-lock", (data) => {
+          const room = db.getRoom(data.roomId);
+          if (!room || room.owner_id !== userId || !this.fileLocks) {
+            socket.emit("worker:lock-result", {
+              requestId: data.requestId,
+              granted: false,
+            });
+            return;
+          }
+          const result = this.fileLocks.tryAcquire(
+            data.roomId,
+            data.agentId,
+            data.path,
+            data.callId,
+          );
+          socket.emit("worker:lock-result", {
+            requestId: data.requestId,
+            granted: result.ok,
+            holderAgentId: result.ok ? undefined : result.holderAgentId,
+          });
+        });
+
+        socket.on("worker:release-lock", (data) => {
+          const room = db.getRoom(data.roomId);
+          if (!room || room.owner_id !== userId || !this.fileLocks) return;
+          this.fileLocks.release(data.roomId, data.agentId, data.path);
         });
 
         socket.on("disconnect", () => {
@@ -476,6 +506,7 @@ export class WorkerRelay {
     sessionId?: string | null,
     agentId?: string,
     cwd?: string,
+    backend?: string,
   ): boolean {
     const worker = this.workers.get(workerId);
     if (!worker) return false;
@@ -494,6 +525,12 @@ export class WorkerRelay {
       );
     }
 
+    if (backend === "claude-code" && worker.protocol < 3) {
+      throw new Error(
+        "Update the Steer CLI (`npm i -g @oblivihon/steer@latest`) to run Claude Code agents",
+      );
+    }
+
     const runKey = makeRunKey(roomId, resolvedAgentId);
     this.runToWorker.set(runKey, workerId);
     worker.activeRuns.add(runKey);
@@ -506,6 +543,7 @@ export class WorkerRelay {
       cwd: cwd || repoPath,
       modelId,
       sessionId,
+      backend: backend === "claude-code" ? "claude-code" : "cursor",
     });
 
     return true;

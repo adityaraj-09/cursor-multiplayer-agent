@@ -1,8 +1,10 @@
 import { spawn, type ChildProcess } from "child_process";
 import { createInterface } from "readline";
 import {
-  cursorAgentBackend,
+  getBackend,
+  type AgentBackendKind,
   type NormalizedAgentEvent,
+  type WorkerBackend,
 } from "../shared/backends/index.js";
 
 export type AgentStreamEvent = NormalizedAgentEvent;
@@ -15,7 +17,7 @@ interface QueueItem {
 }
 
 /**
- * Local Cursor CLI agent — uses `cursor agent` login (no API key).
+ * Local CLI agent runner — Cursor (`cursor agent`) or Claude Code (`claude -p`).
  * Multi-turn via --resume using the stored session id.
  */
 export class AgentRunner {
@@ -23,13 +25,17 @@ export class AgentRunner {
   private queue: QueueItem[] = [];
   private active: ChildProcess | null = null;
   private processing = false;
+  private aborted = false;
+  private readonly backendKind: AgentBackendKind;
 
   constructor(
     private repoPath: string,
     sessionId?: string | null,
     private modelId = "auto",
+    backendKind: AgentBackendKind = "cursor",
   ) {
     this.sessionId = sessionId ?? null;
+    this.backendKind = backendKind === "claude-code" ? "claude-code" : "cursor";
   }
 
   getSessionId(): string | null {
@@ -48,6 +54,10 @@ export class AgentRunner {
     return this.modelId;
   }
 
+  getBackendKind(): AgentBackendKind {
+    return this.backendKind;
+  }
+
   /** CLI has no durable SDK agent id. */
   getAgentId(): string | null {
     return null;
@@ -57,15 +67,45 @@ export class AgentRunner {
     return this.processing || this.queue.length > 0;
   }
 
+  /** Fire-and-forget abort. Prefer abortAndWait. */
   abort(): void {
-    this.active?.kill("SIGTERM");
-    this.active = null;
+    void this.abortAndWait();
+  }
+
+  /** SIGTERM the active child and wait for it to exit (with a short timeout). */
+  async abortAndWait(): Promise<void> {
+    this.aborted = true;
     this.queue = [];
+    const child = this.active;
+    if (!child) {
+      this.processing = false;
+      return;
+    }
+
+    await new Promise<void>((resolve) => {
+      let settled = false;
+      const done = () => {
+        if (settled) return;
+        settled = true;
+        resolve();
+      };
+      child.once("close", done);
+      child.once("error", done);
+      try {
+        child.kill("SIGTERM");
+      } catch {
+        done();
+        return;
+      }
+      setTimeout(done, 2000);
+    });
+
+    this.active = null;
     this.processing = false;
   }
 
   async dispose(): Promise<void> {
-    this.abort();
+    await this.abortAndWait();
   }
 
   run(
@@ -84,11 +124,16 @@ export class AgentRunner {
     if (!item) return;
 
     this.processing = true;
+    this.aborted = false;
     try {
       await this.execute(item);
       item.resolve();
     } catch (err) {
-      item.reject(err instanceof Error ? err : new Error(String(err)));
+      if (this.aborted) {
+        item.resolve();
+      } else {
+        item.reject(err instanceof Error ? err : new Error(String(err)));
+      }
     } finally {
       this.processing = false;
       this.active = null;
@@ -98,13 +143,14 @@ export class AgentRunner {
 
   private execute(item: QueueItem): Promise<void> {
     return new Promise((resolve, reject) => {
-      const args = cursorAgentBackend.buildArgs({
+      const backend: WorkerBackend = getBackend(this.backendKind);
+      const args = backend.buildArgs({
         prompt: item.prompt,
         modelId: this.modelId,
         sessionId: this.sessionId,
       });
 
-      const child = spawn(cursorAgentBackend.command, args, {
+      const child = spawn(backend.command, args, {
         cwd: this.repoPath,
         env: process.env as NodeJS.ProcessEnv,
         stdio: ["ignore", "pipe", "pipe"],
@@ -133,6 +179,7 @@ export class AgentRunner {
 
       const rl = createInterface({ input: child.stdout });
       rl.on("line", (line) => {
+        if (this.aborted) return;
         const trimmed = line.trim();
         if (!trimmed) return;
         let ev: unknown;
@@ -142,7 +189,7 @@ export class AgentRunner {
           return;
         }
 
-        for (const event of cursorAgentBackend.parseLine(ev, ctx)) {
+        for (const event of backend.parseLine(ev, ctx)) {
           if (event.kind === "session") {
             this.sessionId = event.sessionId;
           }
@@ -151,14 +198,26 @@ export class AgentRunner {
       });
 
       child.on("error", (err) => {
-        if (!ctx.gotTerminalEvent.value) {
-          item.onEvent({ kind: "error", message: err.message });
+        if (this.aborted) {
+          finish();
+          return;
         }
-        finish(err);
+        const message =
+          (err as NodeJS.ErrnoException).code === "ENOENT"
+            ? `${backend.command} CLI not found — install it and ensure it is on PATH`
+            : err.message;
+        if (!ctx.gotTerminalEvent.value) {
+          item.onEvent({ kind: "error", message });
+        }
+        finish(new Error(message));
       });
 
       child.on("close", (code) => {
         if (settled) return;
+        if (this.aborted) {
+          finish();
+          return;
+        }
         if (code === 0) {
           if (!ctx.gotTerminalEvent.value && ctx.assistantBuf.value) {
             item.onEvent({ kind: "done", result: ctx.assistantBuf.value });
