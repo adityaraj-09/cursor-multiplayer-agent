@@ -427,6 +427,7 @@ function LiveRoom({
       backend: "cursor" | "claude-code";
       scopePath?: string;
       modelId?: string;
+      anthropicApiKey?: string;
     }) => {
       const agent = await addRoomAgent(roomId, data);
       setSelectedAgentId(agent.id);

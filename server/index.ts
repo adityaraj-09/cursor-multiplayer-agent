@@ -28,6 +28,13 @@ import {
   userByokConfigured,
   userByokHint,
 } from "./userByok.js";
+import {
+  clearUserAnthropicByokKey,
+  setUserAnthropicByokKey,
+  userAnthropicByokConfigured,
+  userAnthropicByokHint,
+} from "./userAnthropicByok.js";
+import { isClaudeSandboxConfigured } from "./claudeSandbox.js";
 import type {
   ServerToClientEvents,
   ClientToServerEvents,
@@ -177,6 +184,11 @@ app.get("/api/auth/status", (req, res) => {
     byokAvailable: encryptionConfigured(),
     userByokConfigured: userId ? userByokConfigured(userId) : false,
     userByokHint: userId ? userByokHint(userId) : null,
+    userAnthropicByokConfigured: userId
+      ? userAnthropicByokConfigured(userId)
+      : false,
+    userAnthropicByokHint: userId ? userAnthropicByokHint(userId) : null,
+    e2bConfigured: isClaudeSandboxConfigured(),
     canManageServerKey: isAdminUser(userId),
   });
 });
@@ -248,6 +260,35 @@ app.delete("/api/auth/byok-key", requireAuth, (req, res) => {
     ok: true,
     userByokConfigured: false,
     userByokHint: null,
+  });
+});
+
+/** Save / replace the signed-in user's Anthropic API key (Claude Code cloud BYOK). */
+app.post("/api/auth/anthropic-byok-key", requireAuth, (req, res) => {
+  try {
+    const apiKey = String(req.body?.apiKey || "").trim();
+    const result = setUserAnthropicByokKey(req.user!.id, apiKey);
+    res.json({
+      ok: true,
+      userAnthropicByokConfigured: true,
+      userAnthropicByokHint: result.hint,
+    });
+  } catch (err) {
+    res.status(400).json({
+      error:
+        err instanceof Error
+          ? err.message
+          : "Failed to save Anthropic BYOK key",
+    });
+  }
+});
+
+app.delete("/api/auth/anthropic-byok-key", requireAuth, (req, res) => {
+  clearUserAnthropicByokKey(req.user!.id);
+  res.json({
+    ok: true,
+    userAnthropicByokConfigured: false,
+    userAnthropicByokHint: null,
   });
 });
 
@@ -531,6 +572,9 @@ app.post("/api/rooms/:id/agents", requireAuth, (req, res) => {
           ? String(req.body.scopePath)
           : undefined,
         modelId: req.body?.modelId ? String(req.body.modelId) : undefined,
+        anthropicApiKey: req.body?.anthropicApiKey
+          ? String(req.body.anthropicApiKey)
+          : undefined,
       },
       req.user!.id,
     );

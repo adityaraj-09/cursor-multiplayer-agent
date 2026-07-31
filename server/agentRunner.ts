@@ -1,8 +1,10 @@
 import { spawn, type ChildProcess } from "child_process";
 import { createInterface } from "readline";
 import {
-  cursorAgentBackend,
+  getBackend,
+  type AgentBackendKind,
   type NormalizedAgentEvent,
+  type WorkerBackend,
 } from "../shared/backends/index.js";
 
 export type AgentStreamEvent = NormalizedAgentEvent;
@@ -15,7 +17,7 @@ interface QueueItem {
 }
 
 /**
- * Local Cursor CLI agent — uses `cursor agent` login (no API key).
+ * Local CLI agent runner — Cursor (`cursor agent`) or Claude Code (`claude -p`).
  * Multi-turn via --resume using the stored session id.
  */
 export class AgentRunner {
@@ -24,13 +26,16 @@ export class AgentRunner {
   private active: ChildProcess | null = null;
   private processing = false;
   private aborted = false;
+  private readonly backendKind: AgentBackendKind;
 
   constructor(
     private repoPath: string,
     sessionId?: string | null,
     private modelId = "auto",
+    backendKind: AgentBackendKind = "cursor",
   ) {
     this.sessionId = sessionId ?? null;
+    this.backendKind = backendKind === "claude-code" ? "claude-code" : "cursor";
   }
 
   getSessionId(): string | null {
@@ -47,6 +52,10 @@ export class AgentRunner {
 
   getModel(): string {
     return this.modelId;
+  }
+
+  getBackendKind(): AgentBackendKind {
+    return this.backendKind;
   }
 
   /** CLI has no durable SDK agent id. */
@@ -134,13 +143,14 @@ export class AgentRunner {
 
   private execute(item: QueueItem): Promise<void> {
     return new Promise((resolve, reject) => {
-      const args = cursorAgentBackend.buildArgs({
+      const backend: WorkerBackend = getBackend(this.backendKind);
+      const args = backend.buildArgs({
         prompt: item.prompt,
         modelId: this.modelId,
         sessionId: this.sessionId,
       });
 
-      const child = spawn(cursorAgentBackend.command, args, {
+      const child = spawn(backend.command, args, {
         cwd: this.repoPath,
         env: process.env as NodeJS.ProcessEnv,
         stdio: ["ignore", "pipe", "pipe"],
@@ -179,7 +189,7 @@ export class AgentRunner {
           return;
         }
 
-        for (const event of cursorAgentBackend.parseLine(ev, ctx)) {
+        for (const event of backend.parseLine(ev, ctx)) {
           if (event.kind === "session") {
             this.sessionId = event.sessionId;
           }
@@ -192,10 +202,14 @@ export class AgentRunner {
           finish();
           return;
         }
+        const message =
+          (err as NodeJS.ErrnoException).code === "ENOENT"
+            ? `${backend.command} CLI not found — install it and ensure it is on PATH`
+            : err.message;
         if (!ctx.gotTerminalEvent.value) {
-          item.onEvent({ kind: "error", message: err.message });
+          item.onEvent({ kind: "error", message });
         }
-        finish(err);
+        finish(new Error(message));
       });
 
       child.on("close", (code) => {

@@ -72,6 +72,8 @@ interface RunPromptPayload {
   cwd?: string;
   modelId: string;
   sessionId?: string | null;
+  /** `cursor` (default) or `claude-code` */
+  backend?: string;
 }
 
 interface AbortPayload {
@@ -205,6 +207,8 @@ export function startWorker(repoPathOverride?: string): void {
       sessionId,
     } = payload;
     const agentId = payload.agentId || "default";
+    const backendKind =
+      payload.backend === "claude-code" ? "claude-code" : "cursor";
     const runKey = makeRunKey(roomId, agentId);
     const repoPath = repoPathOverride || payloadCwd || payloadRepoPath;
     const cwd = payloadCwd || repoPath;
@@ -271,6 +275,7 @@ export function startWorker(repoPathOverride?: string): void {
       ),
     );
     console.log(chalk.gray(`Cwd: ${cwd}`));
+    console.log(chalk.gray(`Backend: ${backendKind}`));
     console.log(chalk.gray(`Model: ${modelId}`));
     console.log(
       chalk.gray(
@@ -384,6 +389,7 @@ export function startWorker(repoPathOverride?: string): void {
       onEvent,
       sessionId,
       runKey,
+      backendKind,
     );
     runState.abort = handle.abort;
 

@@ -8,6 +8,14 @@ import {
   listModelsForKey,
   type SdkStreamEvent,
 } from "./sdkAgent.js";
+import {
+  ClaudeSandboxSession,
+  isClaudeSandboxConfigured,
+} from "./claudeSandbox.js";
+import {
+  resolveAnthropicApiKey,
+  setUserAnthropicByokKey,
+} from "./userAnthropicByok.js";
 import { DiffWatcher } from "./diffWatcher.js";
 import { extractToolPath, getFileDiff, isEditTool } from "./gitDiff.js";
 import { listCliModels } from "./cliModels.js";
@@ -72,7 +80,7 @@ export interface CreateRoomRequest {
   ownerId?: string;
 }
 
-type AgentBackend = AgentRunner | SdkAgentSession;
+type AgentBackend = AgentRunner | SdkAgentSession | ClaudeSandboxSession;
 
 interface AgentState {
   row: db.AgentRow;
@@ -441,12 +449,18 @@ export class RoomManager {
 
       if (existing) {
         backend = existing;
-      } else if (row.auth_mode === "cli") {
+      } else if (
+        agentRow.backend === "claude-code" &&
+        row.runtime === "cloud"
+      ) {
+        backend = this.createClaudeSandboxBackend(row, agentRow);
+      } else if (row.auth_mode === "cli" || agentRow.backend === "claude-code") {
         const cwd = resolveAgentCwd(row.repo_path, agentRow.scope_path);
         backend = new AgentRunner(
           cwd,
           agentRow.session_id,
           agentRow.model_id || "auto",
+          agentRow.backend === "claude-code" ? "claude-code" : "cursor",
         );
       } else {
         const apiKey = resolveApiKey(row);
@@ -569,6 +583,28 @@ export class RoomManager {
       branch: row.branch || undefined,
       prUrl: row.pr_url || undefined,
     };
+  }
+
+  /** Cloud Claude Code via E2B sandbox (E2B_API_KEY server-side; Anthropic key BYOK). */
+  private createClaudeSandboxBackend(
+    row: db.RoomRow,
+    agentRow: db.AgentRow,
+    anthropicApiKey?: string,
+  ): ClaudeSandboxSession {
+    const apiKey =
+      anthropicApiKey?.trim() ||
+      resolveAnthropicApiKey(row.owner_id) ||
+      "";
+    return new ClaudeSandboxSession({
+      apiKey,
+      model: agentRow.model_id || "sonnet",
+      name: `${row.name}/${agentRow.label}`,
+      repoUrl: row.repo_url?.trim() || "",
+      startingRef: row.starting_ref || "main",
+      sessionId: agentRow.session_id,
+      sandboxId: agentRow.sdk_agent_id,
+      githubToken: process.env.GITHUB_TOKEN?.trim() || undefined,
+    });
   }
 
   listAgentInfos(roomId: string): AgentInfo[] {
@@ -1382,6 +1418,7 @@ export class RoomManager {
         agent.row.session_id,
         agent.row.id,
         agent.cwd,
+        agent.row.backend,
       );
     } catch (err) {
       // Multi-agent CLI upgrade error
@@ -1992,6 +2029,8 @@ export class RoomManager {
       label: string;
       scopePath?: string;
       modelId?: string;
+      /** Optional Anthropic API key (Claude Code cloud BYOK). Saved to the user account when provided. */
+      anthropicApiKey?: string;
     },
     actorUserId: string,
   ): AgentInfo {
@@ -2004,9 +2043,42 @@ export class RoomManager {
       throw new Error("Only the host can add agents");
     }
 
-    const backendKind: AgentBackendKind = opts.backend || "cursor";
+    const backendKind: AgentBackendKind =
+      opts.backend === "claude-code" ? "claude-code" : "cursor";
+
+    let anthropicApiKey = "";
     if (backendKind === "claude-code") {
-      throw new Error("Claude Code backend is coming soon");
+      if (row.runtime === "cloud") {
+        if (!isClaudeSandboxConfigured()) {
+          throw new Error(
+            "Claude Code cloud agents require E2B_API_KEY on the server",
+          );
+        }
+        if (!row.repo_url?.trim()) {
+          throw new Error("Cloud Claude Code requires a GitHub repo URL");
+        }
+        const pasted = opts.anthropicApiKey?.trim() || "";
+        if (pasted) {
+          if (!encryptionConfigured()) {
+            throw new Error(
+              "KEY_ENCRYPTION_SECRET is required to store an Anthropic API key",
+            );
+          }
+          setUserAnthropicByokKey(actorUserId, pasted);
+          anthropicApiKey = pasted;
+        } else {
+          anthropicApiKey = resolveAnthropicApiKey(actorUserId);
+        }
+        if (!anthropicApiKey) {
+          throw new Error(
+            "Paste your Anthropic API key for Claude Code (or set ANTHROPIC_API_KEY on the server)",
+          );
+        }
+      } else if (row.auth_mode !== "cli") {
+        throw new Error(
+          "Claude Code on local runtime requires CLI auth (run `steer start`)",
+        );
+      }
     }
 
     if (opts.scopePath) {
@@ -2015,7 +2087,13 @@ export class RoomManager {
     }
 
     const modelId =
-      opts.modelId || row.model_id || (row.auth_mode === "cli" ? "auto" : DEFAULT_MODEL);
+      opts.modelId ||
+      row.model_id ||
+      (backendKind === "claude-code"
+        ? "sonnet"
+        : row.auth_mode === "cli"
+          ? "auto"
+          : DEFAULT_MODEL);
 
     const agentRow = db.createAgent({
       roomId,
@@ -2031,8 +2109,10 @@ export class RoomManager {
       : "";
 
     let backend: AgentBackend;
-    if (row.auth_mode === "cli") {
-      backend = new AgentRunner(cwd, null, modelId);
+    if (backendKind === "claude-code" && row.runtime === "cloud") {
+      backend = this.createClaudeSandboxBackend(row, agentRow, anthropicApiKey);
+    } else if (row.auth_mode === "cli" || backendKind === "claude-code") {
+      backend = new AgentRunner(cwd, null, modelId, backendKind);
     } else {
       const apiKey = resolveApiKey(row);
       backend = new SdkAgentSession({
@@ -2323,7 +2403,10 @@ export class RoomManager {
           );
         }
         this.persistAgentSession(room, agent, next);
-        if (agent.backend instanceof AgentRunner) {
+        if (
+          agent.backend instanceof AgentRunner ||
+          agent.backend instanceof ClaudeSandboxSession
+        ) {
           agent.backend.setSessionId(next);
         }
       }
