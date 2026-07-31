@@ -2669,12 +2669,12 @@ export class RoomManager {
       }
     }
 
-    // Cursor SDK listing — may fail for Claude-only rooms with no Cursor key.
+    // Cursor SDK listing — may fail for Claude-only rooms with no Cursor key
+    // (Claude backends already returned above).
     try {
       const apiKey = resolveApiKey(row);
       return listModelsForKey(apiKey);
     } catch {
-      if (agentRow?.backend === "claude-code") return CLAUDE_MODELS;
       throw new Error(
         "No Cursor API key configured for this room — switch to a Claude agent or set a server/BYOK key",
       );
