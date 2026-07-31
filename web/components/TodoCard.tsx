@@ -1,22 +1,12 @@
 "use client";
 
 import type { AgentTodoItem, ChatMessage } from "../../shared/events";
-import {
-  isTodoTool,
-  resolveMessageTodos,
-} from "../../shared/backends/cursor";
+import { resolveMessageTodos } from "../../shared/backends/cursor";
 
-export function messageHasTodos(message: ChatMessage): boolean {
-  if (message.todos && message.todos.length > 0) return true;
-  if (message.toolName && isTodoTool(message.toolName)) return true;
-  const content = message.content?.trim() ?? "";
-  if (!content) return false;
-  // Older messages stored raw todo-tool JSON as content.
-  return (
-    (content.startsWith("{") || content.startsWith("[")) &&
-    /"todos"\s*:/.test(content)
-  );
-}
+export {
+  coalesceTodoMessages,
+  messageHasTodos,
+} from "../../shared/backends/cursor";
 
 function StatusIcon({ status }: { status: AgentTodoItem["status"] }) {
   if (status === "completed") {

@@ -14,7 +14,7 @@ import {
 import type { AgentRunStatus, ChatMessage } from "../../shared/events";
 import Markdown from "./Markdown";
 import InlineDiff from "./InlineDiff";
-import TodoCard, { messageHasTodos } from "./TodoCard";
+import TodoCard, { coalesceTodoMessages, messageHasTodos } from "./TodoCard";
 
 interface ChatPanelProps {
   messages: ChatMessage[];
@@ -32,6 +32,8 @@ type ChatItem =
 function groupMessages(messages: ChatMessage[]): ChatItem[] {
   const items: ChatItem[] = [];
   let toolBuf: ChatMessage[] = [];
+  // Collapse stacked TodoWrite cards (2, then 3, then 4…) into the latest.
+  const timeline = coalesceTodoMessages(messages);
 
   const flushTools = () => {
     if (toolBuf.length === 0) return;
@@ -43,7 +45,7 @@ function groupMessages(messages: ChatMessage[]): ChatItem[] {
     toolBuf = [];
   };
 
-  for (const msg of messages) {
+  for (const msg of timeline) {
     if (msg.role !== "tool") {
       flushTools();
       items.push({ type: "message", message: msg });

@@ -257,6 +257,49 @@ export function resolveMessageTodos(message: {
   return [];
 }
 
+/** Whether a chat tool message should render as the Todos card. */
+export function messageHasTodos(message: {
+  role?: string;
+  todos?: AgentTodoItem[];
+  content?: string;
+  toolName?: string;
+}): boolean {
+  if (message.todos && message.todos.length > 0) return true;
+  if (message.toolName && isTodoTool(message.toolName)) return true;
+  const content = message.content?.trim() ?? "";
+  if (!content) return false;
+  return (
+    (content.startsWith("{") || content.startsWith("[")) &&
+    /"todos"\s*:/.test(content)
+  );
+}
+
+/**
+ * Keep only the latest todos card per agent so successive TodoWrite updates
+ * (2 → 3 → 4 items) don't stack as separate groups in the timeline.
+ */
+export function coalesceTodoMessages<
+  T extends {
+    id: string;
+    role: string;
+    agentId?: string;
+    todos?: AgentTodoItem[];
+    content?: string;
+    toolName?: string;
+  },
+>(messages: T[]): T[] {
+  const latestIdByAgent = new Map<string, string>();
+  for (const msg of messages) {
+    if (msg.role !== "tool" || !messageHasTodos(msg)) continue;
+    latestIdByAgent.set(msg.agentId || "__default__", msg.id);
+  }
+  if (latestIdByAgent.size === 0) return messages;
+  return messages.filter((msg) => {
+    if (msg.role !== "tool" || !messageHasTodos(msg)) return true;
+    return latestIdByAgent.get(msg.agentId || "__default__") === msg.id;
+  });
+}
+
 /** Best-effort extraction when content is a sliced JSON blob. */
 function todosFromTruncatedContent(content: string): AgentTodoItem[] {
   if (!/"content"\s*:/.test(content)) return [];

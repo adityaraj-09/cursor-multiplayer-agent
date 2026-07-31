@@ -9,6 +9,7 @@ import {
 } from "../server/agentConflicts.js";
 import {
   CursorAgentBackend,
+  coalesceTodoMessages,
   diffFromToolArgs,
   isTodoTool,
   resolveMessageTodos,
@@ -414,6 +415,55 @@ describe("todo helpers", () => {
     expect(todos.length).toBeGreaterThanOrEqual(1);
     expect(todos[0].content).toContain("Update LandingPage");
     expect(todos[0].status).toBe("completed");
+  });
+
+  it("coalesces stacked todo cards to the latest per agent", () => {
+    const msgs = [
+      {
+        id: "t2",
+        role: "tool",
+        agentId: "a1",
+        toolName: "todo",
+        todos: [
+          { id: "1", content: "One", status: "completed" as const },
+          { id: "2", content: "Two", status: "pending" as const },
+        ],
+      },
+      { id: "m1", role: "assistant", agentId: "a1" },
+      {
+        id: "t3",
+        role: "tool",
+        agentId: "a1",
+        toolName: "todoWrite",
+        todos: [
+          { id: "1", content: "One", status: "completed" as const },
+          { id: "2", content: "Two", status: "completed" as const },
+          { id: "3", content: "Three", status: "in_progress" as const },
+        ],
+      },
+      {
+        id: "t4",
+        role: "tool",
+        agentId: "a1",
+        toolName: "todo",
+        todos: [
+          { id: "1", content: "One", status: "completed" as const },
+          { id: "2", content: "Two", status: "completed" as const },
+          { id: "3", content: "Three", status: "completed" as const },
+          { id: "4", content: "Four", status: "pending" as const },
+        ],
+      },
+      {
+        id: "other",
+        role: "tool",
+        agentId: "a2",
+        toolName: "todo",
+        todos: [{ id: "x", content: "Other agent", status: "pending" as const }],
+      },
+    ];
+    const coalesced = coalesceTodoMessages(msgs);
+    expect(coalesced.map((m) => m.id)).toEqual(["m1", "t4", "other"]);
+    expect(coalesced.find((m) => m.id === "t4")?.todos).toHaveLength(4);
   });
 
   it("builds write diffs from contents", () => {

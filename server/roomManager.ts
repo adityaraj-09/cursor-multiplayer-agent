@@ -23,6 +23,7 @@ import {
 } from "../shared/claudeModels.js";
 import { DiffWatcher } from "./diffWatcher.js";
 import { extractToolPath, getFileDiff, isEditTool } from "./gitDiff.js";
+import { isTodoTool } from "../shared/backends/cursor.js";
 import { listCliModels } from "./cliModels.js";
 import { WorkerRelay } from "./workerRelay.js";
 import * as db from "./db.js";
@@ -101,6 +102,11 @@ interface AgentState {
   toolPaths: Map<string, string>;
   /** Most recent tool chat message for this agent — fallback when callId is missing. */
   lastToolMsgId: string | null;
+  /**
+   * Single live todos card for this agent. Successive TodoWrite / todo tool
+   * calls update this message in place instead of stacking 2→3→4 cards.
+   */
+  todoMsgId: string | null;
   workerRunActive: boolean;
   workerRunCleanups: (() => void)[];
   driverSocketId: string | null;
@@ -578,6 +584,7 @@ export class RoomManager {
         toolMsgIds: new Map(),
         toolPaths: new Map(),
         lastToolMsgId: null,
+        todoMsgId: null,
         workerRunActive: false,
         workerRunCleanups: [],
         driverSocketId: null,
@@ -863,6 +870,84 @@ export class RoomManager {
   ): void {
     if (!path || !toolName || !isEditTool(toolName)) return;
     this.fileLocks.release(room.id, agent.row.id, path);
+  }
+
+  /** True when this tool event should land on the agent's single todos card. */
+  private isTodoToolEvent(
+    toolName: string | undefined,
+    todos?: ChatMessage["todos"],
+  ): boolean {
+    return Boolean(todos?.length) || Boolean(toolName && isTodoTool(toolName));
+  }
+
+  /**
+   * Insert or update a tool chat row. Todo tools always reuse `agent.todoMsgId`
+   * so successive TodoWrite calls (2 → 3 → 4 items) update one card.
+   */
+  private upsertAgentToolMessage(
+    room: RoomState,
+    agent: AgentState,
+    opts: {
+      callId?: string;
+      name: string;
+      content: string;
+      path?: string;
+      todos?: ChatMessage["todos"];
+      status: "streaming" | "done" | "error";
+      diffPatch?: string;
+      /** When true, allow falling back to lastToolMsgId for non-todo tools. */
+      allowLastToolFallback?: boolean;
+    },
+  ): string | null {
+    const isTodo = this.isTodoToolEvent(opts.name, opts.todos);
+    const existingId =
+      (opts.callId ? agent.toolMsgIds.get(opts.callId) : undefined) ||
+      (isTodo ? agent.todoMsgId || undefined : undefined) ||
+      (opts.allowLastToolFallback && !isTodo
+        ? agent.lastToolMsgId || undefined
+        : undefined);
+
+    // tool_done with no prior start and not a todo — nothing to attach to.
+    if (!existingId && opts.status !== "streaming" && !isTodo) {
+      return null;
+    }
+
+    const id = existingId || nanoid(12);
+    const msg: ChatMessage = {
+      id,
+      roomId: room.id,
+      role: "tool",
+      content: opts.content,
+      toolName: opts.name || "tool",
+      status: opts.status,
+      ts: Date.now(),
+      agentId: agent.row.id,
+    };
+    if (opts.todos?.length) msg.todos = opts.todos;
+    if (opts.diffPatch) msg.diffPatch = opts.diffPatch;
+
+    if (existingId) {
+      if (opts.diffPatch || opts.todos?.length) {
+        db.updateMessageTool(id, opts.content, opts.status, {
+          diffPatch: opts.diffPatch,
+          todos: opts.todos,
+        });
+      } else {
+        db.updateMessageContent(id, opts.content, opts.status);
+      }
+    } else {
+      db.insertMessage(msg);
+    }
+
+    if (opts.callId) {
+      agent.toolMsgIds.set(opts.callId, id);
+      if (opts.path) agent.toolPaths.set(opts.callId, opts.path);
+    }
+    agent.lastToolMsgId = id;
+    if (isTodo) agent.todoMsgId = id;
+
+    this.io.to(room.id).emit("chat-message", msg);
+    return id;
   }
 
   forceReleaseFileLock(
@@ -1250,6 +1335,7 @@ export class RoomManager {
     agent.toolMsgIds.clear();
     agent.toolPaths.clear();
     agent.lastToolMsgId = null;
+    agent.todoMsgId = null;
 
     const isCurrent = () => agent.runGeneration === generation;
 
@@ -1394,54 +1480,14 @@ export class RoomManager {
               this.workerRelay?.abortRun(room.id, agent.row.id);
               break;
             }
-            const content = event.detail || "Running…";
-            const todos = event.todos?.length ? event.todos : undefined;
-            const existingId = event.callId
-              ? agent.toolMsgIds.get(event.callId)
-              : undefined;
-            if (existingId) {
-              // Same callId saw another "started" (partial streams) — update in place.
-              if (todos) {
-                db.updateMessageTool(existingId, content, "streaming", {
-                  todos,
-                });
-              } else {
-                db.updateMessageContent(existingId, content, "streaming");
-              }
-              const msg: ChatMessage = {
-                id: existingId,
-                roomId: room.id,
-                role: "tool",
-                content,
-                toolName: event.name || "tool",
-                todos,
-                status: "streaming",
-                ts: Date.now(),
-                agentId: agent.row.id,
-              };
-              agent.lastToolMsgId = existingId;
-              if (event.path && event.callId)
-                agent.toolPaths.set(event.callId, event.path);
-              this.io.to(room.id).emit("chat-message", msg);
-              break;
-            }
-            const msg: ChatMessage = {
-              id: nanoid(12),
-              roomId: room.id,
-              role: "tool",
-              content,
-              toolName: event.name || "tool",
-              todos,
+            this.upsertAgentToolMessage(room, agent, {
+              callId: event.callId,
+              name: event.name || "tool",
+              content: event.detail || "Running…",
+              path: toolPath,
+              todos: event.todos?.length ? event.todos : undefined,
               status: "streaming",
-              ts: Date.now(),
-              agentId: agent.row.id,
-            };
-            if (event.callId) agent.toolMsgIds.set(event.callId, msg.id);
-            if (event.path && event.callId)
-              agent.toolPaths.set(event.callId, event.path);
-            agent.lastToolMsgId = msg.id;
-            db.insertMessage(msg);
-            this.io.to(room.id).emit("chat-message", msg);
+            });
             break;
           }
           case "tool_done": {
@@ -1454,36 +1500,16 @@ export class RoomManager {
             if (toolPath && event.name && isEditTool(event.name)) {
               this.noteTouchedPath(room, agent, toolPath);
             }
-            const id =
-              (event.callId
-                ? agent.toolMsgIds.get(event.callId)
-                : undefined) || agent.lastToolMsgId || undefined;
-            if (id) {
-              const content = event.detail || event.path || "Done";
-              const patch = event.diffPatch?.trim() || "";
-              const todos = event.todos?.length ? event.todos : undefined;
-              if (patch || todos) {
-                db.updateMessageTool(id, content, "done", {
-                  diffPatch: patch || undefined,
-                  todos,
-                });
-              } else {
-                db.updateMessageContent(id, content, "done");
-              }
-              const doneMsg: ChatMessage = {
-                id,
-                roomId: room.id,
-                role: "tool",
-                content,
-                toolName: event.name || "tool",
-                status: "done",
-                ts: Date.now(),
-                agentId: agent.row.id,
-              };
-              if (patch) doneMsg.diffPatch = patch;
-              if (todos) doneMsg.todos = todos;
-              this.io.to(room.id).emit("chat-message", doneMsg);
-            }
+            this.upsertAgentToolMessage(room, agent, {
+              callId: event.callId,
+              name: event.name || "tool",
+              content: event.detail || event.path || "Done",
+              path: toolPath,
+              todos: event.todos?.length ? event.todos : undefined,
+              status: "done",
+              diffPatch: event.diffPatch?.trim() || undefined,
+              allowLastToolFallback: true,
+            });
             afterTools = true;
             break;
           }
@@ -1668,6 +1694,7 @@ export class RoomManager {
     agent.toolMsgIds.clear();
     agent.toolPaths.clear();
     agent.lastToolMsgId = null;
+    agent.todoMsgId = null;
 
     const isCurrent = () => agent.runGeneration === generation;
 
@@ -1842,58 +1869,17 @@ export class RoomManager {
                 this.lockConflictMessage(room, path || "file", holder),
               );
             }
-            const content = event.detail || "Running…";
-            const todos = event.todos?.length ? event.todos : undefined;
-            const existingId = event.callId
-              ? agent.toolMsgIds.get(event.callId)
-              : undefined;
-            if (existingId) {
-              if (todos) {
-                db.updateMessageTool(existingId, content, "streaming", {
-                  todos,
-                });
-              } else {
-                db.updateMessageContent(existingId, content, "streaming");
-              }
-              const msg: ChatMessage = {
-                id: existingId,
-                roomId: room.id,
-                role: "tool",
-                content,
-                toolName: event.name,
-                todos,
-                status: "streaming",
-                ts: Date.now(),
-                agentId: agent.row.id,
-              };
-              agent.lastToolMsgId = existingId;
-              if (path && event.callId) agent.toolPaths.set(event.callId, path);
-              this.io.to(room.id).emit("chat-message", msg);
-              break;
-            }
-            const msg: ChatMessage = {
-              id: nanoid(12),
-              roomId: room.id,
-              role: "tool",
-              content,
-              toolName: event.name,
-              todos,
+            this.upsertAgentToolMessage(room, agent, {
+              callId: event.callId,
+              name: event.name || "tool",
+              content: event.detail || "Running…",
+              path,
+              todos: event.todos?.length ? event.todos : undefined,
               status: "streaming",
-              ts: Date.now(),
-              agentId: agent.row.id,
-            };
-            if (event.callId) agent.toolMsgIds.set(event.callId, msg.id);
-            if (path && event.callId) agent.toolPaths.set(event.callId, path);
-            agent.lastToolMsgId = msg.id;
-            db.insertMessage(msg);
-            this.io.to(room.id).emit("chat-message", msg);
+            });
             break;
           }
           case "tool_done": {
-            const id =
-              (event.callId
-                ? agent.toolMsgIds.get(event.callId)
-                : undefined) || agent.lastToolMsgId || undefined;
             const path =
               event.path ||
               (event.callId
@@ -1902,39 +1888,22 @@ export class RoomManager {
               extractToolPath(event.detail) ||
               undefined;
             this.releaseEditLock(room, agent, event.name, path);
-            if (path && event.callId) {
-              agent.toolPaths.set(event.callId, path);
-              if (event.name && isEditTool(event.name)) {
-                this.noteTouchedPath(room, agent, path);
-              }
-            } else if (path && event.name && isEditTool(event.name)) {
+            if (path && event.name && isEditTool(event.name)) {
               this.noteTouchedPath(room, agent, path);
             }
+            const content = event.detail || path || "Done";
+            const synthetic = event.diffPatch?.trim() || "";
+            const id = this.upsertAgentToolMessage(room, agent, {
+              callId: event.callId,
+              name: event.name || "tool",
+              content,
+              path,
+              todos: event.todos?.length ? event.todos : undefined,
+              status: "done",
+              diffPatch: synthetic || undefined,
+              allowLastToolFallback: true,
+            });
             if (id) {
-              const content = event.detail || path || "Done";
-              const synthetic = event.diffPatch?.trim() || "";
-              const todos = event.todos?.length ? event.todos : undefined;
-              if (synthetic || todos) {
-                db.updateMessageTool(id, content, "done", {
-                  diffPatch: synthetic || undefined,
-                  todos,
-                });
-              } else {
-                db.updateMessageContent(id, content, "done");
-              }
-              const doneMsg: ChatMessage = {
-                id,
-                roomId: room.id,
-                role: "tool",
-                content,
-                toolName: event.name,
-                status: "done",
-                ts: Date.now(),
-                agentId: agent.row.id,
-              };
-              if (synthetic) doneMsg.diffPatch = synthetic;
-              if (todos) doneMsg.todos = todos;
-              this.io.to(room.id).emit("chat-message", doneMsg);
               void attachFileDiff(
                 id,
                 event.name,
@@ -2321,6 +2290,7 @@ export class RoomManager {
       toolMsgIds: new Map(),
       toolPaths: new Map(),
       lastToolMsgId: null,
+      todoMsgId: null,
       workerRunActive: false,
       workerRunCleanups: [],
       driverSocketId: null,
@@ -2415,6 +2385,7 @@ export class RoomManager {
       agent.toolMsgIds.clear();
       agent.toolPaths.clear();
       agent.lastToolMsgId = null;
+      agent.todoMsgId = null;
     }
   }
 
