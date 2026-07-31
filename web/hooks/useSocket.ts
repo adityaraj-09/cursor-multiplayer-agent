@@ -12,6 +12,7 @@ import type {
   CloudMeta,
   FileLease,
   Participant,
+  TypingUser,
 } from "../../shared/events";
 
 interface UseSocketReturn {
@@ -28,6 +29,8 @@ interface UseSocketReturn {
   conflicts: AgentConflict[];
   fileLocks: FileLease[];
   lastBlocked: AgentConflictBlocked | null;
+  /** Peer typists keyed by agent id (excludes the local socket). */
+  typingByAgent: Record<string, TypingUser[]>;
   /** Legacy single-agent status (default / selected agent). */
   agentStatus: AgentRunStatus;
   agentError: string;
@@ -40,6 +43,9 @@ interface UseSocketReturn {
   cloudMeta: CloudMeta | null;
   modelId: string | null;
   sendSteer: (text: string, agentId?: string) => void;
+  /** Throttled by callers — announces typing toward an agent. */
+  notifyTyping: (agentId: string) => void;
+  notifyTypingStop: (agentId?: string) => void;
   requestDrive: (agentId?: string) => void;
   releaseDrive: (agentId?: string) => void;
   grantDrive: (toSocketId: string, agentId?: string) => void;
@@ -101,6 +107,9 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
   const [lastDiff, setLastDiff] = useState("");
   const [cloudMeta, setCloudMeta] = useState<CloudMeta | null>(null);
   const [modelId, setModelId] = useState<string | null>(null);
+  const [typingByAgent, setTypingByAgent] = useState<
+    Record<string, TypingUser[]>
+  >({});
   const socketRef = useRef<AppSocket | null>(null);
 
   const drivingAgentIds = useMemo(() => {
@@ -127,7 +136,20 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
       setMySocketId(attached.id ?? null);
     };
     const onDisconnect = () => setConnected(false);
-    const onPresence = (p: Participant[]) => setParticipants(p);
+    const onPresence = (p: Participant[]) => {
+      setParticipants(p);
+      const live = new Set(p.map((x) => x.socketId));
+      setTypingByAgent((prev) => {
+        let changed = false;
+        const next: Record<string, TypingUser[]> = {};
+        for (const [agentId, list] of Object.entries(prev)) {
+          const filtered = list.filter((t) => live.has(t.socketId));
+          if (filtered.length !== list.length) changed = true;
+          if (filtered.length) next[agentId] = filtered;
+        }
+        return changed ? next : prev;
+      });
+    };
     const onChatHistory = (history: ChatMessage[]) => {
       if (gotHistory && history.length === 0) return;
       gotHistory = true;
@@ -247,6 +269,57 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
       console.warn("Kicked:", reason);
       window.location.href = `/dashboard?notice=${encodeURIComponent(reason || "Left session")}`;
     };
+    const onTyping = (payload: TypingUser) => {
+      if (!payload?.socketId || !payload.agentId) return;
+      if (payload.socketId === attached?.id) return;
+      setTypingByAgent((prev) => {
+        const list = prev[payload.agentId] || [];
+        if (list.some((t) => t.socketId === payload.socketId)) {
+          return {
+            ...prev,
+            [payload.agentId]: list.map((t) =>
+              t.socketId === payload.socketId
+                ? { ...t, name: payload.name }
+                : t,
+            ),
+          };
+        }
+        return {
+          ...prev,
+          [payload.agentId]: [
+            ...list,
+            {
+              socketId: payload.socketId,
+              name: payload.name,
+              agentId: payload.agentId,
+            },
+          ],
+        };
+      });
+    };
+    const onTypingStop = (payload: { socketId: string; agentId?: string }) => {
+      if (!payload?.socketId) return;
+      setTypingByAgent((prev) => {
+        if (payload.agentId) {
+          const list = (prev[payload.agentId] || []).filter(
+            (t) => t.socketId !== payload.socketId,
+          );
+          if (list.length === (prev[payload.agentId] || []).length) return prev;
+          const next = { ...prev };
+          if (list.length) next[payload.agentId] = list;
+          else delete next[payload.agentId];
+          return next;
+        }
+        let changed = false;
+        const next: Record<string, TypingUser[]> = {};
+        for (const [agentId, list] of Object.entries(prev)) {
+          const filtered = list.filter((t) => t.socketId !== payload.socketId);
+          if (filtered.length !== list.length) changed = true;
+          if (filtered.length) next[agentId] = filtered;
+        }
+        return changed ? next : prev;
+      });
+    };
 
     void (async () => {
       let token: string | null = null;
@@ -285,6 +358,8 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
       s.on("model-updated", onModelUpdated);
       s.on("error", onError);
       s.on("kicked", onKicked);
+      s.on("typing", onTyping);
+      s.on("typing-stop", onTypingStop);
     })();
 
     return () => {
@@ -307,6 +382,8 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
         attached.off("model-updated", onModelUpdated);
         attached.off("error", onError);
         attached.off("kicked", onKicked);
+        attached.off("typing", onTyping);
+        attached.off("typing-stop", onTypingStop);
       }
       disconnectSocket();
       socketRef.current = null;
@@ -325,6 +402,7 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
       setConflicts([]);
       setFileLocks([]);
       setLastBlocked(null);
+      setTypingByAgent({});
     };
   }, [roomId, name, isSignedIn]);
 
@@ -332,14 +410,27 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
     setMessages([]);
     setModelId(null);
     setPendingRequest(null);
+    setTypingByAgent({});
   }, [roomId]);
 
   const sendSteer = useCallback((text: string, agentId?: string) => {
     if (agentId) {
+      socketRef.current?.emit("typing-stop", agentId);
       socketRef.current?.emit("steer-message", agentId, text);
     } else {
+      socketRef.current?.emit("typing-stop");
       socketRef.current?.emit("steer-message", text);
     }
+  }, []);
+
+  const notifyTyping = useCallback((agentId: string) => {
+    if (!agentId) return;
+    socketRef.current?.emit("typing", agentId);
+  }, []);
+
+  const notifyTypingStop = useCallback((agentId?: string) => {
+    if (agentId) socketRef.current?.emit("typing-stop", agentId);
+    else socketRef.current?.emit("typing-stop");
   }, []);
 
   const requestDrive = useCallback((agentId?: string) => {
@@ -385,6 +476,7 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
     conflicts,
     fileLocks,
     lastBlocked,
+    typingByAgent,
     agentStatus,
     agentError,
     pendingRequest,
@@ -392,6 +484,8 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
     cloudMeta,
     modelId,
     sendSteer,
+    notifyTyping,
+    notifyTypingStop,
     requestDrive,
     releaseDrive,
     grantDrive,

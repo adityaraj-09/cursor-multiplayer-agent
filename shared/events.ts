@@ -159,6 +159,13 @@ export interface RepoInfo {
 
 export type AgentRunStatus = "idle" | "running" | "error";
 
+/** Someone drafting a message to a specific agent in the room. */
+export interface TypingUser {
+  socketId: string;
+  name: string;
+  agentId: string;
+}
+
 export interface ServerToClientEvents {
   "chat-history": (messages: ChatMessage[]) => void;
   "chat-message": (message: ChatMessage) => void;
@@ -191,12 +198,20 @@ export interface ServerToClientEvents {
   "agent-conflicts": (conflicts: AgentConflict[]) => void;
   "file-locks": (leases: FileLease[]) => void;
   "agent-conflict-blocked": (payload: AgentConflictBlocked) => void;
+  /** Peer started / refreshed typing toward an agent. */
+  typing: (payload: TypingUser) => void;
+  /** Peer stopped typing (omit agentId to clear all agents for that socket). */
+  "typing-stop": (payload: { socketId: string; agentId?: string }) => void;
   kicked: (reason: string) => void;
   error: (message: string) => void;
 }
 
 export interface ClientToServerEvents {
   "steer-message": (textOrAgentId: string, text?: string) => void;
+  /** Announce that this user is typing to an agent (clients should throttle). */
+  typing: (agentId: string) => void;
+  /** Stop typing indicator for one agent, or all agents when omitted. */
+  "typing-stop": (agentId?: string) => void;
   "request-drive": (agentId?: string) => void;
   "release-drive": (agentId?: string) => void;
   "grant-drive": (toSocketIdOrAgentId: string, toSocketId?: string) => void;

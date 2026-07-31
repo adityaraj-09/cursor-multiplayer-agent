@@ -48,6 +48,7 @@ import {
   CLAUDE_MODELS,
   DEFAULT_CLAUDE_MODEL,
 } from "../../../../shared/claudeModels";
+import { formatTypingIndicator } from "../../../../shared/typing";
 
 export default function RoomPage() {
   const params = useParams();
@@ -224,6 +225,7 @@ function LiveRoom({
     conflicts,
     fileLocks,
     lastBlocked,
+    typingByAgent,
     agentStatus,
     agentError,
     pendingRequest,
@@ -231,6 +233,8 @@ function LiveRoom({
     cloudMeta,
     modelId: liveModelId,
     sendSteer,
+    notifyTyping,
+    notifyTypingStop,
     requestDrive,
     releaseDrive,
     grantDrive,
@@ -783,6 +787,17 @@ function LiveRoom({
               : "Message the agent…"
           }
           agentName={selectedAgent?.label}
+          agentId={selectedAgentId || undefined}
+          onTyping={notifyTyping}
+          onTypingStop={notifyTypingStop}
+          typingIndicator={
+            selectedAgentId
+              ? formatTypingIndicator(
+                  (typingByAgent[selectedAgentId] || []).map((t) => t.name),
+                  selectedAgent?.label || "Agent",
+                )
+              : ""
+          }
         />
       </footer>
     </div>
