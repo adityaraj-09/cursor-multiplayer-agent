@@ -60,8 +60,8 @@ function toolDetail(
   path?: string,
 ): string {
   if (!args) return name;
-  if (isTodoTool(name)) {
-    const todos = todosFromToolArgs(args);
+  const todos = todosFromToolArgs(args);
+  if (isTodoTool(name) || todos.length > 0) {
     return todos.length
       ? `${todos.length} todo${todos.length === 1 ? "" : "s"} · ${todoStatusSummary(todos)}`
       : "Updating todos";
@@ -190,10 +190,13 @@ export class ClaudeCodeBackend implements WorkerBackend {
               ? ev.parent_tool_use_id
               : null;
 
+          const alreadyStarted = this.pendingTools.has(callId);
           this.pendingTools.set(callId, { name, path, args });
+          // Partial assistant messages can re-emit the same tool_use — only
+          // start once per callId so the UI doesn't get duplicate rows.
+          if (alreadyStarted) continue;
 
-          const todos =
-            isTodoTool(name) && args ? todosFromToolArgs(args) : undefined;
+          const todos = args ? todosFromToolArgs(args) : [];
           if (parentCallId) {
             out.push({
               kind: "subagent_nested",
@@ -208,10 +211,10 @@ export class ClaudeCodeBackend implements WorkerBackend {
             out.push({
               kind: "tool_start",
               callId,
-              name,
+              name: todos.length && !isTodoTool(name) ? "todo" : name,
               detail: toolDetail(name, args, path),
               path,
-              todos: todos?.length ? todos : undefined,
+              todos: todos.length ? todos : undefined,
             });
           }
         }
@@ -262,21 +265,18 @@ export class ClaudeCodeBackend implements WorkerBackend {
             isEditTool(name) && pending?.args
               ? diffFromToolArgs(name, pending.args)
               : undefined;
-          const todos =
-            isTodoTool(name) && pending?.args
-              ? todosFromToolArgs(pending.args)
-              : undefined;
+          const todos = pending?.args ? todosFromToolArgs(pending.args) : [];
           out.push({
             kind: "tool_done",
             callId,
-            name,
+            name: todos.length && !isTodoTool(name) ? "todo" : name,
             detail:
-              todos?.length
+              todos.length
                 ? `${todos.length} todo${todos.length === 1 ? "" : "s"} · ${todoStatusSummary(todos)}`
                 : detail,
             path,
             diffPatch: diffPatch || undefined,
-            todos: todos?.length ? todos : undefined,
+            todos: todos.length ? todos : undefined,
           });
         }
       }

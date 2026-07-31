@@ -1,12 +1,20 @@
 "use client";
 
 import type { AgentTodoItem, ChatMessage } from "../../shared/events";
-import { isTodoTool } from "../../shared/backends/cursor";
+import {
+  isTodoTool,
+  resolveMessageTodos,
+} from "../../shared/backends/cursor";
 
 export function messageHasTodos(message: ChatMessage): boolean {
-  return Boolean(
-    (message.todos && message.todos.length > 0) ||
-      (message.toolName && isTodoTool(message.toolName)),
+  if (message.todos && message.todos.length > 0) return true;
+  if (message.toolName && isTodoTool(message.toolName)) return true;
+  const content = message.content?.trim() ?? "";
+  if (!content) return false;
+  // Older messages stored raw todo-tool JSON as content.
+  return (
+    (content.startsWith("{") || content.startsWith("[")) &&
+    /"todos"\s*:/.test(content)
   );
 }
 
@@ -78,9 +86,12 @@ export default function TodoCard({
   message: ChatMessage;
   agentLabel?: string;
 }) {
-  const todos = message.todos ?? [];
+  const todos = resolveMessageTodos(message);
   const done = todos.filter((t) => t.status === "completed").length;
   const active = todos.filter((t) => t.status === "in_progress").length;
+  const summaryLooksLikeJson =
+    Boolean(message.content?.trim().startsWith("{")) ||
+    Boolean(message.content?.trim().startsWith("["));
 
   return (
     <div className="rounded-lg border border-[#2b2b2b] bg-[#1a1a1a] overflow-hidden">
@@ -96,7 +107,9 @@ export default function TodoCard({
         <span className="text-[12px] text-[#a0a0a0] truncate min-w-0 flex-1">
           {todos.length
             ? `${done}/${todos.length} complete${active ? ` · ${active} active` : ""}`
-            : message.content || "Updating todos"}
+            : summaryLooksLikeJson
+              ? "Updating todos"
+              : message.content || "Updating todos"}
         </span>
         <span
           className={`text-[10px] shrink-0 ${
@@ -143,8 +156,10 @@ export default function TodoCard({
           ))}
         </ul>
       ) : (
-        <p className="px-3 py-2.5 text-[12px] text-[#6e6e6e] font-mono break-all">
-          {message.content || "No todo details available"}
+        <p className="px-3 py-2.5 text-[12px] text-[#6e6e6e]">
+          {summaryLooksLikeJson
+            ? "No todo details available"
+            : message.content || "No todo details available"}
         </p>
       )}
     </div>

@@ -29,24 +29,26 @@ function toolInfo(toolCall: Record<string, unknown> | undefined): {
   parentCallId?: string;
 } {
   if (!toolCall) return { name: "tool", detail: "" };
-  const key = Object.keys(toolCall).find(
-    (k) =>
-      k.endsWith("ToolCall") ||
-      (![
-        "hookAdditionalContexts",
-        "toolCallId",
-        "startedAtMs",
-        "completedAtMs",
-        "parentToolCallId",
-      ].includes(k) &&
-        typeof toolCall[k] === "object"),
-  );
+  // Prefer explicit *ToolCall keys — Cursor sometimes also attaches metadata
+  // objects that would otherwise win Object.keys().find().
+  const toolCallKey = Object.keys(toolCall).find((k) => k.endsWith("ToolCall"));
+  const key =
+    toolCallKey ||
+    Object.keys(toolCall).find(
+      (k) =>
+        ![
+          "hookAdditionalContexts",
+          "toolCallId",
+          "startedAtMs",
+          "completedAtMs",
+          "parentToolCallId",
+          "parent_tool_call_id",
+        ].includes(k) && typeof toolCall[k] === "object",
+    );
   const name = key ? key.replace(/ToolCall$/, "") : "tool";
   const body = key ? (toolCall[key] as Record<string, unknown>) : undefined;
-  const args =
-    body?.args && typeof body.args === "object"
-      ? (body.args as Record<string, unknown>)
-      : undefined;
+  const rawArgs = body?.args ?? body?.input ?? body?.parameters;
+  const args = coerceArgsObject(rawArgs);
   let detail = "";
   let path: string | undefined;
   if (args) {
@@ -62,8 +64,8 @@ function toolInfo(toolCall: Record<string, unknown> | undefined): {
         break;
       }
     }
-    if (isTodoTool(name)) {
-      const todos = todosFromToolArgs(args);
+    const todos = todosFromToolArgs(args);
+    if (isTodoTool(name) || todos.length > 0) {
       detail = todos.length
         ? `${todos.length} todo${todos.length === 1 ? "" : "s"} · ${todoStatusSummary(todos)}`
         : "Updating todos";
@@ -169,22 +171,47 @@ export function isTodoTool(name: string): boolean {
 function normalizeTodoStatus(
   raw: unknown,
 ): AgentTodoItem["status"] {
-  const s = String(raw ?? "pending").toLowerCase().replace(/[\s-]/g, "_");
+  let s = String(raw ?? "pending").toLowerCase().replace(/[\s-]/g, "_");
+  // Cursor CLI enums: TODO_STATUS_COMPLETED, TODO_STATUS_IN_PROGRESS, …
+  if (s.startsWith("todo_status_")) s = s.slice("todo_status_".length);
   if (s === "completed" || s === "complete" || s === "done") return "completed";
   if (s === "in_progress" || s === "inprogress" || s === "active")
     return "in_progress";
   if (s === "cancelled" || s === "canceled") return "cancelled";
+  if (s === "pending" || s === "todo" || s === "not_started") return "pending";
   return "pending";
 }
 
+function coerceArgsObject(args: unknown): Record<string, unknown> | undefined {
+  if (!args) return undefined;
+  if (typeof args === "string") {
+    try {
+      const parsed = JSON.parse(args) as unknown;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+      if (Array.isArray(parsed)) return { todos: parsed };
+    } catch {
+      return undefined;
+    }
+    return undefined;
+  }
+  if (typeof args === "object" && !Array.isArray(args)) {
+    return args as Record<string, unknown>;
+  }
+  if (Array.isArray(args)) return { todos: args };
+  return undefined;
+}
+
 export function todosFromToolArgs(
-  args?: Record<string, unknown>,
+  args?: unknown,
 ): AgentTodoItem[] {
-  if (!args) return [];
+  const o = coerceArgsObject(args);
+  if (!o) return [];
   const raw =
-    (Array.isArray(args.todos) && args.todos) ||
-    (Array.isArray(args.items) && args.items) ||
-    (Array.isArray(args.todo_list) && args.todo_list) ||
+    (Array.isArray(o.todos) && o.todos) ||
+    (Array.isArray(o.items) && o.items) ||
+    (Array.isArray(o.todo_list) && o.todo_list) ||
     null;
   if (!raw) return [];
   const out: AgentTodoItem[] = [];
@@ -200,6 +227,65 @@ export function todosFromToolArgs(
       id: String(t.id ?? `todo-${i + 1}`),
       content,
       status: normalizeTodoStatus(t.status),
+    });
+  }
+  return out;
+}
+
+/**
+ * Recover structured todos from a chat message — prefers `message.todos`,
+ * then parses JSON tool args that older servers stored as `content`.
+ */
+export function resolveMessageTodos(message: {
+  todos?: AgentTodoItem[];
+  content?: string;
+  toolName?: string;
+}): AgentTodoItem[] {
+  if (message.todos && message.todos.length > 0) return message.todos;
+  const content = message.content?.trim() ?? "";
+  if (!content) return [];
+  if (
+    content.startsWith("{") ||
+    content.startsWith("[") ||
+    content.includes('"todos"')
+  ) {
+    const parsed = todosFromToolArgs(content);
+    if (parsed.length) return parsed;
+    // Truncated JSON from older servers (JSON.stringify(args).slice(0, N)).
+    return todosFromTruncatedContent(content);
+  }
+  return [];
+}
+
+/** Best-effort extraction when content is a sliced JSON blob. */
+function todosFromTruncatedContent(content: string): AgentTodoItem[] {
+  if (!/"content"\s*:/.test(content)) return [];
+  const out: AgentTodoItem[] = [];
+  const re =
+    /\{\s*"id"\s*:\s*"((?:\\.|[^"\\])*)"\s*,\s*"content"\s*:\s*"((?:\\.|[^"\\])*)"\s*,\s*"status"\s*:\s*"((?:\\.|[^"\\])*)"/g;
+  let m: RegExpExecArray | null;
+  let i = 0;
+  while ((m = re.exec(content)) !== null) {
+    i += 1;
+    const todoContent = m[2].replace(/\\"/g, '"').replace(/\\\\/g, "\\").trim();
+    if (!todoContent) continue;
+    out.push({
+      id: m[1] || `todo-${i}`,
+      content: todoContent,
+      status: normalizeTodoStatus(m[3]),
+    });
+  }
+  if (out.length) return out;
+  // Looser: pull content fields even if id/status order differs or was cut off.
+  const contentRe = /"content"\s*:\s*"((?:\\.|[^"\\])*)"/g;
+  while ((m = contentRe.exec(content)) !== null) {
+    i += 1;
+    const todoContent = m[1].replace(/\\"/g, '"').replace(/\\\\/g, "\\").trim();
+    if (!todoContent) continue;
+    out.push({
+      id: `todo-${i}`,
+      content: todoContent,
+      status: "pending",
     });
   }
   return out;
@@ -293,18 +379,16 @@ export class CursorAgentBackend implements WorkerBackend {
         });
         return out;
       }
-      const todos =
-        isTodoTool(info.name) && info.args
-          ? todosFromToolArgs(info.args)
-          : undefined;
+      const todos = info.args ? todosFromToolArgs(info.args) : [];
+      const todoTool = isTodoTool(info.name) || todos.length > 0;
       if (ev.subtype === "started") {
         out.push({
           kind: "tool_start",
           callId,
-          name: info.name,
+          name: todoTool && !isTodoTool(info.name) ? "todo" : info.name,
           detail: info.detail,
           path: info.path,
-          todos: todos?.length ? todos : undefined,
+          todos: todos.length ? todos : undefined,
         });
       } else if (ev.subtype === "completed") {
         const diffPatch =
@@ -314,11 +398,11 @@ export class CursorAgentBackend implements WorkerBackend {
         out.push({
           kind: "tool_done",
           callId,
-          name: info.name,
+          name: todoTool && !isTodoTool(info.name) ? "todo" : info.name,
           detail: info.detail,
           path: info.path,
           diffPatch: diffPatch || undefined,
-          todos: todos?.length ? todos : undefined,
+          todos: todos.length ? todos : undefined,
         });
       }
       return out;
