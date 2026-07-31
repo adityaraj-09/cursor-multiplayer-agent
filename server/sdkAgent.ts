@@ -77,8 +77,8 @@ function extractAssistantText(message: SDKMessage): string {
 function toolDetail(name: string, args: unknown): string {
   if (!args || typeof args !== "object") return "";
   const a = args as Record<string, unknown>;
-  if (isTodoTool(name)) {
-    const todos = todosFromToolArgs(a);
+  const todos = todosFromToolArgs(a);
+  if (isTodoTool(name) || todos.length > 0) {
     return todos.length
       ? `${todos.length} todo${todos.length === 1 ? "" : "s"} · ${todoStatusSummary(todos)}`
       : "Updating todos";
@@ -297,18 +297,17 @@ export class SdkAgentSession {
               : undefined;
           const detail = toolDetail(event.name, event.args);
           const path = toolPath(event.args);
-          const todos =
-            isTodoTool(event.name) && args
-              ? todosFromToolArgs(args)
-              : undefined;
+          const todos = args ? todosFromToolArgs(args) : [];
+          const toolName =
+            todos.length > 0 && !isTodoTool(event.name) ? "todo" : event.name;
           if (event.status === "running") {
             item.onEvent({
               kind: "tool_start",
               callId: event.call_id,
-              name: event.name,
+              name: toolName,
               detail,
               path,
-              todos: todos?.length ? todos : undefined,
+              todos: todos.length ? todos : undefined,
             });
           } else {
             const diffPatch =
@@ -318,11 +317,11 @@ export class SdkAgentSession {
             item.onEvent({
               kind: "tool_done",
               callId: event.call_id,
-              name: event.name,
+              name: toolName,
               detail: detail || (event.status === "error" ? "error" : "done"),
               path,
               diffPatch: diffPatch || undefined,
-              todos: todos?.length ? todos : undefined,
+              todos: todos.length ? todos : undefined,
             });
           }
         }

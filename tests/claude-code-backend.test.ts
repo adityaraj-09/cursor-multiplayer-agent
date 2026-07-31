@@ -184,6 +184,31 @@ describe("ClaudeCodeBackend", () => {
     expect(err).toContainEqual({ kind: "error", message: "boom" });
   });
 
+  it("does not emit duplicate tool_start for the same tool_use id", () => {
+    const backend = new ClaudeCodeBackend();
+    const toolUse = {
+      type: "assistant",
+      message: {
+        content: [
+          {
+            type: "tool_use",
+            id: "toolu_dup",
+            name: "Bash",
+            input: { command: "pwd" },
+          },
+        ],
+      },
+    };
+    const first = backend.parseLine(toolUse);
+    const second = backend.parseLine(toolUse);
+    expect(first).toHaveLength(1);
+    expect(first[0]).toMatchObject({
+      kind: "tool_start",
+      callId: "toolu_dup",
+    });
+    expect(second).toEqual([]);
+  });
+
   it("isolates pending tools across backend instances", () => {
     const a = new ClaudeCodeBackend();
     const b = new ClaudeCodeBackend();

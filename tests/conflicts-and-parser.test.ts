@@ -9,8 +9,10 @@ import {
 } from "../server/agentConflicts.js";
 import {
   CursorAgentBackend,
+  coalesceTodoMessages,
   diffFromToolArgs,
   isTodoTool,
+  resolveMessageTodos,
   todosFromToolArgs,
 } from "../shared/backends/cursor.js";
 
@@ -317,6 +319,151 @@ describe("todo helpers", () => {
       { id: "todo-2", content: "Two", status: "in_progress" },
       { id: "todo-3", content: "Three", status: "cancelled" },
     ]);
+  });
+
+  it("normalizes Cursor TODO_STATUS_* enums", () => {
+    const todos = todosFromToolArgs({
+      todos: [
+        {
+          id: "1",
+          content: "Update LandingPage copy",
+          status: "TODO_STATUS_COMPLETED",
+        },
+        {
+          id: "2",
+          content: "Show parsed todos",
+          status: "TODO_STATUS_IN_PROGRESS",
+        },
+        {
+          id: "3",
+          content: "Open PR",
+          status: "TODO_STATUS_PENDING",
+        },
+      ],
+    });
+    expect(todos).toEqual([
+      {
+        id: "1",
+        content: "Update LandingPage copy",
+        status: "completed",
+      },
+      {
+        id: "2",
+        content: "Show parsed todos",
+        status: "in_progress",
+      },
+      { id: "3", content: "Open PR", status: "pending" },
+    ]);
+  });
+
+  it("parses todoToolCall events with Cursor status enums", () => {
+    const cursor = new CursorAgentBackend();
+    const events = cursor.parseLine({
+      type: "tool_call",
+      subtype: "completed",
+      call_id: "todo-1",
+      tool_call: {
+        todoToolCall: {
+          args: {
+            merge: true,
+            todos: [
+              {
+                id: "1",
+                content: "Update LandingPage copy + diagrams",
+                status: "TODO_STATUS_COMPLETED",
+                createdAt: "1785481521069",
+              },
+              {
+                id: "2",
+                content: "Fix tool lifecycle",
+                status: "TODO_STATUS_IN_PROGRESS",
+              },
+            ],
+          },
+        },
+      },
+    });
+    expect(events[0]).toMatchObject({
+      kind: "tool_done",
+      callId: "todo-1",
+      name: "todo",
+    });
+    expect(events[0].kind === "tool_done" && events[0].todos).toEqual([
+      {
+        id: "1",
+        content: "Update LandingPage copy + diagrams",
+        status: "completed",
+      },
+      {
+        id: "2",
+        content: "Fix tool lifecycle",
+        status: "in_progress",
+      },
+    ]);
+    expect(
+      events[0].kind === "tool_done" && events[0].detail,
+    ).toContain("2 todos");
+    expect(
+      events[0].kind === "tool_done" && events[0].detail,
+    ).not.toContain('{"todos"');
+  });
+
+  it("recovers todos from truncated JSON content", () => {
+    const truncated =
+      '{"todos":[{"id":"1","content":"Update LandingPage copy + diagrams for multi-agent Cursor/Claude","status":"TODO_STATUS_COMPLETED","createdAt":"1785481521069","u';
+    const todos = resolveMessageTodos({ content: truncated });
+    expect(todos.length).toBeGreaterThanOrEqual(1);
+    expect(todos[0].content).toContain("Update LandingPage");
+    expect(todos[0].status).toBe("completed");
+  });
+
+  it("coalesces stacked todo cards to the latest per agent", () => {
+    const msgs = [
+      {
+        id: "t2",
+        role: "tool",
+        agentId: "a1",
+        toolName: "todo",
+        todos: [
+          { id: "1", content: "One", status: "completed" as const },
+          { id: "2", content: "Two", status: "pending" as const },
+        ],
+      },
+      { id: "m1", role: "assistant", agentId: "a1" },
+      {
+        id: "t3",
+        role: "tool",
+        agentId: "a1",
+        toolName: "todoWrite",
+        todos: [
+          { id: "1", content: "One", status: "completed" as const },
+          { id: "2", content: "Two", status: "completed" as const },
+          { id: "3", content: "Three", status: "in_progress" as const },
+        ],
+      },
+      {
+        id: "t4",
+        role: "tool",
+        agentId: "a1",
+        toolName: "todo",
+        todos: [
+          { id: "1", content: "One", status: "completed" as const },
+          { id: "2", content: "Two", status: "completed" as const },
+          { id: "3", content: "Three", status: "completed" as const },
+          { id: "4", content: "Four", status: "pending" as const },
+        ],
+      },
+      {
+        id: "other",
+        role: "tool",
+        agentId: "a2",
+        toolName: "todo",
+        todos: [{ id: "x", content: "Other agent", status: "pending" as const }],
+      },
+    ];
+    const coalesced = coalesceTodoMessages(msgs);
+    expect(coalesced.map((m) => m.id)).toEqual(["m1", "t4", "other"]);
+    expect(coalesced.find((m) => m.id === "t4")?.todos).toHaveLength(4);
   });
 
   it("builds write diffs from contents", () => {
