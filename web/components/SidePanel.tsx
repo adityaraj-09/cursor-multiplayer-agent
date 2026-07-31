@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { Cloud, GitBranch, GitCompare, X } from "lucide-react";
 import DiffViewer from "./DiffViewer";
 import type { AppSocket } from "../lib/socket";
 import type { AgentRuntime, CloudMeta } from "../../shared/events";
@@ -43,7 +44,7 @@ export default function SidePanel({
 
   const header = (
     <div
-      className={`relative flex items-center gap-2 px-3 h-10 border-b border-[#2b2b2b] bg-[#1a1a1a] shrink-0 ${
+      className={`relative flex items-center gap-2 px-3 h-11 border-b border-[#2b2b2b] bg-[#171717] shrink-0 ${
         rail ? "border-b-0 flex-col h-auto py-3 px-2" : ""
       }`}
     >
@@ -52,7 +53,14 @@ export default function SidePanel({
       )}
       {mobile ? (
         <div className="flex items-center gap-2 min-w-0 flex-1">
-          <span className="text-[12px] text-[#e4e4e4] truncate">{title}</span>
+          <span className="flex h-6 w-6 items-center justify-center rounded-md bg-[#252525] text-[#a0a0a0]">
+            {runtime === "cloud" ? (
+              <Cloud className="h-3.5 w-3.5" strokeWidth={1.75} />
+            ) : (
+              <GitCompare className="h-3.5 w-3.5" strokeWidth={1.75} />
+            )}
+          </span>
+          <span className="text-[12px] font-medium text-[#e4e4e4] truncate">{title}</span>
           {countLabel && (
             <span className="text-[11px] text-[#6e6e6e] tabular-nums">
               {countLabel}
@@ -70,15 +78,17 @@ export default function SidePanel({
           title={collapsed ? `Expand ${title}` : `Collapse ${title}`}
         >
           <span
-            className={`text-[#6e6e6e] text-[10px] transition-transform shrink-0 ${
-              rail ? "rotate-180" : "rotate-90"
-            }`}
+            className="flex h-6 w-6 items-center justify-center rounded-md bg-[#252525] text-[#a0a0a0] shrink-0"
             aria-hidden
           >
-            ▸
+            {runtime === "cloud" ? (
+              <Cloud className="h-3.5 w-3.5" strokeWidth={1.75} />
+            ) : (
+              <GitCompare className="h-3.5 w-3.5" strokeWidth={1.75} />
+            )}
           </span>
           <span
-            className={`text-[12px] text-[#e4e4e4] ${
+            className={`text-[12px] font-medium text-[#e4e4e4] ${
               rail ? "text-center leading-tight" : "truncate"
             }`}
             style={
@@ -105,8 +115,9 @@ export default function SidePanel({
         <button
           type="button"
           onClick={onClose}
-          className="h-7 px-2.5 rounded-md text-[12px] text-[#a0a0a0] hover:text-[#e4e4e4] border border-[#2b2b2b] shrink-0"
+          className="inline-flex h-7 items-center gap-1.5 px-2.5 rounded-lg text-[12px] text-[#a0a0a0] hover:text-[#e4e4e4] border border-[#2b2b2b] shrink-0"
         >
+          <X className="h-3.5 w-3.5" strokeWidth={1.75} />
           Close
         </button>
       )}
@@ -119,6 +130,15 @@ export default function SidePanel({
     <div className="flex-1 min-h-0 overflow-hidden relative">
       {runtime === "cloud" ? (
         <div className="absolute inset-0 overflow-y-auto p-4 space-y-3">
+          <div className="rounded-xl border border-[#2b2b2b] bg-[#181818] p-3">
+            <div className="flex items-center gap-2 text-[12px] font-medium text-[#e4e4e4]">
+              <GitBranch className="h-4 w-4 text-[#a0a0a0]" strokeWidth={1.75} />
+              Cloud run metadata
+            </div>
+            <p className="mt-1 text-[12px] leading-relaxed text-[#6e6e6e]">
+              Branch and PR details appear here as the agent works.
+            </p>
+          </div>
           <MetaRow label="Repository" value={meta.repoUrl} mono />
           <MetaRow label="Starting ref" value={meta.startingRef} mono />
           <MetaRow label="Branch" value={meta.branch} mono />
@@ -162,14 +182,14 @@ export default function SidePanel({
 
   if (mobile) {
     return (
-      <div className="fixed inset-0 z-40 flex flex-col justify-end bg-black/50">
+      <div className="fixed inset-0 z-40 flex flex-col justify-end bg-black/60 backdrop-blur-sm">
         <button
           type="button"
           className="flex-1 w-full cursor-default"
           aria-label={`Close ${title.toLowerCase()}`}
           onClick={onClose}
         />
-        <div className="relative h-[75vh] max-h-[85dvh] rounded-t-xl border-t border-[#2b2b2b] bg-[#141414] flex flex-col overflow-hidden shadow-2xl pb-[env(safe-area-inset-bottom)]">
+        <div className="relative h-[75vh] max-h-[85dvh] rounded-t-2xl border-t border-[#2b2b2b] bg-[#141414] flex flex-col overflow-hidden shadow-2xl pb-[env(safe-area-inset-bottom)]">
           {body}
         </div>
       </div>
@@ -178,7 +198,7 @@ export default function SidePanel({
 
   return (
     <div
-      className={`hidden lg:flex border-l border-[#2b2b2b] flex-col min-h-0 h-full overflow-hidden bg-[#141414] transition-[width] duration-200 ${
+      className={`hidden lg:flex border-l border-[#2b2b2b] flex-col min-h-0 h-full overflow-hidden bg-[#131313] transition-[width] duration-200 ${
         collapsed
           ? "w-10 min-w-10 max-w-10"
           : "w-[38%] min-w-[300px] max-w-[540px]"
