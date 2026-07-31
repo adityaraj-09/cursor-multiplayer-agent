@@ -25,7 +25,6 @@ interface ChatPanelProps {
 
 type ChatItem =
   | { type: "message"; message: ChatMessage }
-  | { type: "diff"; message: ChatMessage }
   | { type: "tools"; messages: ChatMessage[]; key: string };
 
 function groupMessages(messages: ChatMessage[]): ChatItem[] {
@@ -43,10 +42,7 @@ function groupMessages(messages: ChatMessage[]): ChatItem[] {
   };
 
   for (const msg of messages) {
-    if (msg.role === "tool" && msg.diffPatch) {
-      flushTools();
-      items.push({ type: "diff", message: msg });
-    } else if (msg.role === "tool") {
+    if (msg.role === "tool") {
       toolBuf.push(msg);
     } else {
       flushTools();
@@ -151,12 +147,6 @@ export default function ChatPanel({
                 messages={item.messages}
                 agentLabel={agentLabel(item.messages[0]?.agentId)}
               />
-            ) : item.type === "diff" ? (
-              <DiffMessageCard
-                key={item.message.id}
-                message={item.message}
-                agentLabel={agentLabel(item.message.agentId)}
-              />
             ) : (
               <MessageBubble
                 key={item.message.id}
@@ -185,10 +175,14 @@ function ToolCallGroup({
   agentLabel?: string;
 }) {
   const anyStreaming = messages.some((m) => m.status === "streaming");
-  // Tool groups stay collapsed by default, including when new tools/diffs arrive.
-  const [open, setOpen] = useState(false);
+  const hasDiffs = messages.some((m) => Boolean(m.diffPatch));
+  // Keep tools collapsed by default; auto-open when the group includes edits
+  // so file diffs aren't easy to miss. Manual toggles win after that.
+  const [manualOpen, setManualOpen] = useState<boolean | null>(null);
+  const open = manualOpen ?? hasDiffs;
 
   const doneCount = messages.filter((m) => m.status === "done").length;
+  const editCount = messages.filter((m) => Boolean(m.diffPatch)).length;
   const label =
     messages.length === 1
       ? messages[0].toolName || "tool"
@@ -198,7 +192,7 @@ function ToolCallGroup({
     <div className="rounded-xl border border-[#2b2b2b] bg-[#181818] overflow-hidden shadow-[0_14px_34px_rgba(0,0,0,0.16)]">
       <button
         type="button"
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => setManualOpen(!open)}
         className="w-full flex items-center gap-2.5 px-3.5 h-10 text-left hover:bg-[#1f1f1f] transition-colors"
       >
         <Chevron open={open} />
@@ -216,6 +210,12 @@ function ToolCallGroup({
         <span className="text-[12px] text-[#a0a0a0] truncate min-w-0 flex-1">
           {label}
         </span>
+        {editCount > 0 && (
+          <span className="inline-flex items-center gap-1 text-[10px] shrink-0 rounded-full border border-[#26405d] bg-[#17202a] px-2 py-0.5 text-[#4d9fff]">
+            <GitCompare className="h-3 w-3" strokeWidth={1.8} />
+            {editCount} edit{editCount === 1 ? "" : "s"}
+          </span>
+        )}
         <span
           className={`inline-flex items-center gap-1 text-[10px] shrink-0 rounded-full border px-2 py-0.5 ${
             anyStreaming
@@ -243,18 +243,26 @@ function ToolCallGroup({
 }
 
 function ToolCallRow({ message }: { message: ChatMessage }) {
-  // Individual tool rows stay collapsed until the user expands them.
-  const [open, setOpen] = useState(false);
+  const hasDiff = Boolean(message.diffPatch);
+  // Expand edit rows by default so the file diff is visible inside Tools.
+  const [manualOpen, setManualOpen] = useState<boolean | null>(null);
+  const open = manualOpen ?? hasDiff;
 
   return (
     <div className="bg-[#151515]">
       <button
         type="button"
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => setManualOpen(!open)}
         className="w-full flex items-start gap-2.5 px-3.5 py-2.5 text-left hover:bg-[#1a1a1a] transition-colors"
       >
         <Chevron open={open} className="mt-0.5" />
-        <ToolStatusIcon status={message.status} />
+        {hasDiff ? (
+          <span className="mt-0.5 flex h-6 w-6 items-center justify-center rounded-md bg-[#17202a] text-[#4d9fff]">
+            <GitCompare className="h-3.5 w-3.5" strokeWidth={1.75} />
+          </span>
+        ) : (
+          <ToolStatusIcon status={message.status} />
+        )}
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-[12px] text-[#d0d0d0] font-medium">
@@ -275,6 +283,9 @@ function ToolCallRow({ message }: { message: ChatMessage }) {
                   ? "error"
                   : "done"}
             </span>
+            {hasDiff && (
+              <span className="text-[10px] text-[#4d9fff]">diff</span>
+            )}
           </div>
           {!open && message.content && (
             <p className="text-[11px] text-[#6e6e6e] font-mono truncate mt-0.5">
@@ -284,47 +295,17 @@ function ToolCallRow({ message }: { message: ChatMessage }) {
         </div>
       </button>
       {open && (
-        <div className="px-3.5 pb-3 pl-12">
+        <div className="px-3.5 pb-3 pl-12 space-y-2">
           {message.content && (
             <p className="text-[12px] text-[#8a8a8a] font-mono break-all whitespace-pre-wrap">
               {message.content}
             </p>
           )}
+          {message.diffPatch && (
+            <InlineDiff patch={message.diffPatch} defaultOpen />
+          )}
         </div>
       )}
-    </div>
-  );
-}
-
-function DiffMessageCard({
-  message,
-  agentLabel,
-}: {
-  message: ChatMessage;
-  agentLabel?: string;
-}) {
-  return (
-    <div className="rounded-xl border border-[#2b2b2b] bg-[#181818] overflow-hidden shadow-[0_14px_34px_rgba(0,0,0,0.18)]">
-      <div className="flex items-center gap-2.5 px-3.5 h-10 border-b border-[#2b2b2b]">
-        <span className="flex h-6 w-6 items-center justify-center rounded-md bg-[#17202a] text-[#4d9fff]">
-          <GitCompare className="h-3.5 w-3.5" strokeWidth={1.75} />
-        </span>
-        <span className="text-[11px] uppercase tracking-[0.12em] text-[#6e6e6e]">
-          Edit
-        </span>
-        {agentLabel && (
-          <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-[#252525] text-[#a0a0a0]">
-            {agentLabel}
-          </span>
-        )}
-        <span className="text-[12px] text-[#a0a0a0] font-mono truncate min-w-0 flex-1">
-          {message.content || message.toolName || "file changes"}
-        </span>
-        <span className="text-[10px] text-[#3ecf8e]">done</span>
-      </div>
-      <div className="p-2.5">
-        <InlineDiff patch={message.diffPatch || ""} defaultOpen />
-      </div>
     </div>
   );
 }
