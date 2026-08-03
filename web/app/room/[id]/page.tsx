@@ -8,6 +8,7 @@ import {
   Bot,
   Cloud,
   Home,
+  PanelLeftOpen,
   PanelRightOpen,
   Share2,
   Square,
@@ -254,6 +255,7 @@ function LiveRoom({
   const [modelError, setModelError] = useState("");
   const [savingModel, setSavingModel] = useState(false);
   const [inviteOpen, setInviteOpen] = useState(false);
+  const [agentsOpen, setAgentsOpen] = useState(false);
   const [changesOpen, setChangesOpen] = useState(false);
   const [addAgentOpen, setAddAgentOpen] = useState(false);
   const [cursorSessionError, setCursorSessionError] = useState("");
@@ -571,6 +573,14 @@ function LiveRoom({
           <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
             <button
               type="button"
+              onClick={() => setAgentsOpen(true)}
+              className="lg:hidden inline-flex h-8 items-center gap-1.5 px-2.5 rounded-lg text-[11px] text-[#a0a0a0] hover:text-[#e4e4e4] border border-[#2b2b2b] hover:border-[#3c3c3c] bg-[#1f1f1f] transition-colors"
+            >
+              <PanelLeftOpen className="h-3.5 w-3.5" strokeWidth={1.75} />
+              Agents{agents.length ? ` · ${agents.length}` : ""}
+            </button>
+            <button
+              type="button"
               onClick={() => setChangesOpen(true)}
               className="lg:hidden inline-flex h-8 items-center gap-1.5 px-2.5 rounded-lg text-[11px] text-[#a0a0a0] hover:text-[#e4e4e4] border border-[#2b2b2b] hover:border-[#3c3c3c] bg-[#1f1f1f] transition-colors"
             >
@@ -651,23 +661,6 @@ function LiveRoom({
         </div>
       </header>
 
-      <AgentTabs
-        agents={agents}
-        selectedAgentId={selectedAgentId}
-        chatFilterAgentId={chatFilterAgentId}
-        onSelectAgent={(id) => {
-          setSelectedAgentId(id);
-          setChatFilterAgentId(id);
-        }}
-        onSelectAll={() => setChatFilterAgentId(null)}
-        statusByAgent={statusByAgent}
-        participants={participants}
-        models={models}
-        amHost={amHost}
-        onAddAgent={() => setAddAgentOpen(true)}
-        onStopAgent={(id) => void handleStopAgent(id)}
-      />
-
       <LockPanel
         conflicts={conflicts}
         fileLocks={fileLocks}
@@ -679,6 +672,23 @@ function LiveRoom({
       />
 
       <main className="relative z-10 flex flex-1 min-h-0 min-w-0 overflow-hidden overscroll-none">
+        <AgentTabs
+          agents={agents}
+          selectedAgentId={selectedAgentId}
+          chatFilterAgentId={chatFilterAgentId}
+          onSelectAgent={(id) => {
+            setSelectedAgentId(id);
+            setChatFilterAgentId(id);
+          }}
+          onSelectAll={() => setChatFilterAgentId(null)}
+          statusByAgent={statusByAgent}
+          participants={participants}
+          models={models}
+          amHost={amHost}
+          onAddAgent={() => setAddAgentOpen(true)}
+          onStopAgent={(id) => void handleStopAgent(id)}
+        />
+
         <div className="flex-1 flex flex-col min-h-0 min-w-0 overflow-hidden bg-[#121212]/80">
           <ChatPanel
             messages={messages}
@@ -699,6 +709,34 @@ function LiveRoom({
           agentId={selectedAgentId}
         />
       </main>
+
+      {agentsOpen && (
+        <AgentTabs
+          agents={agents}
+          selectedAgentId={selectedAgentId}
+          chatFilterAgentId={chatFilterAgentId}
+          onSelectAgent={(id) => {
+            setSelectedAgentId(id);
+            setChatFilterAgentId(id);
+            setAgentsOpen(false);
+          }}
+          onSelectAll={() => {
+            setChatFilterAgentId(null);
+            setAgentsOpen(false);
+          }}
+          statusByAgent={statusByAgent}
+          participants={participants}
+          models={models}
+          amHost={amHost}
+          onAddAgent={() => {
+            setAgentsOpen(false);
+            setAddAgentOpen(true);
+          }}
+          onStopAgent={(id) => void handleStopAgent(id)}
+          mobile
+          onClose={() => setAgentsOpen(false)}
+        />
+      )}
 
       {changesOpen && (
         <SidePanel
