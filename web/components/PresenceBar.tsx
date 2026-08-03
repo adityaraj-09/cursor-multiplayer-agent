@@ -1,6 +1,7 @@
 "use client";
 
 import type { Participant } from "../../shared/events";
+import { roomRoleLabel, type RoomRole } from "../../shared/roomPermissions";
 
 interface PresenceBarProps {
   participants: Participant[];
@@ -8,6 +9,12 @@ interface PresenceBarProps {
   /** Current user is the room host (owner). */
   amHost?: boolean;
   onRemoveMember?: (userId: string) => void;
+}
+
+function roleBadge(p: Participant): RoomRole | null {
+  if (p.role) return p.role;
+  if (p.isOwner) return "owner";
+  return null;
 }
 
 export default function PresenceBar({
@@ -22,6 +29,7 @@ export default function PresenceBar({
   return (
     <div className="flex items-center -space-x-1.5">
       {visible.map((p) => {
+        const role = roleBadge(p);
         const canRemove =
           amHost &&
           p.userId &&
@@ -38,7 +46,7 @@ export default function PresenceBar({
                   : ""
               }`}
               style={{ backgroundColor: p.color }}
-              title={`${p.name}${p.isOwner ? " · host" : ""}${
+              title={`${p.name}${role ? ` · ${roomRoleLabel(role)}` : ""}${
                 p.drivingAgentIds?.length
                   ? ` · driving ${p.drivingAgentIds.length} agent(s)`
                   : p.isDriver
@@ -51,7 +59,7 @@ export default function PresenceBar({
             <div className="absolute top-full right-0 sm:left-1/2 sm:-translate-x-1/2 sm:right-auto mt-2 bg-[#202020] border border-[#3c3c3c] text-[#e4e4e4] px-2.5 py-2 rounded-lg text-[11px] whitespace-nowrap opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity pointer-events-none group-hover:pointer-events-auto z-50 shadow-xl">
               <div>
                 {p.name}
-                {p.isOwner ? " · host" : ""}
+                {role ? ` · ${roomRoleLabel(role)}` : ""}
                 {p.drivingAgentIds?.length
                   ? ` · driving ${p.drivingAgentIds.length}`
                   : p.isDriver

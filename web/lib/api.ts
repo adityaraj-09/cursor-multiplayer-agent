@@ -116,15 +116,28 @@ export async function joinViaInvite(code: string): Promise<{ roomId: string }> {
 
 export async function createInviteLink(
   roomId: string,
-  maxUses?: number | null,
-): Promise<{ code: string; roomId: string; maxUses: number | null; useCount: number }> {
+  opts?: {
+    maxUses?: number | null;
+    role?: "viewer" | "editor";
+  },
+): Promise<{
+  code: string;
+  roomId: string;
+  maxUses: number | null;
+  useCount: number;
+  expiresAt?: number | null;
+  role: "viewer" | "editor";
+}> {
   const res = await fetch(`${API_BASE}/auth/${roomId}/invite`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       ...(await authHeaders()),
     },
-    body: JSON.stringify({ maxUses: maxUses ?? null }),
+    body: JSON.stringify({
+      maxUses: opts?.maxUses ?? null,
+      role: opts?.role ?? "viewer",
+    }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
@@ -141,6 +154,7 @@ export type InviteLinkInfo = {
   maxUses: number | null;
   useCount: number;
   expiresAt: number | null;
+  role: "viewer" | "editor";
 };
 
 export async function listInviteLinks(
@@ -413,6 +427,25 @@ export async function fetchRepositories(opts: {
   return data.repositories as RepoInfo[];
 }
 
+export async function updateRoomSettings(
+  id: string,
+  data: { controlMode: "open" | "driver" | "host" },
+): Promise<RoomInfo> {
+  const res = await fetch(`${API_BASE}/rooms/${id}/settings`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+      ...(await authHeaders()),
+    },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Failed to update room settings");
+  }
+  return res.json();
+}
+
 export async function createRoom(data: {
   name: string;
   runtime: AgentRuntime;
@@ -426,6 +459,7 @@ export async function createRoom(data: {
   backend?: "cursor" | "claude-code";
   anthropicApiKey?: string;
   orgId?: string;
+  controlMode?: "open" | "driver" | "host";
 }): Promise<RoomInfo> {
   const res = await fetch(`${API_BASE}/rooms`, {
     method: "POST",

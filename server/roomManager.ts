@@ -42,6 +42,17 @@ import { getServerApiKey } from "./serverKey.js";
 import { getUserByokKey, setUserByokKey } from "./userByok.js";
 import { getOrgCursorKey } from "./orgKeys.js";
 import { canManageOrg, type OrgRole } from "../shared/orgs.js";
+import {
+  canAbortWithRole,
+  canRequestDrive,
+  canSteerWithRole,
+  defaultControlModeForRuntime,
+  normalizeRoomRole,
+  parseControlMode,
+  steerDeniedReason,
+  type ControlMode,
+  type RoomRole,
+} from "../shared/roomPermissions.js";
 import { detectAgentConflicts, resolveAgentCwd, findScopeOverlap, formatScopeOverlapError } from "./agentConflicts.js";
 import { FileLockRegistry, broadcastFileLocks } from "./fileLocks.js";
 import type {
@@ -92,6 +103,8 @@ export interface CreateRoomRequest {
   backend?: AgentBackendKind;
   /** Anthropic API key when backend is claude-code (cloud). Saved as user BYOK. */
   anthropicApiKey?: string;
+  /** Collaboration control mode. Defaults by runtime (local → driver, cloud → open). */
+  controlMode?: ControlMode;
 }
 
 type AgentBackend = AgentRunner | SdkAgentSession | ClaudeSandboxSession;
@@ -493,6 +506,11 @@ export class RoomManager {
       throw new Error("Not a member of that organization");
     }
 
+    const controlMode = parseControlMode(
+      req.controlMode,
+      defaultControlModeForRuntime(runtime),
+    );
+
     const row = db.createRoom({
       id,
       name,
@@ -510,6 +528,7 @@ export class RoomManager {
       keyHint,
       ownerId,
       orgId,
+      controlMode,
     });
 
     if (ownerId) {
@@ -542,9 +561,9 @@ export class RoomManager {
 
     this.initRoomState(row, existingByAgentId);
     console.log(
-      `Created ${runtime}/${authMode}/${backendKind} room "${name}" (${id}) model=${modelId}`,
+      `Created ${runtime}/${authMode}/${backendKind} room "${name}" (${id}) model=${modelId} control=${controlMode}`,
     );
-    return this.toRoomInfo(row, 0);
+    return this.toRoomInfo(row, 0, ownerId || undefined);
   }
 
   // -----------------------------------------------------------------------
@@ -1225,14 +1244,17 @@ export class RoomManager {
     }
 
     // Per-agent driver cleanup
-    for (const [, agent] of room.agents) {
+    for (const [agentId, agent] of room.agents) {
       if (agent.driverSocketId === socket.id) {
         agent.driverSocketId = null;
+        db.clearAgentDriver(agentId);
         if (
           agent.pendingDriveRequest &&
           room.participants.has(agent.pendingDriveRequest.socketId)
         ) {
           agent.driverSocketId = agent.pendingDriveRequest.socketId;
+          const nextP = room.participants.get(agent.driverSocketId!);
+          if (nextP?.userId) db.setAgentDriver(agentId, nextP.userId);
           this.io.sockets.sockets
             .get(agent.driverSocketId!)
             ?.emit("drive-granted", agent.row.id);
@@ -1435,6 +1457,24 @@ export class RoomManager {
       return;
     }
 
+    const p = room.participants.get(socket.id);
+    const role = p?.userId
+      ? this.resolveUserRoomRole(room.id, p.userId)
+      : null;
+    const isDriving =
+      agent.driverSocketId === socket.id ||
+      (room.agents.size <= 1 && room.driverSocketId === socket.id);
+    const controlMode = this.getControlMode(room.row);
+    const denied = steerDeniedReason({
+      role,
+      controlMode,
+      isDrivingAgent: isDriving,
+    });
+    if (denied) {
+      socket.emit("error", denied);
+      return;
+    }
+
     if (agent.workerRunActive || agent.backend.isBusy()) {
       socket.emit(
         "error",
@@ -1445,7 +1485,6 @@ export class RoomManager {
 
     agent.workerRunActive = true;
 
-    const p = room.participants.get(socket.id);
     const userMsg: ChatMessage = {
       id: nanoid(12),
       roomId: room.id,
@@ -2175,6 +2214,14 @@ export class RoomManager {
     const p = room.participants.get(socket.id);
     if (!p) return;
 
+    const role = p.userId
+      ? this.resolveUserRoomRole(room.id, p.userId)
+      : null;
+    if (!canRequestDrive(role)) {
+      socket.emit("error", "Viewers cannot request control");
+      return;
+    }
+
     if (agentId) {
       const agent = room.agents.get(agentId);
       if (!agent) return;
@@ -2622,6 +2669,31 @@ export class RoomManager {
     const agent = room.agents.get(resolvedAgentId);
     if (!agent) throw new Error("Agent not found");
 
+    if (actorUserId) {
+      const role = this.resolveUserRoomRole(id, actorUserId);
+      const isDriving = [...room.participants.entries()].some(
+        ([sid, p]) =>
+          p.userId === actorUserId &&
+          (agent.driverSocketId === sid ||
+            (room.agents.size <= 1 && room.driverSocketId === sid)),
+      );
+      if (
+        !canAbortWithRole({
+          role,
+          controlMode: this.getControlMode(row),
+          isDrivingAgent: isDriving,
+        })
+      ) {
+        throw new Error(
+          steerDeniedReason({
+            role,
+            controlMode: this.getControlMode(row),
+            isDrivingAgent: isDriving,
+          }) || "Not allowed to abort this agent",
+        );
+      }
+    }
+
     const wasBusy = agent.workerRunActive || agent.backend.isBusy();
     if (!wasBusy) return;
 
@@ -2858,6 +2930,95 @@ export class RoomManager {
     return false;
   }
 
+  getControlMode(row: db.RoomRow): ControlMode {
+    return parseControlMode(row.control_mode, "open");
+  }
+
+  /**
+   * Resolve the caller's collaboration role for a room.
+   * Owner always wins; explicit room membership is next; org members default to editor.
+   */
+  resolveUserRoomRole(roomId: string, userId: string): RoomRole | null {
+    const row = db.getRoom(roomId);
+    if (!row) return null;
+    if (row.owner_id === userId) return "owner";
+    const memberRole = normalizeRoomRole(db.getRoomMemberRole(roomId, userId));
+    if (memberRole === "owner") return "owner";
+    if (memberRole) return memberRole;
+    if (row.org_id && db.isOrganizationMember(row.org_id, userId)) {
+      // Org access without an explicit room seat — collaborative default.
+      return "editor";
+    }
+    return null;
+  }
+
+  userCanSteerAgent(
+    roomId: string,
+    agentId: string,
+    userId: string,
+    socketId?: string,
+  ): boolean {
+    const room = this.rooms.get(roomId);
+    const row = db.getRoom(roomId);
+    if (!room || !row) return false;
+    const role = this.resolveUserRoomRole(roomId, userId);
+    const agent = room.agents.get(agentId);
+    if (!agent) return false;
+    let isDriving = false;
+    if (socketId) {
+      isDriving =
+        agent.driverSocketId === socketId ||
+        (room.agents.size <= 1 && room.driverSocketId === socketId);
+    } else {
+      isDriving = [...room.participants.entries()].some(
+        ([sid, p]) =>
+          p.userId === userId &&
+          (agent.driverSocketId === sid ||
+            (room.agents.size <= 1 && room.driverSocketId === sid)),
+      );
+    }
+    return canSteerWithRole({
+      role,
+      controlMode: this.getControlMode(row),
+      isDrivingAgent: isDriving,
+    });
+  }
+
+  setControlMode(
+    roomId: string,
+    controlModeRaw: string,
+    actorUserId: string,
+  ): RoomInfo {
+    const row = db.getRoom(roomId);
+    if (!row || row.status !== "active") {
+      throw new Error("Room not found");
+    }
+    if (row.owner_id !== actorUserId) {
+      throw new Error("Only the host can change control mode");
+    }
+    const normalized = String(controlModeRaw || "").trim().toLowerCase();
+    if (
+      normalized !== "open" &&
+      normalized !== "driver" &&
+      normalized !== "host"
+    ) {
+      throw new Error("controlMode must be open, driver, or host");
+    }
+    const mode = normalized as ControlMode;
+    db.setRoomControlMode(roomId, mode);
+    row.control_mode = mode;
+    const room = this.rooms.get(roomId);
+    if (room) {
+      room.row.control_mode = mode;
+      this.io.to(roomId).emit("control-mode-updated", mode);
+    }
+    return this.toRoomInfo(
+      row,
+      room?.participants.size || 0,
+      actorUserId,
+    );
+  }
+
   /** Host / org admin can manage room-level settings. */
   userCanManageRoom(roomId: string, userId: string): boolean {
     const row = db.getRoom(roomId);
@@ -2885,24 +3046,29 @@ export class RoomManager {
       if (row.org_id) {
         throw new Error("Join this organization to access team sessions");
       }
-      db.addRoomMember(roomId, userId, "member");
+      db.addRoomMember(roomId, userId, "editor");
     } else if (
       isOrgMember &&
       row.owner_id !== userId &&
       !db.isRoomMember(roomId, userId)
     ) {
-      db.addRoomMember(roomId, userId, "member");
+      db.addRoomMember(roomId, userId, "editor");
     }
     return this.toRoomInfo(
       row,
       this.rooms.get(roomId)?.participants.size || 0,
+      userId,
     );
   }
 
-  getRoomInfo(id: string): RoomInfo | null {
+  getRoomInfo(id: string, actorUserId?: string): RoomInfo | null {
     const row = db.getRoom(id);
     if (!row) return null;
-    return this.toRoomInfo(row, this.rooms.get(id)?.participants.size || 0);
+    return this.toRoomInfo(
+      row,
+      this.rooms.get(id)?.participants.size || 0,
+      actorUserId,
+    );
   }
 
   async listModelsForRoom(
@@ -3024,6 +3190,10 @@ export class RoomManager {
         drivingAgentIds.length > 0 ||
         (room.agents.size <= 1 && socketId === room.driverSocketId);
 
+      const role = p.userId
+        ? this.resolveUserRoomRole(room.id, p.userId)
+        : undefined;
+
       list.push({
         socketId,
         name: p.name,
@@ -3032,6 +3202,7 @@ export class RoomManager {
         isOwner: Boolean(
           room.row.owner_id && p.userId === room.row.owner_id,
         ),
+        role: role ?? undefined,
         isDriver,
         drivingAgentIds:
           drivingAgentIds.length > 0 ? drivingAgentIds : undefined,
@@ -3050,13 +3221,20 @@ export class RoomManager {
     return this.rooms.get(roomId);
   }
 
-  private toRoomInfo(row: db.RoomRow, participantCount: number): RoomInfo {
+  private toRoomInfo(
+    row: db.RoomRow,
+    participantCount: number,
+    actorUserId?: string,
+  ): RoomInfo {
     const room = this.rooms.get(row.id);
     const agentInfos: AgentInfo[] | undefined = room
       ? [...room.agents.values()].map((a) => this.toAgentInfo(a.row))
       : undefined;
 
     const org = row.org_id ? db.getOrganization(row.org_id) : undefined;
+    const myRole = actorUserId
+      ? this.resolveUserRoomRole(row.id, actorUserId) ?? undefined
+      : undefined;
     return {
       id: row.id,
       name: row.name,
@@ -3068,6 +3246,7 @@ export class RoomManager {
       runtime: (row.runtime as AgentRuntime) || "local",
       authMode: (row.auth_mode as AuthMode) || "cli",
       modelId: row.model_id || DEFAULT_MODEL,
+      controlMode: this.getControlMode(row),
       repoUrl: row.repo_url || undefined,
       startingRef: row.starting_ref || undefined,
       prUrl: row.pr_url || undefined,
@@ -3078,6 +3257,7 @@ export class RoomManager {
       orgName: org?.name,
       cursorSessionId: row.cursor_session_id || undefined,
       agents: agentInfos,
+      myRole,
     };
   }
 }

@@ -7,6 +7,11 @@ import {
   revokeInviteLink,
   type InviteLinkInfo,
 } from "../lib/api";
+import {
+  roomRoleDescription,
+  roomRoleLabel,
+  type RoomInviteRole,
+} from "../../shared/roomPermissions";
 
 function inviteUrl(code: string): string {
   if (typeof window === "undefined") return `/invite/${code}`;
@@ -43,6 +48,7 @@ export default function InvitePanel({
   const [error, setError] = useState("");
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
   const [maxUses, setMaxUses] = useState("");
+  const [role, setRole] = useState<RoomInviteRole>("viewer");
   const [revoking, setRevoking] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
@@ -91,7 +97,10 @@ export default function InvitePanel({
       if (parsed !== null && (!Number.isFinite(parsed) || parsed < 1)) {
         throw new Error("Max uses must be a positive number");
       }
-      const created = await createInviteLink(roomId, parsed);
+      const created = await createInviteLink(roomId, {
+        maxUses: parsed,
+        role,
+      });
       setMaxUses("");
       await refresh();
       await handleCopy(created.code);
@@ -144,31 +153,70 @@ export default function InvitePanel({
           </button>
         </div>
 
-        <div className="px-4 py-3 border-b border-[#2b2b2b] space-y-2 shrink-0">
+        <div className="px-4 py-3 border-b border-[#2b2b2b] space-y-3 shrink-0">
           <p className="text-[12px] text-[#6e6e6e]">
             {canManage
               ? "Create a link teammates can use to join this session."
               : "Active invite links for this session."}
           </p>
           {canManage && (
-            <div className="flex gap-2">
-              <input
-                type="number"
-                min={1}
-                value={maxUses}
-                onChange={(e) => setMaxUses(e.target.value)}
-                placeholder="Max uses (optional)"
-                className="flex-1 h-9 px-3 bg-[#252525] border border-[#2b2b2b] rounded-md text-[13px] text-[#e4e4e4] placeholder:text-[#6e6e6e] outline-none focus:border-[#4d9fff]"
-              />
-              <button
-                type="button"
-                onClick={() => void handleCreate()}
-                disabled={creating}
-                className="h-9 px-3 rounded-md bg-[#e4e4e4] text-[#141414] text-[12px] font-medium hover:bg-white disabled:opacity-40 shrink-0"
-              >
-                {creating ? "Creating…" : "New link"}
-              </button>
-            </div>
+            <>
+              <div className="grid grid-cols-2 gap-2">
+                {(
+                  [
+                    {
+                      id: "viewer" as const,
+                      title: roomRoleLabel("viewer"),
+                      body: "Watch only",
+                    },
+                    {
+                      id: "editor" as const,
+                      title: roomRoleLabel("editor"),
+                      body: "Can steer",
+                    },
+                  ] as const
+                ).map((opt) => (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => setRole(opt.id)}
+                    className={`rounded-md border px-3 py-2 text-left transition-colors ${
+                      role === opt.id
+                        ? "border-[#4d9fff] bg-[#1a2330]"
+                        : "border-[#2b2b2b] bg-[#141414] hover:border-[#3c3c3c]"
+                    }`}
+                  >
+                    <div className="text-[12px] font-medium text-[#e4e4e4]">
+                      {opt.title}
+                    </div>
+                    <div className="text-[11px] text-[#6e6e6e] mt-0.5">
+                      {opt.body}
+                    </div>
+                  </button>
+                ))}
+              </div>
+              <p className="text-[11px] text-[#6e6e6e]">
+                {roomRoleDescription(role)}
+              </p>
+              <div className="flex gap-2">
+                <input
+                  type="number"
+                  min={1}
+                  value={maxUses}
+                  onChange={(e) => setMaxUses(e.target.value)}
+                  placeholder="Max uses (optional)"
+                  className="flex-1 h-9 px-3 bg-[#252525] border border-[#2b2b2b] rounded-md text-[13px] text-[#e4e4e4] placeholder:text-[#6e6e6e] outline-none focus:border-[#4d9fff]"
+                />
+                <button
+                  type="button"
+                  onClick={() => void handleCreate()}
+                  disabled={creating}
+                  className="h-9 px-3 rounded-md bg-[#e4e4e4] text-[#141414] text-[12px] font-medium hover:bg-white disabled:opacity-40 shrink-0"
+                >
+                  {creating ? "Creating…" : "New link"}
+                </button>
+              </div>
+            </>
           )}
         </div>
 
@@ -190,6 +238,7 @@ export default function InvitePanel({
                     invite.useCount >= invite.maxUses) ||
                   (invite.expiresAt !== null &&
                     invite.expiresAt <= Date.now());
+                const inviteRole = invite.role === "editor" ? "editor" : "viewer";
                 return (
                   <li
                     key={invite.code}
@@ -201,6 +250,8 @@ export default function InvitePanel({
                           {invite.code}
                         </p>
                         <p className="text-[11px] text-[#6e6e6e] mt-0.5">
+                          {roomRoleLabel(inviteRole)}
+                          {" · "}
                           {formatWhen(invite.createdAt)}
                           {" · "}
                           {invite.maxUses === null
