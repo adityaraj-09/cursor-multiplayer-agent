@@ -70,6 +70,7 @@ export const getOnlineWorkers = backend.getOnlineWorkers;
 export const listRoomsByUser = backend.listRoomsByUser;
 export const listPersonalRoomsByUser = backend.listPersonalRoomsByUser;
 export const listRoomsByOrg = backend.listRoomsByOrg;
+export const detachOrganizationRooms = backend.detachOrganizationRooms;
 
 // Organizations
 export const createOrganization = backend.createOrganization;

@@ -12,6 +12,7 @@ import type {
   CloudMeta,
   FileLease,
   Participant,
+  RoomMemberInfo,
   TypingUser,
 } from "../../shared/events";
 
@@ -19,6 +20,7 @@ interface UseSocketReturn {
   socket: AppSocket | null;
   connected: boolean;
   participants: Participant[];
+  members: RoomMemberInfo[];
   amDriver: boolean;
   mySocketId: string | null;
   messages: ChatMessage[];
@@ -39,6 +41,8 @@ interface UseSocketReturn {
     name: string;
     agentId?: string;
   } | null;
+  /** Local user is waiting for drive approval. */
+  pendingOutgoingDrive: { agentId?: string } | null;
   lastDiff: string;
   cloudMeta: CloudMeta | null;
   modelId: string | null;
@@ -104,6 +108,10 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
     name: string;
     agentId?: string;
   } | null>(null);
+  const [pendingOutgoingDrive, setPendingOutgoingDrive] = useState<{
+    agentId?: string;
+  } | null>(null);
+  const [members, setMembers] = useState<RoomMemberInfo[]>([]);
   const [lastDiff, setLastDiff] = useState("");
   const [cloudMeta, setCloudMeta] = useState<CloudMeta | null>(null);
   const [modelId, setModelId] = useState<string | null>(null);
@@ -246,6 +254,19 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
     }) => {
       setPendingRequest(payload);
     };
+    const onDriveRequestPending = (payload: { agentId?: string }) => {
+      setPendingOutgoingDrive(payload || {});
+    };
+    const onDriveGranted = () => {
+      setPendingOutgoingDrive(null);
+      setPendingRequest(null);
+    };
+    const onDriveReleased = () => {
+      setPendingOutgoingDrive(null);
+    };
+    const onMembersUpdated = (list: RoomMemberInfo[]) => {
+      setMembers(Array.isArray(list) ? list : []);
+    };
     const onDiffUpdate = (patch: string, agentId?: string) => {
       if (agentId) {
         setDiffByAgent((prev) => ({ ...prev, [agentId]: patch }));
@@ -353,6 +374,10 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
       s.on("file-locks", onFileLocks);
       s.on("agent-conflict-blocked", onConflictBlocked);
       s.on("drive-requested", onDriveRequested);
+      s.on("drive-request-pending", onDriveRequestPending);
+      s.on("drive-granted", onDriveGranted);
+      s.on("drive-released", onDriveReleased);
+      s.on("members-updated", onMembersUpdated);
       s.on("diff-update", onDiffUpdate);
       s.on("cloud-meta", onCloudMeta);
       s.on("model-updated", onModelUpdated);
@@ -377,6 +402,10 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
         attached.off("file-locks", onFileLocks);
         attached.off("agent-conflict-blocked", onConflictBlocked);
         attached.off("drive-requested", onDriveRequested);
+        attached.off("drive-request-pending", onDriveRequestPending);
+        attached.off("drive-granted", onDriveGranted);
+        attached.off("drive-released", onDriveReleased);
+        attached.off("members-updated", onMembersUpdated);
         attached.off("diff-update", onDiffUpdate);
         attached.off("cloud-meta", onCloudMeta);
         attached.off("model-updated", onModelUpdated);
@@ -434,10 +463,12 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
   }, []);
 
   const requestDrive = useCallback((agentId?: string) => {
+    setPendingOutgoingDrive({ agentId });
     socketRef.current?.emit("request-drive", agentId);
   }, []);
 
   const releaseDrive = useCallback((agentId?: string) => {
+    setPendingOutgoingDrive(null);
     socketRef.current?.emit("release-drive", agentId);
   }, []);
 
@@ -466,6 +497,7 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
     socket,
     connected,
     participants,
+    members,
     amDriver,
     mySocketId,
     messages,
@@ -480,6 +512,7 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
     agentStatus,
     agentError,
     pendingRequest,
+    pendingOutgoingDrive,
     lastDiff,
     cloudMeta,
     modelId,

@@ -5,8 +5,11 @@ import type {
   ModelInfo,
   RepoInfo,
   RoomInfo,
+  RoomMemberInfo,
   UserInfo,
+  ChatMessage,
 } from "../../shared/events";
+import type { RoomInviteRole } from "../../shared/roomPermissions";
 import type {
   OrgInfo,
   OrgInviteInfo,
@@ -446,6 +449,80 @@ export async function updateRoomSettings(
   return res.json();
 }
 
+export type { RoomMemberInfo };
+
+export async function fetchRoomMembers(
+  roomId: string,
+): Promise<RoomMemberInfo[]> {
+  const res = await fetch(`${API_BASE}/rooms/${roomId}/members`, {
+    headers: await authHeaders(),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Failed to fetch members");
+  }
+  const data = await res.json();
+  return data.members ?? [];
+}
+
+export async function updateRoomMemberRole(
+  roomId: string,
+  userId: string,
+  role: RoomInviteRole,
+): Promise<RoomMemberInfo[]> {
+  const res = await fetch(
+    `${API_BASE}/rooms/${roomId}/members/${encodeURIComponent(userId)}`,
+    {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        ...(await authHeaders()),
+      },
+      body: JSON.stringify({ role }),
+    },
+  );
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Failed to update member role");
+  }
+  const data = await res.json();
+  return data.members ?? [];
+}
+
+export async function removeRoomMember(
+  roomId: string,
+  userId: string,
+): Promise<void> {
+  const res = await fetch(`${API_BASE}/rooms/${roomId}/members/remove`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(await authHeaders()),
+    },
+    body: JSON.stringify({ userId }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Failed to remove member");
+  }
+}
+
+export async function exportRoomTranscript(roomId: string): Promise<{
+  room: RoomInfo;
+  messages: ChatMessage[];
+  summary: string;
+  exportedAt: number;
+}> {
+  const res = await fetch(`${API_BASE}/rooms/${roomId}/export`, {
+    headers: await authHeaders(),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Failed to export transcript");
+  }
+  return res.json();
+}
+
 export async function createRoom(data: {
   name: string;
   runtime: AgentRuntime;
@@ -824,6 +901,44 @@ export async function removeOrgMember(
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.error || "Failed to remove member");
+  }
+}
+
+export async function transferOrgOwnership(
+  orgId: string,
+  userId: string,
+): Promise<OrgInfo> {
+  const res = await fetch(`${API_BASE}/orgs/${orgId}/transfer`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(await authHeaders()),
+    },
+    body: JSON.stringify({ userId }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Failed to transfer ownership");
+  }
+  const body = await res.json();
+  return body.org as OrgInfo;
+}
+
+export async function deleteOrg(
+  orgId: string,
+  confirm: string,
+): Promise<void> {
+  const res = await fetch(`${API_BASE}/orgs/${orgId}`, {
+    method: "DELETE",
+    headers: {
+      "Content-Type": "application/json",
+      ...(await authHeaders()),
+    },
+    body: JSON.stringify({ confirm }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Failed to delete team");
   }
 }
 

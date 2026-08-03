@@ -1068,6 +1068,23 @@ export function listRoomsByOrg(orgId: string): RoomRow[] {
   ).map(pgRowToRoom);
 }
 
+/** Stop active org rooms and detach them before deleting the organization. */
+export function detachOrganizationRooms(orgId: string): number {
+  syncQuery(
+    `UPDATE rooms SET status = 'stopped' WHERE org_id = $1 AND status = 'active'`,
+    [orgId],
+  );
+  const rows = syncQuery<{ count: string }>(
+    `WITH updated AS (
+       UPDATE rooms SET org_id = NULL WHERE org_id = $1
+       RETURNING 1
+     )
+     SELECT COUNT(*)::text AS count FROM updated`,
+    [orgId],
+  );
+  return Number(rows[0]?.count ?? 0);
+}
+
 export function createOrganization(input: {
   id: string;
   name: string;

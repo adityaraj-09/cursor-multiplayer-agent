@@ -40,3 +40,12 @@ export const CORS_ORIGINS: string[] = (process.env.CORS_ORIGIN || "")
   .split(",")
   .map((s) => s.trim())
   .filter(Boolean);
+
+/** Optional Slack incoming webhook for collaboration notifications. */
+export const SLACK_WEBHOOK_URL = process.env.SLACK_WEBHOOK_URL?.trim() || "";
+
+/**
+ * Optional generic JSON webhook (Zapier / email bridge / custom).
+ * Receives { kind, title, text, roomId?, orgId?, … }.
+ */
+export const NOTIFY_WEBHOOK_URL = process.env.NOTIFY_WEBHOOK_URL?.trim() || "";

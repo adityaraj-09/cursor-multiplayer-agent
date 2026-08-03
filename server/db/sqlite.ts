@@ -559,6 +559,12 @@ const stmts = {
   listRoomsByOrg: db.prepare(`
     SELECT * FROM rooms WHERE org_id = ? ORDER BY last_active_at DESC
   `),
+  clearRoomsOrg: db.prepare(`
+    UPDATE rooms SET org_id = NULL WHERE org_id = ?
+  `),
+  stopRoomsByOrg: db.prepare(`
+    UPDATE rooms SET status = 'stopped' WHERE org_id = ? AND status = 'active'
+  `),
   insertOrg: db.prepare(`
     INSERT INTO organizations (id, name, slug, allowed_domains, created_by, created_at)
     VALUES (?, ?, ?, ?, ?, ?)
@@ -1212,6 +1218,13 @@ export function listPersonalRoomsByUser(userId: string): RoomRow[] {
 
 export function listRoomsByOrg(orgId: string): RoomRow[] {
   return stmts.listRoomsByOrg.all(orgId) as RoomRow[];
+}
+
+/** Stop active org rooms and detach them before deleting the organization. */
+export function detachOrganizationRooms(orgId: string): number {
+  stmts.stopRoomsByOrg.run(orgId);
+  const result = stmts.clearRoomsOrg.run(orgId);
+  return result.changes;
 }
 
 export function createOrganization(input: {
