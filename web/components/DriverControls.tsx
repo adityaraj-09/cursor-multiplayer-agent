@@ -4,6 +4,8 @@ import { Check, Crown, MousePointer2, X } from "lucide-react";
 
 interface DriverControlsProps {
   amDriver: boolean;
+  /** Host (or current driver) may approve a pending request. */
+  canGrant?: boolean;
   pendingRequest: string | null;
   onRequestDrive: () => void;
   onReleaseDrive: () => void;
@@ -13,6 +15,7 @@ interface DriverControlsProps {
 
 export default function DriverControls({
   amDriver,
+  canGrant = false,
   pendingRequest,
   onRequestDrive,
   onReleaseDrive,
@@ -40,7 +43,7 @@ export default function DriverControls({
         </button>
       )}
 
-      {pendingRequest && amDriver && (
+      {pendingRequest && (amDriver || canGrant) && (
         <div className="fixed left-3 right-3 sm:left-auto sm:right-5 bottom-[calc(7rem+env(safe-area-inset-bottom))] sm:bottom-28 bg-[#1e1e1e] border border-[#3c3c3c] rounded-2xl px-3.5 py-3 flex flex-wrap items-center gap-2 sm:gap-3 shadow-2xl z-50 animate-fade-up">
           <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-[#252525] text-[#e8a23a]">
             <Crown className="h-4 w-4" strokeWidth={1.75} />

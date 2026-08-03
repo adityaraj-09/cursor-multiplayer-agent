@@ -1,4 +1,7 @@
 import type { AgentBackendKind } from "./backends/types.js";
+import type { ControlMode, RoomRole } from "./roomPermissions.js";
+
+export type { ControlMode, RoomInviteRole, RoomRole } from "./roomPermissions.js";
 
 export interface Participant {
   socketId: string;
@@ -9,6 +12,8 @@ export interface Participant {
   drivingAgentIds?: string[];
   userId?: string;
   isOwner?: boolean;
+  /** Effective collaboration role in this room. */
+  role?: RoomRole;
 }
 
 export interface SteerLogEntry {
@@ -113,6 +118,8 @@ export interface RoomInfo {
   runtime: AgentRuntime;
   authMode: AuthMode;
   modelId: string;
+  /** Who may steer agents in this room. */
+  controlMode: ControlMode;
   repoUrl?: string;
   startingRef?: string;
   prUrl?: string;
@@ -127,6 +134,8 @@ export interface RoomInfo {
   cursorSessionId?: string;
   /** Agents in this room (populated when available). */
   agents?: AgentInfo[];
+  /** Caller's effective role when requested with auth. */
+  myRole?: RoomRole;
 }
 
 export interface UserInfo {
@@ -206,6 +215,8 @@ export interface ServerToClientEvents {
   /** Peer stopped typing (omit agentId to clear all agents for that socket). */
   "typing-stop": (payload: { socketId: string; agentId?: string }) => void;
   kicked: (reason: string) => void;
+  /** Host changed room collaboration settings. */
+  "control-mode-updated": (mode: ControlMode) => void;
   error: (message: string) => void;
 }
 

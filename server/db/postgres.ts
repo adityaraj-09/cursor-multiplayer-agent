@@ -37,7 +37,8 @@ async function initSchema() {
       key_ciphertext TEXT,
       key_hint TEXT,
       owner_id TEXT,
-      org_id TEXT
+      org_id TEXT,
+      control_mode TEXT NOT NULL DEFAULT 'open'
     );
 
     CREATE TABLE IF NOT EXISTS steer_messages (
@@ -86,7 +87,7 @@ async function initSchema() {
     CREATE TABLE IF NOT EXISTS room_members (
       room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
       user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      role TEXT NOT NULL DEFAULT 'member',
+      role TEXT NOT NULL DEFAULT 'editor',
       PRIMARY KEY (room_id, user_id)
     );
 
@@ -97,7 +98,8 @@ async function initSchema() {
       created_at BIGINT NOT NULL,
       max_uses INTEGER,
       use_count INTEGER NOT NULL DEFAULT 0,
-      expires_at BIGINT
+      expires_at BIGINT,
+      role TEXT NOT NULL DEFAULT 'viewer'
     );
 
     CREATE TABLE IF NOT EXISTS workers (
@@ -215,6 +217,8 @@ async function initSchema() {
     `ALTER TABLE messages ADD COLUMN IF NOT EXISTS agent_id TEXT`,
     `ALTER TABLE messages ADD COLUMN IF NOT EXISTS todos_json TEXT`,
     `ALTER TABLE rooms ADD COLUMN IF NOT EXISTS org_id TEXT`,
+    `ALTER TABLE rooms ADD COLUMN IF NOT EXISTS control_mode TEXT NOT NULL DEFAULT 'open'`,
+    `ALTER TABLE invite_links ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'viewer'`,
   ];
 
   for (const sql of migrations) {
@@ -223,6 +227,24 @@ async function initSchema() {
     } catch {
       // column already exists
     }
+  }
+
+  try {
+    await pool.query(
+      `UPDATE room_members SET role = 'editor' WHERE role = 'member'`,
+    );
+  } catch {
+    // ignore
+  }
+
+  try {
+    await pool.query(`
+      UPDATE invite_links
+      SET role = 'editor'
+      WHERE role IS NULL OR TRIM(role) = '' OR role = 'member'
+    `);
+  } catch {
+    // ignore
   }
 
   await pool.query(`
@@ -258,6 +280,7 @@ export interface RoomRow {
   key_hint: string | null;
   owner_id: string | null;
   org_id: string | null;
+  control_mode: string;
 }
 
 export interface CreateRoomInput {
@@ -278,6 +301,7 @@ export interface CreateRoomInput {
   keyHint?: string | null;
   ownerId?: string | null;
   orgId?: string | null;
+  controlMode?: string | null;
 }
 
 export type OrgRoleRow = "owner" | "admin" | "member";
@@ -331,6 +355,7 @@ function pgRowToRoom(r: Record<string, unknown>): RoomRow {
     key_hint: (r.key_hint as string) ?? null,
     owner_id: (r.owner_id as string) ?? null,
     org_id: (r.org_id as string) ?? null,
+    control_mode: ((r.control_mode as string) || "open"),
   };
 }
 
@@ -439,12 +464,16 @@ await ready;
 
 export function createRoom(input: CreateRoomInput): RoomRow {
   const now = Date.now();
+  const controlMode =
+    input.controlMode?.trim() ||
+    (input.runtime === "local" ? "driver" : "open");
   const result = syncQuery<Record<string, unknown>>(
     `INSERT INTO rooms (
       id, name, repo_path, agent_command, created_at, last_active_at, status,
       runtime, auth_mode, model_id, repo_url, starting_ref, cursor_agent_id,
-      cursor_session_id, pr_url, auto_create_pr, key_ciphertext, key_hint, owner_id, org_id
-    ) VALUES ($1,$2,$3,$4,$5,$6,'active',$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+      cursor_session_id, pr_url, auto_create_pr, key_ciphertext, key_hint, owner_id, org_id,
+      control_mode
+    ) VALUES ($1,$2,$3,$4,$5,$6,'active',$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
     RETURNING *`,
     [
       input.id,
@@ -466,6 +495,7 @@ export function createRoom(input: CreateRoomInput): RoomRow {
       input.keyHint ?? null,
       input.ownerId ?? null,
       input.orgId ?? null,
+      controlMode,
     ],
   );
   return pgRowToRoom(result[0]);
@@ -473,6 +503,13 @@ export function createRoom(input: CreateRoomInput): RoomRow {
 
 export function setRoomOwner(roomId: string, ownerId: string): void {
   syncQuery(`UPDATE rooms SET owner_id = $1 WHERE id = $2`, [ownerId, roomId]);
+}
+
+export function setRoomControlMode(roomId: string, controlMode: string): void {
+  syncQuery(`UPDATE rooms SET control_mode = $1 WHERE id = $2`, [
+    controlMode,
+    roomId,
+  ]);
 }
 
 export function listRooms(): RoomRow[] {
@@ -834,6 +871,15 @@ export function isRoomMember(roomId: string, userId: string): boolean {
   return rows.length > 0;
 }
 
+export function getRoomMemberRole(
+  roomId: string,
+  userId: string,
+): string | null {
+  const members = getRoomMembers(roomId);
+  const hit = members.find((m) => m.user_id === userId);
+  return hit?.role ?? null;
+}
+
 export function removeRoomMember(roomId: string, userId: string): void {
   syncQuery(`DELETE FROM room_members WHERE room_id = $1 AND user_id = $2`, [
     roomId,
@@ -879,10 +925,11 @@ export function createInviteLink(
   createdBy: string,
   maxUses: number | null,
   expiresAt: number | null = null,
+  role: string = "viewer",
 ): void {
   syncQuery(
-    `INSERT INTO invite_links (code, room_id, created_by, created_at, max_uses, use_count, expires_at) VALUES ($1,$2,$3,$4,$5,0,$6)`,
-    [code, roomId, createdBy, Date.now(), maxUses, expiresAt],
+    `INSERT INTO invite_links (code, room_id, created_by, created_at, max_uses, use_count, expires_at, role) VALUES ($1,$2,$3,$4,$5,0,$6,$7)`,
+    [code, roomId, createdBy, Date.now(), maxUses, expiresAt, role],
   );
 }
 
@@ -894,6 +941,7 @@ export type InviteLinkRow = {
   max_uses: number | null;
   use_count: number;
   expires_at: number | null;
+  role: string;
 };
 
 export function getInviteLink(code: string): InviteLinkRow | undefined {
@@ -905,6 +953,7 @@ export function getInviteLink(code: string): InviteLinkRow | undefined {
     max_uses: number | null;
     use_count: number;
     expires_at: string | null;
+    role: string | null;
   }>(`SELECT * FROM invite_links WHERE code = $1`, [code]);
   if (!rows.length) return undefined;
   const r = rows[0];
@@ -912,6 +961,7 @@ export function getInviteLink(code: string): InviteLinkRow | undefined {
     ...r,
     created_at: num(r.created_at)!,
     expires_at: num(r.expires_at),
+    role: r.role || "editor",
   };
 }
 
@@ -924,6 +974,7 @@ export function listInviteLinks(roomId: string): InviteLinkRow[] {
     max_uses: number | null;
     use_count: number;
     expires_at: string | null;
+    role: string | null;
   }>(
     `SELECT * FROM invite_links WHERE room_id = $1 ORDER BY created_at DESC`,
     [roomId],
@@ -932,6 +983,7 @@ export function listInviteLinks(roomId: string): InviteLinkRow[] {
     ...r,
     created_at: num(r.created_at)!,
     expires_at: num(r.expires_at),
+    role: r.role || "editor",
   }));
 }
 

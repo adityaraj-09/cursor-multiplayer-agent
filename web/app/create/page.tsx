@@ -44,6 +44,9 @@ export default function CreateSession() {
   const [name, setName] = useState("");
   const [backend, setBackend] = useState<AgentBackendKind>("cursor");
   const [runtime, setRuntime] = useState<AgentRuntime>("local");
+  const [controlMode, setControlMode] = useState<"open" | "driver" | "host">(
+    "driver",
+  );
   const [authMode, setAuthMode] = useState<AuthMode>("cli");
   const [apiKey, setApiKey] = useState("");
   const [anthropicApiKey, setAnthropicApiKey] = useState("");
@@ -187,6 +190,7 @@ export default function CreateSession() {
 
   const selectRuntime = (r: AgentRuntime) => {
     setRuntime(r);
+    setControlMode(r === "local" ? "driver" : "open");
     setRepos([]);
     setError("");
     if (backend === "claude-code") {
@@ -384,6 +388,7 @@ export default function CreateSession() {
         runtime,
         authMode: effectiveAuth,
         backend,
+        controlMode,
         modelId: isClaude
           ? modelId || DEFAULT_CLAUDE_MODEL
           : modelId || "auto",
@@ -544,6 +549,55 @@ export default function CreateSession() {
                 </button>
               ))}
             </div>
+          </fieldset>
+
+          <fieldset>
+            <legend className="block text-[12px] text-[#a0a0a0] mb-1.5">
+              Control mode
+            </legend>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              {(
+                [
+                  {
+                    id: "open" as const,
+                    label: "Open",
+                    body: "Any editor can steer",
+                  },
+                  {
+                    id: "driver" as const,
+                    label: "Driver",
+                    body: "Driver or host only",
+                  },
+                  {
+                    id: "host" as const,
+                    label: "Host only",
+                    body: "Host steers alone",
+                  },
+                ] as const
+              ).map((opt) => (
+                <button
+                  key={opt.id}
+                  type="button"
+                  onClick={() => setControlMode(opt.id)}
+                  className={`rounded-md border px-3 py-2 text-left transition-colors ${
+                    controlMode === opt.id
+                      ? "bg-[#252525] border-[#4d9fff] text-[#e4e4e4]"
+                      : "bg-[#1a1a1a] border-[#2b2b2b] text-[#6e6e6e]"
+                  }`}
+                >
+                  <div className="text-[13px] text-[#e4e4e4]">{opt.label}</div>
+                  <div className="text-[11px] text-[#6e6e6e] mt-0.5">
+                    {opt.body}
+                  </div>
+                </button>
+              ))}
+            </div>
+            {runtime === "local" && (
+              <p className="text-[11px] text-[#a07a3a] mt-2">
+                Local agents can operate on the host machine. Driver-enforced
+                mode is recommended.
+              </p>
+            )}
           </fieldset>
 
           {isClaude && (

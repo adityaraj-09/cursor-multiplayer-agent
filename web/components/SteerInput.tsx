@@ -22,6 +22,10 @@ interface SteerInputProps {
   agentBusy?: boolean;
   /** Socket disconnected — drafting allowed, send blocked */
   connected?: boolean;
+  /** Collaboration permission — drafting allowed, send blocked when false */
+  canSteer?: boolean;
+  /** Explains why send is blocked for permissions */
+  steerLockReason?: string;
   placeholder?: string;
   models?: ModelInfo[];
   modelId?: string;
@@ -47,6 +51,8 @@ export default function SteerInput({
   onSend,
   agentBusy = false,
   connected = true,
+  canSteer = true,
+  steerLockReason,
   placeholder = "Message the agent…",
   models = [],
   modelId = "",
@@ -115,16 +121,18 @@ export default function SteerInput({
   }, [connected]);
 
   const canSend =
-    connected && !agentBusy && text.trim().length > 0;
+    connected && canSteer && !agentBusy && text.trim().length > 0;
 
   const statusHint = !connected
     ? "Reconnecting…"
-    : agentBusy
-      ? "Agent is working — send unlocks when idle"
-      : null;
+    : !canSteer
+      ? steerLockReason || "You do not have permission to steer"
+      : agentBusy
+        ? "Agent is working — send unlocks when idle"
+        : null;
 
   const submit = () => {
-    if (!connected || agentBusy) return;
+    if (!connected || !canSteer || agentBusy) return;
     // Trim leading/trailing whitespace and newlines so Shift+Enter drafts
     // don't leave sticky empty lines after send.
     const trimmed = text.replace(/^\s+|\s+$/g, "");

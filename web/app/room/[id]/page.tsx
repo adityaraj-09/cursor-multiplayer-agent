@@ -27,6 +27,7 @@ import {
   stopRoomAgent,
   updateRoomCursorSession,
   updateRoomModel,
+  updateRoomSettings,
 } from "../../../lib/api";
 import {
   FALLBACK_MODELS,
@@ -43,12 +44,25 @@ import InvitePanel from "../../../components/InvitePanel";
 import AgentTabs from "../../../components/AgentTabs";
 import AddAgentDialog from "../../../components/AddAgentDialog";
 import LockPanel from "../../../components/LockPanel";
-import type { ModelInfo, RoomInfo } from "../../../../shared/events";
+import type {
+  ControlMode,
+  ModelInfo,
+  RoomInfo,
+} from "../../../../shared/events";
 import {
   CLAUDE_MODELS,
   DEFAULT_CLAUDE_MODEL,
 } from "../../../../shared/claudeModels";
 import { formatTypingIndicator } from "../../../../shared/typing";
+import {
+  canRequestDrive,
+  canSteerWithRole,
+  controlModeDescription,
+  controlModeLabel,
+  roomRoleLabel,
+  steerDeniedReason,
+  type RoomRole,
+} from "../../../../shared/roomPermissions";
 
 export default function RoomPage() {
   const params = useParams();
@@ -247,12 +261,17 @@ function LiveRoom({
   const { user } = useAuth();
   const runtime = roomInfo?.runtime || "local";
   const modelId = liveModelId || roomInfo?.modelId || "auto";
-  const amHost = Boolean(
-    user?.id && roomInfo?.ownerId && user.id === roomInfo.ownerId,
-  );
+  const controlMode: ControlMode = roomInfo?.controlMode || "open";
+  const myRole: RoomRole =
+    roomInfo?.myRole ||
+    (user?.id && roomInfo?.ownerId && user.id === roomInfo.ownerId
+      ? "owner"
+      : "editor");
+  const amHost = myRole === "owner";
   const [models, setModels] = useState<ModelInfo[]>(FALLBACK_MODELS);
   const [modelError, setModelError] = useState("");
   const [savingModel, setSavingModel] = useState(false);
+  const [savingControlMode, setSavingControlMode] = useState(false);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [changesOpen, setChangesOpen] = useState(false);
   const [addAgentOpen, setAddAgentOpen] = useState(false);
@@ -298,7 +317,29 @@ function LiveRoom({
     (selectedAgentId && diffByAgent[selectedAgentId]) || lastDiff;
   const amDrivingSelected =
     Boolean(selectedAgentId && drivingAgentIds.includes(selectedAgentId)) ||
-    (agents.length <= 1 && (amDriver || amHost));
+    (agents.length <= 1 && amDriver);
+  const canSteerSelected = canSteerWithRole({
+    role: myRole,
+    controlMode,
+    isDrivingAgent: amDrivingSelected,
+  });
+  const steerLockReason = steerDeniedReason({
+    role: myRole,
+    controlMode,
+    isDrivingAgent: amDrivingSelected,
+  });
+  const showDriverControls = canRequestDrive(myRole);
+
+  useEffect(() => {
+    if (!socket || !roomInfo) return;
+    const onControlMode = (mode: ControlMode) => {
+      onRoomInfo({ ...roomInfo, controlMode: mode });
+    };
+    socket.on("control-mode-updated", onControlMode);
+    return () => {
+      socket.off("control-mode-updated", onControlMode);
+    };
+  }, [socket, roomInfo, onRoomInfo]);
 
   useEffect(() => {
     if (!socket || !roomInfo) return;
@@ -498,6 +539,25 @@ function LiveRoom({
     [roomId],
   );
 
+  const handleControlModeChange = useCallback(
+    async (mode: ControlMode) => {
+      if (!amHost || mode === controlMode) return;
+      setSavingControlMode(true);
+      setActionError("");
+      try {
+        const updated = await updateRoomSettings(roomId, { controlMode: mode });
+        onRoomInfo(updated);
+      } catch (err) {
+        setActionError(
+          err instanceof Error ? err.message : "Failed to update control mode",
+        );
+      } finally {
+        setSavingControlMode(false);
+      }
+    },
+    [amHost, controlMode, roomId, onRoomInfo],
+  );
+
   const fileCount = selectedDiff
     ? (selectedDiff.match(/^diff --git /gm) || []).length
     : 0;
@@ -587,7 +647,7 @@ function LiveRoom({
               <Share2 className="h-3.5 w-3.5" strokeWidth={1.75} />
               <span className="hidden sm:inline">Invite</span>
             </button>
-            {selectedStatus === "running" && (
+            {selectedStatus === "running" && canSteerSelected && (
               <button
                 type="button"
                 onClick={() => void handleAbortRun()}
@@ -630,26 +690,67 @@ function LiveRoom({
                 }
               }}
             />
-            <DriverControls
-              amDriver={amDrivingSelected || amHost}
-              pendingRequest={
-                !pendingRequest?.agentId ||
-                pendingRequest.agentId === selectedAgentId
-                  ? (pendingRequest?.name ?? null)
-                  : null
-              }
-              onRequestDrive={() =>
-                requestDrive(selectedAgentId || undefined)
-              }
-              onReleaseDrive={() =>
-                releaseDrive(selectedAgentId || undefined)
-              }
-              onGrantDrive={handleGrantDrive}
-              onDismissRequest={dismissDriveRequest}
-            />
+            {showDriverControls && (
+              <DriverControls
+                amDriver={amDrivingSelected}
+                canGrant={amHost || amDrivingSelected}
+                pendingRequest={
+                  !pendingRequest?.agentId ||
+                  pendingRequest.agentId === selectedAgentId
+                    ? (pendingRequest?.name ?? null)
+                    : null
+                }
+                onRequestDrive={() =>
+                  requestDrive(selectedAgentId || undefined)
+                }
+                onReleaseDrive={() =>
+                  releaseDrive(selectedAgentId || undefined)
+                }
+                onGrantDrive={handleGrantDrive}
+                onDismissRequest={dismissDriveRequest}
+              />
+            )}
           </div>
         </div>
       </header>
+
+      {(runtime === "local" || myRole === "viewer" || amHost) && (
+        <div className="relative z-10 border-b border-[#2b2b2b] bg-[#141414] px-3 sm:px-4 py-2 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
+          <div className="min-w-0 flex-1">
+            <p className="text-[11px] text-[#a0a0a0]">
+              <span className="text-[#e4e4e4]">{roomRoleLabel(myRole)}</span>
+              {" · "}
+              {controlModeLabel(controlMode)}
+              {" — "}
+              {controlModeDescription(controlMode)}
+            </p>
+            {runtime === "local" && (
+              <p className="text-[11px] text-[#a07a3a] mt-0.5">
+                Local agents can operate on the host machine
+                {selectedBackend === "claude-code"
+                  ? " and may run commands with elevated permissions"
+                  : ""}
+                . Invite viewers for watch-only access.
+              </p>
+            )}
+          </div>
+          {amHost && (
+            <select
+              value={controlMode}
+              disabled={savingControlMode}
+              onChange={(e) =>
+                void handleControlModeChange(e.target.value as ControlMode)
+              }
+              className="h-8 px-2 rounded-md bg-[#1f1f1f] border border-[#2b2b2b] text-[11px] text-[#e4e4e4] outline-none focus:border-[#4d9fff] shrink-0"
+              title="Control mode"
+            >
+              <option value="open">Open collaboration</option>
+              <option value="driver">Driver enforced</option>
+              <option value="host">Host only</option>
+            </select>
+          )}
+        </div>
+      )}
 
       <AgentTabs
         agents={agents}
@@ -771,6 +872,8 @@ function LiveRoom({
           onSend={(text) => sendSteer(text, selectedAgentId || undefined)}
           agentBusy={selectedStatus === "running"}
           connected={connected}
+          canSteer={canSteerSelected}
+          steerLockReason={steerLockReason || undefined}
           models={models}
           modelId={selectedModelId}
           onModelChange={(id) => void handleModelChange(id)}
@@ -783,14 +886,16 @@ function LiveRoom({
                 : undefined
           }
           placeholder={
-            selectedAgent
-              ? `Message ${selectedAgent.label}…`
-              : "Message the agent…"
+            !canSteerSelected
+              ? steerLockReason || "View only"
+              : selectedAgent
+                ? `Message ${selectedAgent.label}…`
+                : "Message the agent…"
           }
           agentName={selectedAgent?.label}
           agentId={selectedAgentId || undefined}
-          onTyping={notifyTyping}
-          onTypingStop={notifyTypingStop}
+          onTyping={canSteerSelected ? notifyTyping : undefined}
+          onTypingStop={canSteerSelected ? notifyTypingStop : undefined}
           typingIndicator={
             selectedAgentId
               ? formatTypingIndicator(
