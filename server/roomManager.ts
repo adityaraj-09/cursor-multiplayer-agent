@@ -41,7 +41,6 @@ import {
 import { getServerApiKey } from "./serverKey.js";
 import { getUserByokKey, setUserByokKey } from "./userByok.js";
 import { getOrgCursorKey } from "./orgKeys.js";
-import { canManageOrg, type OrgRole } from "../shared/orgs.js";
 import {
   canAbortWithRole,
   canRequestDrive,
@@ -49,12 +48,16 @@ import {
   defaultControlModeForRuntime,
   normalizeRoomRole,
   parseControlMode,
+  parseRoomInviteRole,
   steerDeniedReason,
   type ControlMode,
+  type RoomInviteRole,
   type RoomRole,
 } from "../shared/roomPermissions.js";
 import { detectAgentConflicts, resolveAgentCwd, findScopeOverlap, formatScopeOverlapError } from "./agentConflicts.js";
 import { FileLockRegistry, broadcastFileLocks } from "./fileLocks.js";
+import { notifyEvent } from "./notify.js";
+import { userCanManageRoom as userCanManageRoomAccess } from "./roomAccess.js";
 import type {
   AgentInfo,
   AgentConflict,
@@ -68,6 +71,7 @@ import type {
   CloudMeta,
   ModelInfo,
   Participant,
+  RoomMemberInfo,
   RoomInfo,
   ServerToClientEvents,
   ClientToServerEvents,
@@ -801,6 +805,13 @@ export class RoomManager {
     return db.listAgents(roomId).map((r) => this.toAgentInfo(r));
   }
 
+  private assertCanManage(roomId: string, actorUserId?: string): void {
+    if (!actorUserId) return;
+    if (!this.userCanManageRoom(roomId, actorUserId)) {
+      throw new Error("Only the host or a team admin can manage this room");
+    }
+  }
+
   updateAgentMeta(
     roomId: string,
     agentId: string,
@@ -809,9 +820,7 @@ export class RoomManager {
   ): AgentInfo {
     const row = db.getRoom(roomId);
     if (!row || row.status !== "active") throw new Error("Room not found");
-    if (actorUserId && row.owner_id && row.owner_id !== actorUserId) {
-      throw new Error("Only the host can update agents");
-    }
+    this.assertCanManage(roomId, actorUserId);
     const room = this.rooms.get(roomId);
     const agent = room?.agents.get(agentId);
     const agentRow = agent?.row || db.getAgent(agentId);
@@ -1044,9 +1053,7 @@ export class RoomManager {
     if (!row || row.status !== "active") {
       throw new Error("Room not found");
     }
-    if (row.owner_id && row.owner_id !== actorUserId) {
-      throw new Error("Only the host can force-release file locks");
-    }
+    this.assertCanManage(roomId, actorUserId);
     const released = this.fileLocks.forceRelease(roomId, rawPath);
     broadcastFileLocks(this.io, roomId, this.fileLocks);
     return released;
@@ -1197,6 +1204,8 @@ export class RoomManager {
     }
 
     this.broadcastPresence(room);
+    this.broadcastMembers(roomId);
+    socket.emit("members-updated", this.listMembers(roomId));
     db.updateRoomActivity(roomId);
     console.log(`${name} joined room ${roomId} (${socket.id})`);
     return true;
@@ -1288,6 +1297,7 @@ export class RoomManager {
     db.removeRoomMember(room.id, userId);
     socket.emit("kicked", "You left the session");
     this.leaveRoom(socket);
+    this.broadcastMembers(room.id);
     socket.disconnect(true);
   }
 
@@ -1295,8 +1305,8 @@ export class RoomManager {
     const room = this.getRoomForSocket(socket.id);
     if (!room) return;
     const actor = room.participants.get(socket.id);
-    if (!actor?.userId || room.row.owner_id !== actor.userId) {
-      socket.emit("error", "Only the host can remove members");
+    if (!actor?.userId || !this.userCanManageRoom(room.id, actor.userId)) {
+      socket.emit("error", "Only the host or a team admin can remove members");
       return;
     }
 
@@ -1313,12 +1323,13 @@ export class RoomManager {
       if (p.userId !== targetUserId) continue;
       const targetSocket = this.io.sockets.sockets.get(sid);
       if (targetSocket) {
-        targetSocket.emit("kicked", "Removed by the host");
+        targetSocket.emit("kicked", "Removed from the session");
         this.leaveRoom(targetSocket);
         targetSocket.disconnect(true);
       }
     }
     this.broadcastPresence(room);
+    this.broadcastMembers(room.id);
   }
 
   isRoomOwner(roomId: string, userId: string): boolean {
@@ -1568,6 +1579,12 @@ export class RoomManager {
         this.emitAgentStatus(room, agent.row.id, "error", detail);
       }
       this.emitAgentStatus(room, agent.row.id, "idle");
+      this.notifyRunFinished(
+        room,
+        agent,
+        status === "error" ? "error" : "completed",
+        detail,
+      );
       this.workerRelay?.releaseRun(room.id, agent.row.id);
       for (const c of agent.workerRunCleanups) c();
       agent.workerRunCleanups = [];
@@ -2185,12 +2202,14 @@ export class RoomManager {
 
       agent.workerRunActive = false;
       this.emitAgentStatus(room, agent.row.id, "idle");
+      this.notifyRunFinished(room, agent, "completed");
     } catch (err) {
       if (!isCurrent()) return;
       const message = err instanceof Error ? err.message : String(err);
       emitAssistant(message, "error");
       this.emitAgentStatus(room, agent.row.id, "error", message);
       this.emitAgentStatus(room, agent.row.id, "idle");
+      this.notifyRunFinished(room, agent, "error", message);
     } finally {
       if (isCurrent()) {
         agent.workerRunActive = false;
@@ -2202,6 +2221,22 @@ export class RoomManager {
     }
 
     db.updateRoomActivity(room.id);
+  }
+
+  private notifyRunFinished(
+    room: RoomState,
+    agent: AgentState,
+    outcome: "completed" | "error" | "aborted",
+    detail?: string,
+  ): void {
+    const suffix = detail ? ` — ${detail.slice(0, 120)}` : "";
+    notifyEvent({
+      kind: "run_finished",
+      title: outcome === "completed" ? "Agent run finished" : `Agent run ${outcome}`,
+      text: `${agent.row.label} in “${room.row.name}” is ${outcome}${suffix}`,
+      roomId: room.id,
+      meta: { agentId: agent.row.id, outcome },
+    });
   }
 
   // -----------------------------------------------------------------------
@@ -2243,6 +2278,15 @@ export class RoomManager {
           agentId,
         });
       }
+      socket.emit("drive-request-pending", { agentId });
+      notifyEvent({
+        kind: "drive_requested",
+        title: "Drive requested",
+        text: `${p.name} wants control of ${agent.row.label} in “${room.row.name}”`,
+        roomId: room.id,
+        actorUserId: p.userId,
+        meta: { agentId, agentLabel: agent.row.label },
+      });
       return;
     }
 
@@ -2262,6 +2306,14 @@ export class RoomManager {
         name: p.name,
       });
     }
+    socket.emit("drive-request-pending", {});
+    notifyEvent({
+      kind: "drive_requested",
+      title: "Drive requested",
+      text: `${p.name} wants control in “${room.row.name}”`,
+      roomId: room.id,
+      actorUserId: p.userId,
+    });
   }
 
   handleGrantDrive(
@@ -2385,9 +2437,7 @@ export class RoomManager {
     if (!room || !row || row.status !== "active") {
       throw new Error("Room not found");
     }
-    if (row.owner_id && row.owner_id !== actorUserId) {
-      throw new Error("Only the host can add agents");
-    }
+    this.assertCanManage(roomId, actorUserId);
 
     const backendKind: AgentBackendKind =
       opts.backend === "claude-code" ? "claude-code" : "cursor";
@@ -2571,9 +2621,7 @@ export class RoomManager {
     if (!room || !row || row.status !== "active") {
       throw new Error("Room not found");
     }
-    if (actorUserId && row.owner_id && row.owner_id !== actorUserId) {
-      throw new Error("Only the host can stop agents");
-    }
+    this.assertCanManage(roomId, actorUserId);
 
     const agent = room.agents.get(agentId);
     if (!agent) throw new Error("Agent not found");
@@ -2728,6 +2776,7 @@ export class RoomManager {
     db.insertMessage(note);
     this.io.to(room.id).emit("chat-message", note);
     this.emitAgentStatus(room, resolvedAgentId, "idle");
+    this.notifyRunFinished(room, agent, "aborted");
     db.updateRoomActivity(room.id);
   }
 
@@ -2748,9 +2797,7 @@ export class RoomManager {
     const row = db.getRoom(id);
     if (!row || row.status !== "active") throw new Error("Room not found");
 
-    if (actorUserId && row.owner_id && row.owner_id !== actorUserId) {
-      throw new Error("Only the host can change the model");
-    }
+    this.assertCanManage(id, actorUserId);
 
     const resolvedAgentId = agentId
       ? agentId
@@ -2801,9 +2848,7 @@ export class RoomManager {
     const row = db.getRoom(id);
     if (!row || row.status !== "active") throw new Error("Room not found");
 
-    if (actorUserId && row.owner_id && row.owner_id !== actorUserId) {
-      throw new Error("Only the host can change the Cursor chat");
-    }
+    this.assertCanManage(id, actorUserId);
 
     const next = sessionIdRaw?.trim() || null;
 
@@ -2842,9 +2887,7 @@ export class RoomManager {
   stopRoom(id: string, actorUserId?: string): void {
     const row = db.getRoom(id);
     if (!row) return;
-    if (actorUserId && row.owner_id && row.owner_id !== actorUserId) {
-      throw new Error("Only the host can stop the session");
-    }
+    this.assertCanManage(id, actorUserId);
     const room = this.rooms.get(id);
     if (room) {
       // Stop all agents
@@ -2993,9 +3036,7 @@ export class RoomManager {
     if (!row || row.status !== "active") {
       throw new Error("Room not found");
     }
-    if (row.owner_id !== actorUserId) {
-      throw new Error("Only the host can change control mode");
-    }
+    this.assertCanManage(roomId, actorUserId);
     const normalized = String(controlModeRaw || "").trim().toLowerCase();
     if (
       normalized !== "open" &&
@@ -3021,15 +3062,14 @@ export class RoomManager {
 
   /** Host / org admin can manage room-level settings. */
   userCanManageRoom(roomId: string, userId: string): boolean {
-    const row = db.getRoom(roomId);
-    if (!row) return false;
-    if (row.owner_id === userId) return true;
-    if (!row.org_id) return false;
-    const member = db.getOrganizationMember(row.org_id, userId);
-    return canManageOrg((member?.role as OrgRole) || null);
+    return userCanManageRoomAccess(roomId, userId);
   }
 
-  joinAsMember(roomId: string, userId: string): RoomInfo {
+  joinAsMember(
+    roomId: string,
+    userId: string,
+    preferredRole?: RoomInviteRole,
+  ): RoomInfo {
     const row = db.getRoom(roomId);
     if (!row || row.status !== "active") {
       throw new Error("Room not found");
@@ -3042,23 +3082,193 @@ export class RoomManager {
       !db.isRoomMember(roomId, userId) &&
       !isOrgMember
     ) {
-      // Keep legacy personal-room shared-link join for non-org rooms.
+      // Personal shared-link joins default to viewer (align with invite defaults).
+      // Prefer an explicit role when provided (e.g. invite claim path).
       if (row.org_id) {
         throw new Error("Join this organization to access team sessions");
       }
-      db.addRoomMember(roomId, userId, "editor");
+      const role = parseRoomInviteRole(preferredRole, "viewer");
+      db.addRoomMember(roomId, userId, role);
+      this.broadcastMembers(roomId);
     } else if (
       isOrgMember &&
       row.owner_id !== userId &&
       !db.isRoomMember(roomId, userId)
     ) {
+      // Trusted org members get editor so team sessions stay collaborative.
       db.addRoomMember(roomId, userId, "editor");
+      this.broadcastMembers(roomId);
     }
     return this.toRoomInfo(
       row,
       this.rooms.get(roomId)?.participants.size || 0,
       userId,
     );
+  }
+
+  listMembers(roomId: string): RoomMemberInfo[] {
+    const row = db.getRoom(roomId);
+    if (!row) return [];
+    const room = this.rooms.get(roomId);
+    const onlineByUser = new Map<string, string[]>();
+    if (room) {
+      for (const [socketId, p] of room.participants) {
+        if (!p.userId) continue;
+        const driving = [...room.agents]
+          .filter(([, a]) => a.driverSocketId === socketId)
+          .map(([id]) => id);
+        const prev = onlineByUser.get(p.userId) || [];
+        onlineByUser.set(p.userId, [...prev, ...driving]);
+      }
+    }
+
+    const members: RoomMemberInfo[] = [];
+    const seen = new Set<string>();
+
+    if (row.owner_id) {
+      const owner = db.getUserById(row.owner_id);
+      members.push({
+        userId: row.owner_id,
+        email: owner?.email || "",
+        name: owner?.name || "Host",
+        role: "owner",
+        online: onlineByUser.has(row.owner_id),
+        drivingAgentIds: onlineByUser.get(row.owner_id),
+      });
+      seen.add(row.owner_id);
+    }
+
+    for (const m of db.getRoomMembers(roomId)) {
+      if (seen.has(m.user_id)) continue;
+      const role = normalizeRoomRole(m.role) || "editor";
+      if (role === "owner") continue;
+      const user = db.getUserById(m.user_id);
+      members.push({
+        userId: m.user_id,
+        email: user?.email || "",
+        name: user?.name || "Member",
+        role,
+        online: onlineByUser.has(m.user_id),
+        drivingAgentIds: onlineByUser.get(m.user_id),
+      });
+      seen.add(m.user_id);
+    }
+
+    return members.sort((a, b) => {
+      const rank = (r: RoomRole) =>
+        r === "owner" ? 0 : r === "editor" ? 1 : 2;
+      if (rank(a.role) !== rank(b.role)) return rank(a.role) - rank(b.role);
+      return a.name.localeCompare(b.name);
+    });
+  }
+
+  broadcastMembers(roomId: string): void {
+    this.io.to(roomId).emit("members-updated", this.listMembers(roomId));
+  }
+
+  setMemberRole(
+    roomId: string,
+    targetUserId: string,
+    roleRaw: string,
+    actorUserId: string,
+  ): RoomMemberInfo[] {
+    const row = db.getRoom(roomId);
+    if (!row || row.status !== "active") {
+      throw new Error("Room not found");
+    }
+    this.assertCanManage(roomId, actorUserId);
+    if (targetUserId === row.owner_id) {
+      throw new Error("Cannot change the host's role");
+    }
+    if (targetUserId === actorUserId && row.owner_id === actorUserId) {
+      throw new Error("Host cannot demote themselves");
+    }
+    const roleRawNorm = String(roleRaw || "").toLowerCase();
+    if (roleRawNorm !== "editor" && roleRawNorm !== "viewer") {
+      throw new Error("role must be editor or viewer");
+    }
+    const role = roleRawNorm as RoomInviteRole;
+    if (!db.isRoomMember(roomId, targetUserId) && targetUserId !== row.owner_id) {
+      throw new Error("Member not found");
+    }
+    db.addRoomMember(roomId, targetUserId, role);
+    const members = this.listMembers(roomId);
+    this.broadcastMembers(roomId);
+    const live = this.rooms.get(roomId);
+    if (live) this.broadcastPresence(live);
+    const target = members.find((m) => m.userId === targetUserId);
+    notifyEvent({
+      kind: "member_role_changed",
+      title: "Member role updated",
+      text: `${target?.name || targetUserId} is now ${role} in “${row.name}”`,
+      roomId,
+      actorUserId,
+      meta: { targetUserId, role },
+    });
+    return members;
+  }
+
+  exportTranscript(roomId: string, actorUserId: string): {
+    room: RoomInfo;
+    messages: ChatMessage[];
+    summary: string;
+    exportedAt: number;
+  } {
+    if (!this.userCanAccessRoom(roomId, actorUserId)) {
+      throw new Error("Not allowed");
+    }
+    const info = this.getRoomInfo(roomId, actorUserId);
+    if (!info) throw new Error("Room not found");
+    const messages = db.getMessages(roomId, 2000);
+    const agents = info.agents || [];
+    const agentName = (id?: string) =>
+      agents.find((a) => a.id === id)?.label || id || "Agent";
+
+    const lines: string[] = [
+      `# ${info.name}`,
+      ``,
+      `Exported: ${new Date().toISOString()}`,
+      `Runtime: ${info.runtime} · Control: ${info.controlMode}`,
+      info.orgName ? `Team: ${info.orgName}` : `Personal session`,
+      ``,
+      `## Summary`,
+      `- Agents: ${agents.map((a) => a.label).join(", ") || "none"}`,
+      `- Messages: ${messages.length}`,
+      `- Status: ${info.status}`,
+      ``,
+      `## Transcript`,
+      ``,
+    ];
+
+    for (const m of messages) {
+      const when = new Date(m.ts).toISOString();
+      const who =
+        m.role === "user"
+          ? m.senderName || "User"
+          : m.role === "tool"
+            ? `Tool:${m.toolName || "unknown"}`
+            : m.role === "system"
+              ? "System"
+              : agentName(m.agentId);
+      const agent = m.agentId ? ` [${agentName(m.agentId)}]` : "";
+      const body = (m.content || "").trim() || (m.diffPatch ? "[diff]" : "");
+      if (!body && !m.todos?.length) continue;
+      lines.push(`### ${when} — ${who}${agent}`);
+      if (body) lines.push(body);
+      if (m.todos?.length) {
+        for (const t of m.todos) {
+          lines.push(`- [${t.status}] ${t.content}`);
+        }
+      }
+      lines.push("");
+    }
+
+    return {
+      room: info,
+      messages,
+      summary: lines.join("\n"),
+      exportedAt: Date.now(),
+    };
   }
 
   getRoomInfo(id: string, actorUserId?: string): RoomInfo | null {
@@ -3235,6 +3445,10 @@ export class RoomManager {
     const myRole = actorUserId
       ? this.resolveUserRoomRole(row.id, actorUserId) ?? undefined
       : undefined;
+    const myCanManage =
+      actorUserId && userCanManageRoomAccess(row.id, actorUserId)
+        ? true
+        : undefined;
     return {
       id: row.id,
       name: row.name,
@@ -3258,6 +3472,7 @@ export class RoomManager {
       cursorSessionId: row.cursor_session_id || undefined,
       agents: agentInfos,
       myRole,
+      myCanManage,
     };
   }
 }

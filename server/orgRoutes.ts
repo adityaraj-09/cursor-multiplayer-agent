@@ -25,6 +25,7 @@ import {
   type OrgMemberInfo,
   type OrgRole,
 } from "../shared/orgs.js";
+import { notifyEvent } from "./notify.js";
 
 const router: RouterType = Router();
 
@@ -204,6 +205,94 @@ router.get("/:orgId", requireAuth, (req, res) => {
     }
     const member = requireOrgMember(orgId, req.user!.id);
     res.json({ org: toOrgInfo(org, member.role as OrgRole) });
+  } catch (err) {
+    sendErr(res, err);
+  }
+});
+
+/**
+ * POST /api/orgs/:orgId/transfer — owner transfers ownership to another member.
+ * Body: { userId }
+ */
+router.post("/:orgId/transfer", requireAuth, (req, res) => {
+  try {
+    const orgId = String(req.params.orgId);
+    const org = db.getOrganization(orgId);
+    if (!org) {
+      res.status(404).json({ error: "Organization not found" });
+      return;
+    }
+    const actor = requireOrgMember(orgId, req.user!.id);
+    if (actor.role !== "owner") {
+      res.status(403).json({ error: "Only the owner can transfer ownership" });
+      return;
+    }
+    const targetUserId = String(req.body?.userId || "").trim();
+    if (!targetUserId) {
+      res.status(400).json({ error: "userId is required" });
+      return;
+    }
+    if (targetUserId === req.user!.id) {
+      res.status(400).json({ error: "Already the owner" });
+      return;
+    }
+    const target = db.getOrganizationMember(orgId, targetUserId);
+    if (!target) {
+      res.status(404).json({ error: "Member not found" });
+      return;
+    }
+    db.updateOrganizationMemberRole(orgId, targetUserId, "owner");
+    db.updateOrganizationMemberRole(orgId, req.user!.id, "admin");
+    const targetUser = db.getUserById(targetUserId);
+    notifyEvent({
+      kind: "org_transferred",
+      title: "Team ownership transferred",
+      text: `${org.name} is now owned by ${targetUser?.name || targetUser?.email || targetUserId}`,
+      orgId,
+      actorUserId: req.user!.id,
+      meta: { newOwnerId: targetUserId },
+    });
+    const updated = db.getOrganization(orgId)!;
+    res.json({ org: toOrgInfo(updated, "admin") });
+  } catch (err) {
+    sendErr(res, err);
+  }
+});
+
+/**
+ * DELETE /api/orgs/:orgId — owner deletes the team.
+ * Detaches (and stops) org sessions; members/invites cascade-delete.
+ */
+router.delete("/:orgId", requireAuth, (req, res) => {
+  try {
+    const orgId = String(req.params.orgId);
+    const org = db.getOrganization(orgId);
+    if (!org) {
+      res.status(404).json({ error: "Organization not found" });
+      return;
+    }
+    const actor = requireOrgMember(orgId, req.user!.id);
+    if (actor.role !== "owner") {
+      res.status(403).json({ error: "Only the owner can delete this team" });
+      return;
+    }
+    const confirm = String(req.body?.confirm || "").trim();
+    if (confirm !== org.name && confirm !== org.slug) {
+      res.status(400).json({
+        error: "Confirm by sending the team name or slug in { confirm }",
+      });
+      return;
+    }
+    db.detachOrganizationRooms(orgId);
+    db.deleteOrganization(orgId);
+    notifyEvent({
+      kind: "org_deleted",
+      title: "Team deleted",
+      text: `${org.name} was deleted by ${req.user!.name || req.user!.email}`,
+      orgId,
+      actorUserId: req.user!.id,
+    });
+    res.json({ ok: true });
   } catch (err) {
     sendErr(res, err);
   }

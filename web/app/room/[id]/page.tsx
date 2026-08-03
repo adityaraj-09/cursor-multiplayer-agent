@@ -7,12 +7,14 @@ import {
   Activity,
   Bot,
   Cloud,
+  Download,
   Home,
   PanelLeftOpen,
   PanelRightOpen,
   Share2,
   Square,
   StopCircle,
+  Users,
   Wifi,
   WifiOff,
 } from "lucide-react";
@@ -21,6 +23,7 @@ import { useAuth } from "../../../components/AuthProvider";
 import {
   abortRoomRun,
   addRoomAgent,
+  exportRoomTranscript,
   fetchOrJoinRoom,
   fetchRoomModels,
   forceReleaseFileLock,
@@ -42,6 +45,7 @@ import SteerInput from "../../../components/SteerInput";
 import CursorSessionPicker from "../../../components/CursorSessionPicker";
 import DriverControls from "../../../components/DriverControls";
 import InvitePanel from "../../../components/InvitePanel";
+import MemberRoster from "../../../components/MemberRoster";
 import AgentTabs from "../../../components/AgentTabs";
 import AddAgentDialog from "../../../components/AddAgentDialog";
 import LockPanel from "../../../components/LockPanel";
@@ -49,12 +53,16 @@ import type {
   ControlMode,
   ModelInfo,
   RoomInfo,
+  RoomMemberInfo,
 } from "../../../../shared/events";
 import {
   CLAUDE_MODELS,
   DEFAULT_CLAUDE_MODEL,
 } from "../../../../shared/claudeModels";
-import { formatTypingIndicator } from "../../../../shared/typing";
+import {
+  formatTypingIndicator,
+  formatTypingIndicatorAll,
+} from "../../../../shared/typing";
 import {
   canRequestDrive,
   canSteerWithRole,
@@ -231,6 +239,7 @@ function LiveRoom({
     socket,
     connected,
     participants,
+    members: liveMembers,
     amDriver,
     mySocketId,
     messages,
@@ -244,6 +253,7 @@ function LiveRoom({
     agentStatus,
     agentError,
     pendingRequest,
+    pendingOutgoingDrive,
     lastDiff,
     cloudMeta,
     modelId: liveModelId,
@@ -269,11 +279,15 @@ function LiveRoom({
       ? "owner"
       : "editor");
   const amHost = myRole === "owner";
+  const canManage = Boolean(roomInfo?.myCanManage || amHost);
   const [models, setModels] = useState<ModelInfo[]>(FALLBACK_MODELS);
   const [modelError, setModelError] = useState("");
   const [savingModel, setSavingModel] = useState(false);
   const [savingControlMode, setSavingControlMode] = useState(false);
   const [inviteOpen, setInviteOpen] = useState(false);
+  const [rosterOpen, setRosterOpen] = useState(false);
+  const [rosterMembers, setRosterMembers] = useState<RoomMemberInfo[]>([]);
+  const [exporting, setExporting] = useState(false);
   const [agentsOpen, setAgentsOpen] = useState(false);
   const [changesOpen, setChangesOpen] = useState(false);
   const [addAgentOpen, setAddAgentOpen] = useState(false);
@@ -543,7 +557,7 @@ function LiveRoom({
 
   const handleControlModeChange = useCallback(
     async (mode: ControlMode) => {
-      if (!amHost || mode === controlMode) return;
+      if (!canManage || mode === controlMode) return;
       setSavingControlMode(true);
       setActionError("");
       try {
@@ -557,8 +571,35 @@ function LiveRoom({
         setSavingControlMode(false);
       }
     },
-    [amHost, controlMode, roomId, onRoomInfo],
+    [canManage, controlMode, roomId, onRoomInfo],
   );
+
+  useEffect(() => {
+    if (liveMembers.length) setRosterMembers(liveMembers);
+  }, [liveMembers]);
+
+  const handleExport = useCallback(async () => {
+    setExporting(true);
+    setActionError("");
+    try {
+      const exported = await exportRoomTranscript(roomId);
+      const blob = new Blob([exported.summary], {
+        type: "text/markdown;charset=utf-8",
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${(roomInfo?.name || "session").replace(/[^\w.-]+/g, "-")}-transcript.md`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setActionError(
+        err instanceof Error ? err.message : "Failed to export transcript",
+      );
+    } finally {
+      setExporting(false);
+    }
+  }, [roomId, roomInfo?.name]);
 
   const fileCount = selectedDiff
     ? (selectedDiff.match(/^diff --git /gm) || []).length
@@ -651,11 +692,30 @@ function LiveRoom({
             </button>
             <button
               type="button"
+              onClick={() => setRosterOpen(true)}
+              className="inline-flex h-8 items-center gap-1.5 px-2.5 sm:px-3 rounded-lg text-[11px] sm:text-[12px] text-[#a0a0a0] hover:text-[#e4e4e4] border border-[#2b2b2b] hover:border-[#3c3c3c] bg-[#1f1f1f] transition-colors"
+              title="Members"
+            >
+              <Users className="h-3.5 w-3.5" strokeWidth={1.75} />
+              <span className="hidden sm:inline">Members</span>
+            </button>
+            <button
+              type="button"
               onClick={() => setInviteOpen(true)}
               className="inline-flex h-8 items-center gap-1.5 px-2.5 sm:px-3 rounded-lg text-[11px] sm:text-[12px] text-[#a0a0a0] hover:text-[#e4e4e4] border border-[#2b2b2b] hover:border-[#3c3c3c] bg-[#1f1f1f] transition-colors"
             >
               <Share2 className="h-3.5 w-3.5" strokeWidth={1.75} />
               <span className="hidden sm:inline">Invite</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleExport()}
+              disabled={exporting}
+              className="hidden sm:inline-flex h-8 items-center gap-1.5 px-3 rounded-lg text-[12px] text-[#a0a0a0] hover:text-[#e4e4e4] border border-[#2b2b2b] hover:border-[#3c3c3c] bg-[#1f1f1f] transition-colors disabled:opacity-50"
+              title="Export transcript"
+            >
+              <Download className="h-3.5 w-3.5" strokeWidth={1.75} />
+              {exporting ? "Exporting…" : "Export"}
             </button>
             {selectedStatus === "running" && canSteerSelected && (
               <button
@@ -668,7 +728,7 @@ function LiveRoom({
                 <span className="hidden sm:inline">{aborting ? "Stopping…" : "Abort"}</span>
               </button>
             )}
-            {amHost && (
+            {canManage && (
               <button
                 type="button"
                 onClick={() => void handleStopSession()}
@@ -693,7 +753,7 @@ function LiveRoom({
             <PresenceBar
               participants={participants}
               mySocketId={mySocketId}
-              amHost={amHost}
+              amHost={canManage}
               onRemoveMember={(uid) => {
                 if (window.confirm("Remove this member from the session?")) {
                   removeMember(uid);
@@ -703,12 +763,17 @@ function LiveRoom({
             {showDriverControls && (
               <DriverControls
                 amDriver={amDrivingSelected}
-                canGrant={amHost || amDrivingSelected}
+                canGrant={canManage || amDrivingSelected}
                 pendingRequest={
                   !pendingRequest?.agentId ||
                   pendingRequest.agentId === selectedAgentId
                     ? (pendingRequest?.name ?? null)
                     : null
+                }
+                pendingOutgoing={
+                  Boolean(pendingOutgoingDrive) &&
+                  (!pendingOutgoingDrive?.agentId ||
+                    pendingOutgoingDrive.agentId === selectedAgentId)
                 }
                 onRequestDrive={() =>
                   requestDrive(selectedAgentId || undefined)
@@ -724,27 +789,39 @@ function LiveRoom({
         </div>
       </header>
 
-      {(runtime === "local" || myRole === "viewer" || amHost) && (
-        <div className="relative z-10 border-b border-[#2b2b2b] bg-[#141414] px-3 sm:px-4 py-2 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
-          <div className="min-w-0 flex-1">
-            <p className="text-[11px] text-[#a0a0a0]">
-              <span className="text-[#e4e4e4]">{roomRoleLabel(myRole)}</span>
-              {" · "}
-              {controlModeLabel(controlMode)}
-              {" — "}
-              {controlModeDescription(controlMode)}
+      <div className="relative z-10 border-b border-[#2b2b2b] bg-[#141414] px-3 sm:px-4 py-2 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
+        <div className="min-w-0 flex-1">
+          <p className="text-[11px] text-[#a0a0a0]">
+            <span className="text-[#e4e4e4]">{roomRoleLabel(myRole)}</span>
+            {" · "}
+            {controlModeLabel(controlMode)}
+            {" — "}
+            {controlModeDescription(controlMode)}
+            {!canSteerSelected && steerLockReason ? (
+              <span className="text-[#e8a23a]"> · {steerLockReason}</span>
+            ) : null}
+          </p>
+          {runtime === "local" && (
+            <p className="text-[11px] text-[#a07a3a] mt-0.5">
+              Local agents can operate on the host machine
+              {selectedBackend === "claude-code"
+                ? " and may run commands with elevated permissions"
+                : ""}
+              . Invite viewers for watch-only access.
             </p>
-            {runtime === "local" && (
-              <p className="text-[11px] text-[#a07a3a] mt-0.5">
-                Local agents can operate on the host machine
-                {selectedBackend === "claude-code"
-                  ? " and may run commands with elevated permissions"
-                  : ""}
-                . Invite viewers for watch-only access.
-              </p>
-            )}
-          </div>
-          {amHost && (
+          )}
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            type="button"
+            onClick={() => void handleExport()}
+            disabled={exporting}
+            className="sm:hidden inline-flex h-8 items-center gap-1.5 px-2.5 rounded-md text-[11px] text-[#a0a0a0] border border-[#2b2b2b] bg-[#1f1f1f]"
+          >
+            <Download className="h-3.5 w-3.5" strokeWidth={1.75} />
+            Export
+          </button>
+          {canManage && (
             <select
               value={controlMode}
               disabled={savingControlMode}
@@ -760,14 +837,14 @@ function LiveRoom({
             </select>
           )}
         </div>
-      )}
+      </div>
 
       <LockPanel
         conflicts={conflicts}
         fileLocks={fileLocks}
         agents={agents}
         currentAgentId={selectedAgentId}
-        amHost={amHost}
+        amHost={canManage}
         lastBlocked={lastBlocked}
         onForceRelease={handleForceRelease}
       />
@@ -785,7 +862,7 @@ function LiveRoom({
           statusByAgent={statusByAgent}
           participants={participants}
           models={models}
-          amHost={amHost}
+          amHost={canManage}
           onAddAgent={() => setAddAgentOpen(true)}
           onStopAgent={(id) => void handleStopAgent(id)}
         />
@@ -828,7 +905,7 @@ function LiveRoom({
           statusByAgent={statusByAgent}
           participants={participants}
           models={models}
-          amHost={amHost}
+          amHost={canManage}
           onAddAgent={() => {
             setAgentsOpen(false);
             setAddAgentOpen(true);
@@ -856,7 +933,18 @@ function LiveRoom({
         roomId={roomId}
         open={inviteOpen}
         onClose={() => setInviteOpen(false)}
-        canManage={amHost}
+        canManage={canManage}
+      />
+
+      <MemberRoster
+        roomId={roomId}
+        open={rosterOpen}
+        onClose={() => setRosterOpen(false)}
+        canManage={canManage}
+        myUserId={user?.id}
+        liveMembers={rosterMembers.length ? rosterMembers : liveMembers}
+        onMembersChange={setRosterMembers}
+        agentLabels={Object.fromEntries(agents.map((a) => [a.id, a.label]))}
       />
 
       <AddAgentDialog
@@ -888,7 +976,7 @@ function LiveRoom({
                 selectedAgent?.sessionId || roomInfo.cursorSessionId
               }
               disabled={selectedStatus === "running" || savingCursorSession}
-              canChange={amHost}
+              canChange={canManage}
               onSessionChange={(id) => void handleCursorSessionChange(id)}
             />
             <p className="text-[10px] text-[#6e6e6e] mt-1 px-0.5">
@@ -915,10 +1003,10 @@ function LiveRoom({
           models={models}
           modelId={selectedModelId}
           onModelChange={(id) => void handleModelChange(id)}
-          modelDisabled={!amHost || savingModel}
+          modelDisabled={!canManage || savingModel}
           modelLockReason={
-            !amHost
-              ? "Only the host can change the model"
+            !canManage
+              ? "Only the host or a team admin can change the model"
               : savingModel
                 ? "Saving…"
                 : undefined
@@ -935,12 +1023,14 @@ function LiveRoom({
           onTyping={canSteerSelected ? notifyTyping : undefined}
           onTypingStop={canSteerSelected ? notifyTypingStop : undefined}
           typingIndicator={
-            selectedAgentId
-              ? formatTypingIndicator(
-                  (typingByAgent[selectedAgentId] || []).map((t) => t.name),
-                  selectedAgent?.label || "Agent",
-                )
-              : ""
+            chatFilterAgentId === null && agents.length > 1
+              ? formatTypingIndicatorAll(typingByAgent, agents)
+              : selectedAgentId
+                ? formatTypingIndicator(
+                    (typingByAgent[selectedAgentId] || []).map((t) => t.name),
+                    selectedAgent?.label || "Agent",
+                  )
+                : ""
           }
         />
       </footer>

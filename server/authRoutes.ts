@@ -12,6 +12,8 @@ import {
   clerkConfigured,
 } from "./auth.js";
 import { INVITE_TTL_MS } from "./config.js";
+import { notifyEvent } from "./notify.js";
+import { userCanManageRoom } from "./roomAccess.js";
 import {
   parseRoomInviteRole,
   type RoomInviteRole,
@@ -149,10 +151,10 @@ router.delete("/invite/:code", requireAuth, (req, res) => {
     res.status(404).json({ error: "Room not found" });
     return;
   }
-  if (
-    room.owner_id !== req.user.id
-  ) {
-    res.status(403).json({ error: "Only the host can revoke invites" });
+  if (!userCanManageRoom(room.id, req.user.id)) {
+    res.status(403).json({
+      error: "Only the host or a team admin can revoke invites",
+    });
     return;
   }
 
@@ -232,8 +234,10 @@ router.post("/:id/invite", requireAuth, (req, res) => {
     return;
   }
 
-  if (room.owner_id !== req.user.id) {
-    res.status(403).json({ error: "Only the host can create invites" });
+  if (!userCanManageRoom(roomId, req.user.id)) {
+    res.status(403).json({
+      error: "Only the host or a team admin can create invites",
+    });
     return;
   }
 
@@ -259,6 +263,15 @@ router.post("/:id/invite", requireAuth, (req, res) => {
   const expiresAt = Date.now() + INVITE_TTL_MS;
   const code = generateInviteCode();
   db.createInviteLink(code, roomId, req.user.id, maxUses, expiresAt, role);
+
+  notifyEvent({
+    kind: "invite_created",
+    title: "Invite link created",
+    text: `${req.user.name || req.user.email} created a ${role} invite for “${room.name}”`,
+    roomId,
+    actorUserId: req.user.id,
+    meta: { role, code, maxUses, expiresAt },
+  });
 
   res.json({ code, roomId, maxUses, useCount: 0, expiresAt, role });
 });
@@ -291,7 +304,7 @@ router.get("/:id/invites", requireAuth, (req, res) => {
     maxUses: row.max_uses,
     useCount: row.use_count,
     expiresAt: row.expires_at ?? null,
-    role: parseRoomInviteRole(row.role, "editor"),
+    role: parseRoomInviteRole(row.role, "viewer"),
   }));
   res.json({ invites });
 });

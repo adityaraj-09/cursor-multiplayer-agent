@@ -16,6 +16,17 @@ export interface Participant {
   role?: RoomRole;
 }
 
+/** Durable room membership (online or offline). */
+export interface RoomMemberInfo {
+  userId: string;
+  email: string;
+  name: string;
+  role: RoomRole;
+  online: boolean;
+  /** Agent ids currently driven by an online socket for this user. */
+  drivingAgentIds?: string[];
+}
+
 export interface SteerLogEntry {
   sender: string;
   color: string;
@@ -136,6 +147,8 @@ export interface RoomInfo {
   agents?: AgentInfo[];
   /** Caller's effective role when requested with auth. */
   myRole?: RoomRole;
+  /** Host or org admin — can manage invites, members, agents, settings. */
+  myCanManage?: boolean;
 }
 
 export interface UserInfo {
@@ -204,6 +217,8 @@ export interface ServerToClientEvents {
     name: string;
     agentId?: string;
   }) => void;
+  /** Sent to the requester while waiting for host/driver approval. */
+  "drive-request-pending": (payload: { agentId?: string }) => void;
   "drive-granted": (agentId?: string) => void;
   "drive-released": (agentId?: string) => void;
   agents: (agents: AgentInfo[]) => void;
@@ -217,6 +232,8 @@ export interface ServerToClientEvents {
   kicked: (reason: string) => void;
   /** Host changed room collaboration settings. */
   "control-mode-updated": (mode: ControlMode) => void;
+  /** Room membership roster changed (roles / joins / removals). */
+  "members-updated": (members: RoomMemberInfo[]) => void;
   error: (message: string) => void;
 }
 

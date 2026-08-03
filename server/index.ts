@@ -509,15 +509,85 @@ app.patch("/api/rooms/:id/settings", requireAuth, (req, res) => {
 
 /**
  * POST /api/rooms/:id/join — signed-in user becomes a member via shared link.
+ * Personal rooms default to viewer (aligns with invite defaults).
+ * Body optional: { role?: "viewer" | "editor" } — ignored for non-managers;
+ * preferred role only applies when the actor is already allowed to manage
+ * (not used for anonymous shared-link joins).
  */
 app.post("/api/rooms/:id/join", requireAuth, (req, res) => {
   try {
-    const room = roomManager.joinAsMember(routeParam(req.params.id), req.user!.id);
+    const room = roomManager.joinAsMember(
+      routeParam(req.params.id),
+      req.user!.id,
+    );
     res.json(room);
   } catch (err) {
-    res.status(404).json({
-      error: err instanceof Error ? err.message : "Room not found",
-    });
+    const message = err instanceof Error ? err.message : "Room not found";
+    const status = message.includes("organization")
+      ? 403
+      : message.includes("not found")
+        ? 404
+        : 400;
+    res.status(status).json({ error: message });
+  }
+});
+
+/**
+ * GET /api/rooms/:id/members — durable roster (online + offline).
+ */
+app.get("/api/rooms/:id/members", requireAuth, (req, res) => {
+  const id = routeParam(req.params.id);
+  if (!roomManager.userCanAccessRoom(id, req.user!.id)) {
+    res.status(404).json({ error: "Room not found" });
+    return;
+  }
+  res.json({ members: roomManager.listMembers(id) });
+});
+
+/**
+ * PATCH /api/rooms/:id/members/:userId — host/org admin changes role.
+ * Body: { role: "editor" | "viewer" }
+ */
+app.patch("/api/rooms/:id/members/:userId", requireAuth, (req, res) => {
+  try {
+    const members = roomManager.setMemberRole(
+      routeParam(req.params.id),
+      routeParam(req.params.userId),
+      String(req.body?.role || ""),
+      req.user!.id,
+    );
+    res.json({ members });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Failed to update role";
+    const status =
+      message.includes("Only the host") || message.includes("Not allowed")
+        ? 403
+        : message.includes("not found") || message.includes("Member not found")
+          ? 404
+          : 400;
+    res.status(status).json({ error: message });
+  }
+});
+
+/**
+ * GET /api/rooms/:id/export — markdown transcript + session summary.
+ */
+app.get("/api/rooms/:id/export", requireAuth, (req, res) => {
+  try {
+    const exported = roomManager.exportTranscript(
+      routeParam(req.params.id),
+      req.user!.id,
+    );
+    res.json(exported);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Export failed";
+    const status =
+      message.includes("Not allowed")
+        ? 403
+        : message.includes("not found")
+          ? 404
+          : 400;
+    res.status(status).json({ error: message });
   }
 });
 
@@ -863,17 +933,20 @@ app.post("/api/rooms/:id/leave", requireAuth, (req, res) => {
   }
   db.removeRoomMember(id, req.user!.id);
   roomManager.kickUserSockets(id, req.user!.id, "You left the session");
+  roomManager.broadcastMembers(id);
   res.json({ ok: true });
 });
 
 /**
- * POST /api/rooms/:id/members/remove — host removes a member.
+ * POST /api/rooms/:id/members/remove — host or org admin removes a member.
  * Body: { userId }
  */
 app.post("/api/rooms/:id/members/remove", requireAuth, (req, res) => {
   const id = routeParam(req.params.id);
-  if (!roomManager.isRoomOwner(id, req.user!.id)) {
-    res.status(403).json({ error: "Only the host can remove members" });
+  if (!roomManager.userCanManageRoom(id, req.user!.id)) {
+    res.status(403).json({
+      error: "Only the host or a team admin can remove members",
+    });
     return;
   }
   const targetUserId = String(req.body?.userId || "").trim();
@@ -885,8 +958,13 @@ app.post("/api/rooms/:id/members/remove", requireAuth, (req, res) => {
     res.status(400).json({ error: "Cannot remove yourself" });
     return;
   }
+  if (roomManager.isRoomOwner(id, targetUserId)) {
+    res.status(400).json({ error: "Cannot remove the host" });
+    return;
+  }
   db.removeRoomMember(id, targetUserId);
-  roomManager.kickUserSockets(id, targetUserId, "Removed by the host");
+  roomManager.kickUserSockets(id, targetUserId, "Removed from the session");
+  roomManager.broadcastMembers(id);
   res.json({ ok: true });
 });
 

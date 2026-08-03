@@ -2,13 +2,14 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { useAuth } from "../../../../components/AuthProvider";
 import UserMenu from "../../../../components/UserMenu";
 import {
   clearOrgAnthropicKey,
   clearOrgCursorKey,
   createOrgInvite,
+  deleteOrg,
   fetchOrg,
   fetchOrgInvites,
   fetchOrgMembers,
@@ -16,6 +17,7 @@ import {
   revokeOrgInvite,
   setOrgAnthropicKey,
   setOrgCursorKey,
+  transferOrgOwnership,
   updateOrg,
   updateOrgMemberRole,
   type OrgInfo,
@@ -48,6 +50,7 @@ function RoleBadge({ role }: { role: OrgRole }) {
 export default function OrgSettingsPage() {
   const params = useParams<{ id: string }>();
   const orgId = Array.isArray(params.id) ? params.id[0] : params.id;
+  const router = useRouter();
   const { user, loading: authLoading } = useAuth();
 
   const [org, setOrg] = useState<OrgInfo | null>(null);
@@ -58,6 +61,8 @@ export default function OrgSettingsPage() {
   const [cursorKey, setCursorKey] = useState("");
   const [anthropicKey, setAnthropicKey] = useState("");
   const [inviteRole, setInviteRole] = useState<OrgRole>("member");
+  const [transferUserId, setTransferUserId] = useState("");
+  const [deleteConfirm, setDeleteConfirm] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
@@ -634,6 +639,130 @@ export default function OrgSettingsPage() {
             ))}
           </ul>
         </section>
+
+        {isOwner && (
+          <section className="rounded-lg border border-[#2b2b2b] bg-[#1a1a1a] p-4 space-y-4">
+            <div>
+              <h2 className="text-[14px] font-medium text-[#e4e4e4]">
+                Ownership &amp; danger zone
+              </h2>
+              <p className="text-[11px] text-[#6e6e6e] mt-1">
+                Transfer ownership to another member, or permanently delete this
+                team. Deleting stops active team sessions and removes all
+                members and invites.
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <label className="block text-[12px] text-[#a0a0a0]">
+                Transfer ownership
+              </label>
+              <div className="flex flex-col sm:flex-row gap-2">
+                <select
+                  value={transferUserId}
+                  onChange={(e) => setTransferUserId(e.target.value)}
+                  className="h-9 flex-1 px-2 rounded-md bg-[#252525] border border-[#2b2b2b] text-[12px] text-[#e4e4e4]"
+                >
+                  <option value="">Select a member…</option>
+                  {members
+                    .filter((m) => m.role !== "owner" && m.userId !== user.id)
+                    .map((m) => (
+                      <option key={m.userId} value={m.userId}>
+                        {m.name} ({m.email})
+                      </option>
+                    ))}
+                </select>
+                <button
+                  type="button"
+                  disabled={busy || !transferUserId}
+                  onClick={() => {
+                    if (!orgId || !transferUserId) return;
+                    const target = members.find(
+                      (m) => m.userId === transferUserId,
+                    );
+                    if (
+                      !window.confirm(
+                        `Transfer ownership to ${target?.name || "this member"}? You will become an admin.`,
+                      )
+                    ) {
+                      return;
+                    }
+                    setBusy(true);
+                    setError("");
+                    setNotice("");
+                    void transferOrgOwnership(orgId, transferUserId)
+                      .then((updated) => {
+                        setOrg(updated);
+                        setTransferUserId("");
+                        setNotice("Ownership transferred");
+                        return reload();
+                      })
+                      .catch((err) => {
+                        setError(
+                          err instanceof Error
+                            ? err.message
+                            : "Failed to transfer ownership",
+                        );
+                      })
+                      .finally(() => setBusy(false));
+                  }}
+                  className="h-9 px-3 rounded-md bg-[#252525] border border-[#2b2b2b] text-[12px] text-[#e4e4e4] hover:border-[#4d9fff] disabled:opacity-50"
+                >
+                  Transfer
+                </button>
+              </div>
+            </div>
+
+            <div className="space-y-2 border-t border-[#2b2b2b] pt-4">
+              <label className="block text-[12px] text-[#f07070]">
+                Delete team
+              </label>
+              <p className="text-[11px] text-[#6e6e6e]">
+                Type <span className="text-[#a0a0a0]">{org.name}</span> to
+                confirm.
+              </p>
+              <div className="flex flex-col sm:flex-row gap-2">
+                <input
+                  value={deleteConfirm}
+                  onChange={(e) => setDeleteConfirm(e.target.value)}
+                  placeholder={org.name}
+                  className="h-9 flex-1 px-2 rounded-md bg-[#252525] border border-[#2b2b2b] text-[12px] text-[#e4e4e4] outline-none focus:border-[#f07070]"
+                />
+                <button
+                  type="button"
+                  disabled={busy || deleteConfirm !== org.name}
+                  onClick={() => {
+                    if (!orgId) return;
+                    if (
+                      !window.confirm(
+                        "Delete this team permanently? This cannot be undone.",
+                      )
+                    ) {
+                      return;
+                    }
+                    setBusy(true);
+                    setError("");
+                    void deleteOrg(orgId, deleteConfirm)
+                      .then(() => {
+                        router.push("/dashboard");
+                      })
+                      .catch((err) => {
+                        setError(
+                          err instanceof Error
+                            ? err.message
+                            : "Failed to delete team",
+                        );
+                        setBusy(false);
+                      });
+                  }}
+                  className="h-9 px-3 rounded-md bg-[#2a1818] border border-[#5a3a3a] text-[12px] text-[#f07070] hover:bg-[#3a2020] disabled:opacity-50"
+                >
+                  Delete team
+                </button>
+              </div>
+            </div>
+          </section>
+        )}
       </main>
     </div>
   );
