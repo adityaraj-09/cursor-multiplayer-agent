@@ -64,7 +64,8 @@ db.exec(`
     key_ciphertext TEXT,
     key_hint TEXT,
     owner_id TEXT,
-    org_id TEXT
+    org_id TEXT,
+    control_mode TEXT NOT NULL DEFAULT 'open'
   );
 
   CREATE TABLE IF NOT EXISTS steer_messages (
@@ -113,7 +114,7 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS room_members (
     room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    role TEXT NOT NULL DEFAULT 'member',
+    role TEXT NOT NULL DEFAULT 'editor',
     PRIMARY KEY (room_id, user_id)
   );
 
@@ -124,7 +125,8 @@ db.exec(`
     created_at INTEGER NOT NULL,
     max_uses INTEGER,
     use_count INTEGER NOT NULL DEFAULT 0,
-    expires_at INTEGER
+    expires_at INTEGER,
+    role TEXT NOT NULL DEFAULT 'viewer'
   );
 
   CREATE TABLE IF NOT EXISTS workers (
@@ -234,6 +236,8 @@ const migrations = [
   `ALTER TABLE messages ADD COLUMN agent_id TEXT`,
   `ALTER TABLE messages ADD COLUMN todos_json TEXT`,
   `ALTER TABLE rooms ADD COLUMN org_id TEXT`,
+  `ALTER TABLE rooms ADD COLUMN control_mode TEXT NOT NULL DEFAULT 'open'`,
+  `ALTER TABLE invite_links ADD COLUMN role TEXT NOT NULL DEFAULT 'viewer'`,
 ];
 
 for (const sql of migrations) {
@@ -242,6 +246,25 @@ for (const sql of migrations) {
   } catch {
     // column already exists
   }
+}
+
+// Legacy room_members.role "member" → "editor" (idempotent).
+try {
+  db.exec(`UPDATE room_members SET role = 'editor' WHERE role = 'member'`);
+} catch {
+  // ignore
+}
+
+// Existing invite links without an explicit collaboration role stay editable
+// for backward compatibility with previous open-collaboration behavior.
+try {
+  db.exec(`
+    UPDATE invite_links
+    SET role = 'editor'
+    WHERE role IS NULL OR TRIM(role) = '' OR role = 'member'
+  `);
+} catch {
+  // ignore
 }
 
 try {
@@ -311,10 +334,14 @@ const stmts = {
     INSERT INTO rooms (
       id, name, repo_path, agent_command, created_at, last_active_at, status,
       runtime, auth_mode, model_id, repo_url, starting_ref, cursor_agent_id,
-      cursor_session_id, pr_url, auto_create_pr, key_ciphertext, key_hint, owner_id, org_id
-    ) VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      cursor_session_id, pr_url, auto_create_pr, key_ciphertext, key_hint, owner_id, org_id,
+      control_mode
+    ) VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `),
   updateRoomOwner: db.prepare(`UPDATE rooms SET owner_id = ? WHERE id = ?`),
+  updateControlMode: db.prepare(
+    `UPDATE rooms SET control_mode = ? WHERE id = ?`,
+  ),
   listRooms: db.prepare(`SELECT * FROM rooms ORDER BY last_active_at DESC`),
   getRoom: db.prepare(`SELECT * FROM rooms WHERE id = ?`),
   updateActivity: db.prepare(
@@ -490,8 +517,8 @@ const stmts = {
       updated_at = excluded.updated_at
   `),
   insertInviteLink: db.prepare(`
-    INSERT INTO invite_links (code, room_id, created_by, created_at, max_uses, use_count, expires_at)
-    VALUES (?, ?, ?, ?, ?, 0, ?)
+    INSERT INTO invite_links (code, room_id, created_by, created_at, max_uses, use_count, expires_at, role)
+    VALUES (?, ?, ?, ?, ?, 0, ?, ?)
   `),
   getInviteLink: db.prepare(`SELECT * FROM invite_links WHERE code = ?`),
   listInviteLinks: db.prepare(`
@@ -618,6 +645,7 @@ export interface RoomRow {
   key_hint: string | null;
   owner_id: string | null;
   org_id: string | null;
+  control_mode: string;
 }
 
 export interface CreateRoomInput {
@@ -638,6 +666,7 @@ export interface CreateRoomInput {
   keyHint?: string | null;
   ownerId?: string | null;
   orgId?: string | null;
+  controlMode?: string | null;
 }
 
 export type OrgRoleRow = "owner" | "admin" | "member";
@@ -747,6 +776,9 @@ export interface CreateAgentInput {
 
 export function createRoom(input: CreateRoomInput): RoomRow {
   const now = Date.now();
+  const controlMode =
+    input.controlMode?.trim() ||
+    (input.runtime === "local" ? "driver" : "open");
   stmts.insertRoom.run(
     input.id,
     input.name,
@@ -767,6 +799,7 @@ export function createRoom(input: CreateRoomInput): RoomRow {
     input.keyHint ?? null,
     input.ownerId ?? null,
     input.orgId ?? null,
+    controlMode,
   );
   return stmts.getRoom.get(input.id) as RoomRow;
 }
@@ -775,12 +808,28 @@ export function setRoomOwner(roomId: string, ownerId: string): void {
   stmts.updateRoomOwner.run(ownerId, roomId);
 }
 
+export function setRoomControlMode(roomId: string, controlMode: string): void {
+  stmts.updateControlMode.run(controlMode, roomId);
+}
+
 export function listRooms(): RoomRow[] {
   return stmts.listRooms.all() as RoomRow[];
 }
 
 export function getRoom(id: string): RoomRow | undefined {
-  return stmts.getRoom.get(id) as RoomRow | undefined;
+  const row = stmts.getRoom.get(id) as RoomRow | undefined;
+  if (!row) return undefined;
+  if (!row.control_mode) row.control_mode = "open";
+  return row;
+}
+
+export function getRoomMemberRole(
+  roomId: string,
+  userId: string,
+): string | null {
+  const members = getRoomMembers(roomId);
+  const hit = members.find((m) => m.user_id === userId);
+  return hit?.role ?? null;
 }
 
 export function updateRoomActivity(id: string): void {
@@ -1087,6 +1136,7 @@ export function createInviteLink(
   createdBy: string,
   maxUses: number | null,
   expiresAt: number | null = null,
+  role: string = "viewer",
 ): void {
   stmts.insertInviteLink.run(
     code,
@@ -1095,6 +1145,7 @@ export function createInviteLink(
     Date.now(),
     maxUses,
     expiresAt,
+    role,
   );
 }
 
@@ -1106,6 +1157,7 @@ export type InviteLinkRow = {
   max_uses: number | null;
   use_count: number;
   expires_at: number | null;
+  role: string;
 };
 
 export function getInviteLink(code: string): InviteLinkRow | undefined {

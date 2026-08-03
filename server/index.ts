@@ -474,12 +474,37 @@ app.get("/api/rooms/:id", requireAuth, (req, res) => {
     res.status(404).json({ error: "Room not found" });
     return;
   }
-  const room = roomManager.getRoomInfo(id);
+  const room = roomManager.getRoomInfo(id, req.user!.id);
   if (!room) {
     res.status(404).json({ error: "Room not found" });
     return;
   }
   res.json(room);
+});
+
+/**
+ * PATCH /api/rooms/:id/settings — host updates collaboration settings.
+ * Body: { controlMode: "open" | "driver" | "host" }
+ */
+app.patch("/api/rooms/:id/settings", requireAuth, (req, res) => {
+  const id = routeParam(req.params.id);
+  try {
+    const room = roomManager.setControlMode(
+      id,
+      String(req.body?.controlMode || ""),
+      req.user!.id,
+    );
+    res.json(room);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Failed to update settings";
+    const status =
+      message.includes("Only the host") || message.includes("Not allowed")
+        ? 403
+        : message.includes("not found")
+          ? 404
+          : 400;
+    res.status(status).json({ error: message });
+  }
 });
 
 /**
@@ -511,6 +536,10 @@ app.post("/api/rooms", requireAuth, async (req, res) => {
       res.status(403).json({ error: "Not a member of that organization" });
       return;
     }
+    const controlModeRaw =
+      typeof req.body?.controlMode === "string"
+        ? req.body.controlMode.trim()
+        : "";
     const room = await roomManager.createRoom({
       name: req.body?.name,
       runtime,
@@ -528,6 +557,12 @@ app.post("/api/rooms", requireAuth, async (req, res) => {
       anthropicApiKey: req.body?.anthropicApiKey
         ? String(req.body.anthropicApiKey)
         : undefined,
+      controlMode:
+        controlModeRaw === "open" ||
+        controlModeRaw === "driver" ||
+        controlModeRaw === "host"
+          ? controlModeRaw
+          : undefined,
     });
     res.status(201).json(room);
   } catch (err) {

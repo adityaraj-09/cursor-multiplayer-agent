@@ -12,6 +12,10 @@ import {
   clerkConfigured,
 } from "./auth.js";
 import { INVITE_TTL_MS } from "./config.js";
+import {
+  parseRoomInviteRole,
+  type RoomInviteRole,
+} from "../shared/roomPermissions.js";
 
 const router: RouterType = Router();
 
@@ -209,9 +213,10 @@ router.post("/invite/:code/join", requireAuth, (req, res) => {
     res.status(410).json({ error: "Invite link has expired" });
     return;
   }
-  db.addRoomMember(invite.room_id, req.user.id, "member");
+  const role = parseRoomInviteRole(invite.role, "viewer");
+  db.addRoomMember(invite.room_id, req.user.id, role);
 
-  res.json({ roomId: invite.room_id });
+  res.json({ roomId: invite.room_id, role });
 });
 
 /** POST /api/auth/:id/invite — create invite link (host only) */
@@ -240,11 +245,22 @@ router.post("/:id/invite", requireAuth, (req, res) => {
     res.status(400).json({ error: "maxUses must be a positive number or null" });
     return;
   }
+
+  const roleRaw =
+    typeof req.body?.role === "string" ? req.body.role.trim().toLowerCase() : "";
+  let role: RoomInviteRole = "viewer";
+  if (roleRaw === "editor" || roleRaw === "viewer") {
+    role = roleRaw;
+  } else if (roleRaw) {
+    res.status(400).json({ error: "role must be viewer or editor" });
+    return;
+  }
+
   const expiresAt = Date.now() + INVITE_TTL_MS;
   const code = generateInviteCode();
-  db.createInviteLink(code, roomId, req.user.id, maxUses, expiresAt);
+  db.createInviteLink(code, roomId, req.user.id, maxUses, expiresAt, role);
 
-  res.json({ code, roomId, maxUses, useCount: 0, expiresAt });
+  res.json({ code, roomId, maxUses, useCount: 0, expiresAt, role });
 });
 
 /** GET /api/auth/:id/invites — list invite links for a room */
@@ -275,6 +291,7 @@ router.get("/:id/invites", requireAuth, (req, res) => {
     maxUses: row.max_uses,
     useCount: row.use_count,
     expiresAt: row.expires_at ?? null,
+    role: parseRoomInviteRole(row.role, "editor"),
   }));
   res.json({ invites });
 });
