@@ -762,23 +762,6 @@ function LiveRoom({
         </div>
       )}
 
-      <AgentTabs
-        agents={agents}
-        selectedAgentId={selectedAgentId}
-        chatFilterAgentId={chatFilterAgentId}
-        onSelectAgent={(id) => {
-          setSelectedAgentId(id);
-          setChatFilterAgentId(id);
-        }}
-        onSelectAll={() => setChatFilterAgentId(null)}
-        statusByAgent={statusByAgent}
-        participants={participants}
-        models={models}
-        amHost={amHost}
-        onAddAgent={() => setAddAgentOpen(true)}
-        onStopAgent={(id) => void handleStopAgent(id)}
-      />
-
       <LockPanel
         conflicts={conflicts}
         fileLocks={fileLocks}
