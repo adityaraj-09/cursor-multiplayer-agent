@@ -297,6 +297,139 @@ describe("CursorAgentBackend", () => {
       "+const [open, setOpen] = useState(true);",
     );
   });
+
+  it("stores read tool result content on tool_done", () => {
+    const events = backend.parseLine({
+      type: "tool_call",
+      subtype: "completed",
+      call_id: "r1",
+      tool_call: {
+        readToolCall: {
+          args: { path: "README.md" },
+          result: {
+            success: {
+              content: "# Steer\n\nMultiplayer agent sessions",
+              totalLines: 2,
+            },
+          },
+        },
+      },
+    });
+    expect(events[0]).toMatchObject({
+      kind: "tool_done",
+      name: "read",
+      path: "README.md",
+    });
+    expect(events[0].kind === "tool_done" && events[0].detail).toContain(
+      "Multiplayer agent sessions",
+    );
+  });
+
+  it("stores shell stdout from tool result", () => {
+    const events = backend.parseLine({
+      type: "tool_call",
+      subtype: "completed",
+      call_id: "s1",
+      tool_call: {
+        shellToolCall: {
+          args: { command: "ls" },
+          result: {
+            success: {
+              stdout: "package.json\nREADME.md\n",
+              stderr: "",
+              exitCode: 0,
+            },
+          },
+        },
+      },
+    });
+    expect(events[0]).toMatchObject({ kind: "tool_done", name: "shell" });
+    expect(events[0].kind === "tool_done" && events[0].detail).toContain(
+      "package.json",
+    );
+    expect(events[0].kind === "tool_done" && events[0].detail).toContain(
+      "exit 0",
+    );
+  });
+
+  it("extracts editToolCall result.diffString as the chat diff", () => {
+    const events = backend.parseLine({
+      type: "tool_call",
+      subtype: "completed",
+      call_id: "ed1",
+      tool_call: {
+        editToolCall: {
+          args: { path: "src/a.ts" },
+          result: {
+            success: {
+              path: "src/a.ts",
+              resultForModel: "Edited src/a.ts",
+              linesAdded: 1,
+              linesRemoved: 1,
+              diffString: "-const x = 1;\n+const x = 2;",
+            },
+          },
+        },
+      },
+    });
+    expect(events[0]).toMatchObject({
+      kind: "tool_done",
+      name: "edit",
+      path: "src/a.ts",
+    });
+    expect(events[0].kind === "tool_done" && events[0].detail).toContain(
+      "Edited src/a.ts",
+    );
+    expect(events[0].kind === "tool_done" && events[0].diffPatch).toContain(
+      "-const x = 1;",
+    );
+    expect(events[0].kind === "tool_done" && events[0].diffPatch).toContain(
+      "+const x = 2;",
+    );
+  });
+
+  it("synthesizes write diffs from fileText args", () => {
+    const events = backend.parseLine({
+      type: "tool_call",
+      subtype: "completed",
+      call_id: "w1",
+      tool_call: {
+        writeToolCall: {
+          args: {
+            path: "summary.txt",
+            fileText: "# Summary\n\nHello\n",
+          },
+          result: {
+            success: {
+              path: "/tmp/summary.txt",
+              linesCreated: 3,
+              fileSize: 20,
+            },
+          },
+        },
+      },
+    });
+    expect(events[0]).toMatchObject({
+      kind: "tool_done",
+      name: "write",
+      path: "summary.txt",
+    });
+    expect(events[0].kind === "tool_done" && events[0].diffPatch).toContain(
+      "+# Summary",
+    );
+    expect(events[0].kind === "tool_done" && events[0].detail).toMatch(
+      /lines|summary/i,
+    );
+  });
+
+  it("builds diffs from nested editToolCall strReplace args", () => {
+    const patch = diffFromToolArgs("edit", {
+      path: "app.ts",
+      strReplace: { oldText: "foo", newText: "bar" },
+    });
+    expect(patch).toContain("-foo");
+    expect(patch).toContain("+bar");
+  });
 });
 
 describe("todo helpers", () => {
@@ -473,5 +606,13 @@ describe("todo helpers", () => {
     });
     expect(patch).toContain("new file mode");
     expect(patch).toContain("+export const x = 1;");
+  });
+
+  it("builds write diffs from Cursor fileText args", () => {
+    const patch = diffFromToolArgs("write", {
+      path: "hello.ts",
+      fileText: "export const y = 2;\n",
+    });
+    expect(patch).toContain("+export const y = 2;");
   });
 });

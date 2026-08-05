@@ -6,10 +6,12 @@ import type {
 } from "./types.js";
 import {
   diffFromToolArgs,
+  formatToolResultDetail,
   isEditTool,
   isTodoTool,
   todoStatusSummary,
   todosFromToolArgs,
+  TOOL_RESULT_DETAIL_LIMIT,
 } from "./cursor.js";
 
 interface PendingTool {
@@ -52,6 +54,32 @@ function toolPathFromArgs(args: Record<string, unknown> | undefined): string | u
     }
   }
   return undefined;
+}
+
+/** Normalize Claude tool_result `content` (string or content-block array). */
+function extractToolResultContent(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) {
+    if (content && typeof content === "object") {
+      try {
+        return JSON.stringify(content);
+      } catch {
+        return "";
+      }
+    }
+    return "";
+  }
+  return content
+    .map((part) => {
+      if (typeof part === "string") return part;
+      if (!part || typeof part !== "object") return "";
+      const p = part as Record<string, unknown>;
+      if (typeof p.text === "string") return p.text;
+      if (typeof p.content === "string") return p.content;
+      return "";
+    })
+    .filter(Boolean)
+    .join("\n");
 }
 
 function toolDetail(
@@ -245,10 +273,14 @@ export class ClaudeCodeBackend implements WorkerBackend {
         this.pendingTools.delete(callId);
         const name = pending?.name || "tool";
         const path = pending?.path;
-        const detail =
-          typeof b.content === "string"
-            ? b.content.slice(0, 160)
-            : toolDetail(name, pending?.args, path);
+        const resultText = extractToolResultContent(b.content);
+        const startDetail = toolDetail(name, pending?.args, path);
+        const detail = formatToolResultDetail(
+          name,
+          pending?.args,
+          resultText ? { success: { content: resultText } } : undefined,
+          resultText || startDetail || path || "Done",
+        );
 
         if (parentCallId) {
           out.push({
@@ -256,7 +288,8 @@ export class ClaudeCodeBackend implements WorkerBackend {
             parentCallId,
             callId,
             name,
-            detail,
+            detail:
+              detail.length > 200 ? `${detail.slice(0, 200)}…` : detail,
             path,
             status: "completed",
           });
@@ -273,7 +306,7 @@ export class ClaudeCodeBackend implements WorkerBackend {
             detail:
               todos.length
                 ? `${todos.length} todo${todos.length === 1 ? "" : "s"} · ${todoStatusSummary(todos)}`
-                : detail,
+                : detail.slice(0, TOOL_RESULT_DETAIL_LIMIT),
             path,
             diffPatch: diffPatch || undefined,
             todos: todos.length ? todos : undefined,

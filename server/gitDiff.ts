@@ -139,71 +139,15 @@ export function buildUnifiedDiff(
     .join("\n");
 }
 
-function argString(
-  args: Record<string, unknown>,
-  keys: string[],
-): string | undefined {
-  for (const k of keys) {
-    const v = args[k];
-    if (typeof v === "string") return v;
-  }
-  return undefined;
-}
-
 /**
  * Synthesize a unified diff from edit-tool arguments (works for cloud agents
  * where we can't read a local git working tree).
+ * Delegates to the shared Cursor backend helpers so CLI/SDK/server stay aligned
+ * on fileText, nested strReplace/applyPatch, etc.
  */
-export function diffFromToolArgs(
-  toolName: string,
-  args?: Record<string, unknown> | null,
-): string {
-  if (!args || typeof args !== "object") return "";
-  const path =
-    extractToolPath("", args) ||
-    argString(args, ["path", "file_path", "target_file"]) ||
-    "file";
-  const name = toolName.replace(/ToolCall$/i, "").toLowerCase();
-
-  const oldStr = argString(args, [
-    "old_string",
-    "oldString",
-    "old_str",
-    "OldString",
-  ]);
-  const newStr = argString(args, [
-    "new_string",
-    "newString",
-    "new_str",
-    "NewString",
-  ]);
-  if (typeof oldStr === "string" && typeof newStr === "string") {
-    return buildUnifiedDiff(path, oldStr, newStr);
-  }
-
-  const contents = argString(args, [
-    "contents",
-    "content",
-    "new_contents",
-    "newContents",
-    "text",
-  ]);
-  if (
-    typeof contents === "string" &&
-    /^(write|create|updatefile|writefile|editnotebook)/i.test(name)
-  ) {
-    return buildUnifiedDiff(path, "", contents);
-  }
-
-  if (/^delete/i.test(name)) {
-    return buildUnifiedDiff(path, `/* deleted: ${path} */\n`, "");
-  }
-
-  // ApplyPatch-style: some tools send a ready-made patch
-  const patch = argString(args, ["patch", "diff", "unifiedDiff", "unified_diff"]);
-  if (typeof patch === "string" && /diff --git|@@ /.test(patch)) {
-    return patch.trim();
-  }
-
-  return "";
-}
+export {
+  diffFromToolArgs,
+  diffFromToolResult,
+  diffFromToolEvent,
+  formatToolResultDetail,
+} from "../shared/backends/cursor.js";

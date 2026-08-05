@@ -1001,11 +1001,8 @@ export class RoomManager {
         ? agent.lastToolMsgId || undefined
         : undefined);
 
-    // tool_done with no prior start and not a todo — nothing to attach to.
-    if (!existingId && opts.status !== "streaming" && !isTodo) {
-      return null;
-    }
-
+    // Create a row even for orphan tool_done (completed without a prior start)
+    // so results/diffs are never silently dropped.
     const id = existingId || nanoid(12);
     const msg: ChatMessage = {
       id,
@@ -1021,7 +1018,13 @@ export class RoomManager {
     if (opts.diffPatch) msg.diffPatch = opts.diffPatch;
 
     if (existingId) {
-      if (opts.diffPatch || opts.todos?.length) {
+      // Always persist content + status on completion; attach diff/todos when present.
+      if (
+        opts.diffPatch ||
+        opts.todos?.length ||
+        opts.status === "done" ||
+        opts.status === "error"
+      ) {
         db.updateMessageTool(id, opts.content, opts.status, {
           diffPatch: opts.diffPatch,
           todos: opts.todos,
