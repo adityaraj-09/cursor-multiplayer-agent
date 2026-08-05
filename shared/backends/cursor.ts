@@ -728,6 +728,9 @@ export class CursorAgentBackend implements WorkerBackend {
       "--force",
       "--trust",
     ];
+    if (opts.mode === "plan") {
+      args.push("--mode", "plan");
+    }
     if (opts.modelId && opts.modelId !== "auto") {
       args.push("--model", opts.modelId);
     }

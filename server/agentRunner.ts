@@ -28,6 +28,8 @@ export class AgentRunner {
   private aborted = false;
   private readonly backendKind: AgentBackendKind;
 
+  private mode: "agent" | "plan" = "agent";
+
   constructor(
     private repoPath: string,
     sessionId?: string | null,
@@ -52,6 +54,14 @@ export class AgentRunner {
 
   getModel(): string {
     return this.modelId;
+  }
+
+  setMode(mode: "agent" | "plan"): void {
+    this.mode = mode === "plan" ? "plan" : "agent";
+  }
+
+  getMode(): "agent" | "plan" {
+    return this.mode;
   }
 
   getBackendKind(): AgentBackendKind {
@@ -148,6 +158,7 @@ export class AgentRunner {
         prompt: item.prompt,
         modelId: this.modelId,
         sessionId: this.sessionId,
+        mode: this.mode,
       });
 
       const child = spawn(backend.command, args, {

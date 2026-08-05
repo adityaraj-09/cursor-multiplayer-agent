@@ -8,6 +8,7 @@ import type {
   ChatMessage,
   SteerLogEntry,
 } from "../../shared/events.js";
+import type { ApprovalStatus } from "../../shared/approvals.js";
 
 function newId(prefix = ""): string {
   return `${prefix}${randomBytes(8).toString("hex")}`;
@@ -38,7 +39,8 @@ async function initSchema() {
       key_hint TEXT,
       owner_id TEXT,
       org_id TEXT,
-      control_mode TEXT NOT NULL DEFAULT 'open'
+      control_mode TEXT NOT NULL DEFAULT 'open',
+      approval_mode TEXT NOT NULL DEFAULT 'off'
     );
 
     CREATE TABLE IF NOT EXISTS steer_messages (
@@ -61,7 +63,8 @@ async function initSchema() {
       diff_patch TEXT,
       todos_json TEXT,
       status TEXT NOT NULL DEFAULT 'done',
-      ts BIGINT NOT NULL
+      ts BIGINT NOT NULL,
+      sender_user_id TEXT
     );
 
     CREATE TABLE IF NOT EXISTS settings (
@@ -138,7 +141,8 @@ async function initSchema() {
       pr_url TEXT,
       created_by TEXT,
       created_at BIGINT NOT NULL,
-      sort_order INTEGER NOT NULL DEFAULT 0
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      plan_mode INTEGER NOT NULL DEFAULT 0
     );
 
     CREATE TABLE IF NOT EXISTS agent_drivers (
@@ -184,6 +188,21 @@ async function initSchema() {
       use_count INTEGER NOT NULL DEFAULT 0,
       expires_at BIGINT
     );
+
+    CREATE TABLE IF NOT EXISTS approval_requests (
+      id TEXT PRIMARY KEY,
+      room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+      agent_id TEXT NOT NULL,
+      call_id TEXT NOT NULL,
+      tool_name TEXT NOT NULL,
+      detail TEXT NOT NULL DEFAULT '',
+      path TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at BIGINT NOT NULL,
+      decided_at BIGINT,
+      decided_by_user_id TEXT,
+      decided_by_name TEXT
+    );
   `);
 
   await pool.query(`
@@ -197,6 +216,9 @@ async function initSchema() {
   `);
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_org_members_user ON organization_members(user_id);
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_approval_requests_room_status ON approval_requests(room_id, status);
   `);
 
   const migrations = [
@@ -219,6 +241,9 @@ async function initSchema() {
     `ALTER TABLE rooms ADD COLUMN IF NOT EXISTS org_id TEXT`,
     `ALTER TABLE rooms ADD COLUMN IF NOT EXISTS control_mode TEXT NOT NULL DEFAULT 'open'`,
     `ALTER TABLE invite_links ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'viewer'`,
+    `ALTER TABLE rooms ADD COLUMN IF NOT EXISTS approval_mode TEXT NOT NULL DEFAULT 'off'`,
+    `ALTER TABLE agents ADD COLUMN IF NOT EXISTS plan_mode INTEGER NOT NULL DEFAULT 0`,
+    `ALTER TABLE messages ADD COLUMN IF NOT EXISTS sender_user_id TEXT`,
   ];
 
   for (const sql of migrations) {
@@ -281,6 +306,7 @@ export interface RoomRow {
   owner_id: string | null;
   org_id: string | null;
   control_mode: string;
+  approval_mode: string;
 }
 
 export interface CreateRoomInput {
@@ -302,6 +328,7 @@ export interface CreateRoomInput {
   ownerId?: string | null;
   orgId?: string | null;
   controlMode?: string | null;
+  approvalMode?: string;
 }
 
 export type OrgRoleRow = "owner" | "admin" | "member";
@@ -356,6 +383,7 @@ function pgRowToRoom(r: Record<string, unknown>): RoomRow {
     owner_id: (r.owner_id as string) ?? null,
     org_id: (r.org_id as string) ?? null,
     control_mode: ((r.control_mode as string) || "open"),
+    approval_mode: ((r.approval_mode as string) || "off"),
   };
 }
 
@@ -386,6 +414,7 @@ function rowToMessage(r: Record<string, unknown>): ChatMessage {
     status: r.status as ChatMessage["status"],
     ts: num(r.ts as string)!,
     agentId: (r.agent_id as string) || undefined,
+    senderUserId: (r.sender_user_id as string) || undefined,
   };
 }
 
@@ -441,6 +470,7 @@ export interface AgentRow {
   created_by: string | null;
   created_at: number;
   sort_order: number;
+  plan_mode: number;
 }
 
 export interface CreateAgentInput {
@@ -457,6 +487,7 @@ export interface CreateAgentInput {
   prUrl?: string | null;
   createdBy?: string | null;
   sortOrder?: number;
+  planMode?: boolean;
 }
 
 // Top-level await ensures schema is initialized before any exports are used
@@ -472,8 +503,8 @@ export function createRoom(input: CreateRoomInput): RoomRow {
       id, name, repo_path, agent_command, created_at, last_active_at, status,
       runtime, auth_mode, model_id, repo_url, starting_ref, cursor_agent_id,
       cursor_session_id, pr_url, auto_create_pr, key_ciphertext, key_hint, owner_id, org_id,
-      control_mode
-    ) VALUES ($1,$2,$3,$4,$5,$6,'active',$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+      control_mode, approval_mode
+    ) VALUES ($1,$2,$3,$4,$5,$6,'active',$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
     RETURNING *`,
     [
       input.id,
@@ -496,6 +527,7 @@ export function createRoom(input: CreateRoomInput): RoomRow {
       input.ownerId ?? null,
       input.orgId ?? null,
       controlMode,
+      input.approvalMode?.trim() || "off",
     ],
   );
   return pgRowToRoom(result[0]);
@@ -508,6 +540,13 @@ export function setRoomOwner(roomId: string, ownerId: string): void {
 export function setRoomControlMode(roomId: string, controlMode: string): void {
   syncQuery(`UPDATE rooms SET control_mode = $1 WHERE id = $2`, [
     controlMode,
+    roomId,
+  ]);
+}
+
+export function setRoomApprovalMode(roomId: string, approvalMode: string): void {
+  syncQuery(`UPDATE rooms SET approval_mode = $1 WHERE id = $2`, [
+    approvalMode,
     roomId,
   ]);
 }
@@ -609,8 +648,8 @@ export function getSteerHistory(
 
 export function insertMessage(msg: ChatMessage): void {
   syncQuery(
-    `INSERT INTO messages (id, room_id, role, content, sender_name, sender_color, tool_name, diff_patch, todos_json, status, ts, agent_id)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+    `INSERT INTO messages (id, room_id, role, content, sender_name, sender_color, tool_name, diff_patch, todos_json, status, ts, agent_id, sender_user_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
     [
       msg.id,
       msg.roomId,
@@ -624,6 +663,7 @@ export function insertMessage(msg: ChatMessage): void {
       msg.status,
       msg.ts,
       msg.agentId ?? null,
+      msg.senderUserId ?? null,
     ],
   );
 }
@@ -1332,6 +1372,7 @@ function rowToAgent(r: Record<string, unknown>): AgentRow {
     created_by: (r.created_by as string) ?? null,
     created_at: num(r.created_at as string)!,
     sort_order: num(r.sort_order as string) ?? 0,
+    plan_mode: num(r.plan_mode as string) ?? 0,
   };
 }
 
@@ -1345,8 +1386,8 @@ export function createAgent(input: CreateAgentInput): AgentRow {
   const rows = syncQuery<Record<string, unknown>>(
     `INSERT INTO agents (
       id, room_id, backend, label, scope_path, session_id, sdk_agent_id,
-      model_id, status, branch, pr_url, created_by, created_at, sort_order
-    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+      model_id, status, branch, pr_url, created_by, created_at, sort_order, plan_mode
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
     RETURNING *`,
     [
       id,
@@ -1363,6 +1404,7 @@ export function createAgent(input: CreateAgentInput): AgentRow {
       input.createdBy ?? null,
       now,
       sortOrder,
+      input.planMode ? 1 : 0,
     ],
   );
   return rowToAgent(rows[0]);
@@ -1410,6 +1452,13 @@ export function setAgentModel(id: string, modelId: string): void {
 
 export function setAgentLabel(id: string, label: string): void {
   syncQuery(`UPDATE agents SET label = $1 WHERE id = $2`, [label, id]);
+}
+
+export function setAgentPlanMode(id: string, planMode: boolean): void {
+  syncQuery(`UPDATE agents SET plan_mode = $1 WHERE id = $2`, [
+    planMode ? 1 : 0,
+    id,
+  ]);
 }
 
 export function setAgentScope(id: string, scopePath: string | null): void {
@@ -1578,6 +1627,110 @@ function rowToFileLock(r: Record<string, unknown>): FileLockRow {
     acquired_at: Number(r.acquired_at),
     expires_at: Number(r.expires_at),
   };
+}
+
+// --- Approval requests ---
+
+export interface ApprovalRequestRow {
+  id: string;
+  room_id: string;
+  agent_id: string;
+  call_id: string;
+  tool_name: string;
+  detail: string;
+  path: string | null;
+  status: ApprovalStatus;
+  created_at: number;
+  decided_at: number | null;
+  decided_by_user_id: string | null;
+  decided_by_name: string | null;
+}
+
+export interface CreateApprovalRequestInput {
+  id?: string;
+  roomId: string;
+  agentId: string;
+  callId: string;
+  toolName: string;
+  detail?: string;
+  path?: string | null;
+}
+
+function rowToApprovalRequest(r: Record<string, unknown>): ApprovalRequestRow {
+  return {
+    id: r.id as string,
+    room_id: r.room_id as string,
+    agent_id: r.agent_id as string,
+    call_id: r.call_id as string,
+    tool_name: r.tool_name as string,
+    detail: (r.detail as string) ?? "",
+    path: (r.path as string) ?? null,
+    status: (r.status as ApprovalStatus) || "pending",
+    created_at: num(r.created_at as string)!,
+    decided_at: num(r.decided_at as string | number | null),
+    decided_by_user_id: (r.decided_by_user_id as string) ?? null,
+    decided_by_name: (r.decided_by_name as string) ?? null,
+  };
+}
+
+export function createApprovalRequest(
+  input: CreateApprovalRequestInput,
+): ApprovalRequestRow {
+  const id = input.id || newId("apr_");
+  const rows = syncQuery<Record<string, unknown>>(
+    `INSERT INTO approval_requests (
+      id, room_id, agent_id, call_id, tool_name, detail, path, status, created_at
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,'pending',$8)
+    RETURNING *`,
+    [
+      id,
+      input.roomId,
+      input.agentId,
+      input.callId,
+      input.toolName,
+      input.detail ?? "",
+      input.path ?? null,
+      Date.now(),
+    ],
+  );
+  return rowToApprovalRequest(rows[0]);
+}
+
+export function getApprovalRequest(id: string): ApprovalRequestRow | undefined {
+  const rows = syncQuery<Record<string, unknown>>(
+    `SELECT * FROM approval_requests WHERE id = $1`,
+    [id],
+  );
+  return rows.length ? rowToApprovalRequest(rows[0]) : undefined;
+}
+
+export function listPendingApprovals(roomId: string): ApprovalRequestRow[] {
+  return syncQuery<Record<string, unknown>>(
+    `SELECT * FROM approval_requests WHERE room_id = $1 AND status = 'pending' ORDER BY created_at ASC`,
+    [roomId],
+  ).map(rowToApprovalRequest);
+}
+
+export function resolveApprovalRequest(
+  id: string,
+  status: "approved" | "denied",
+  decidedByUserId: string,
+  decidedByName: string,
+): ApprovalRequestRow | undefined {
+  syncQuery(
+    `UPDATE approval_requests
+     SET status = $1, decided_at = $2, decided_by_user_id = $3, decided_by_name = $4
+     WHERE id = $5`,
+    [status, Date.now(), decidedByUserId, decidedByName, id],
+  );
+  return getApprovalRequest(id);
+}
+
+export function expireApprovalRequest(id: string): void {
+  syncQuery(
+    `UPDATE approval_requests SET status = 'expired', decided_at = $1 WHERE id = $2`,
+    [Date.now(), id],
+  );
 }
 
 export function migrateAgentsV1(): void {

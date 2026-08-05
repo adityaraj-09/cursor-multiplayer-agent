@@ -432,7 +432,10 @@ export async function fetchRepositories(opts: {
 
 export async function updateRoomSettings(
   id: string,
-  data: { controlMode: "open" | "driver" | "host" },
+  data: {
+    controlMode?: "open" | "driver" | "host";
+    approvalMode?: "off" | "dangerous" | "all";
+  },
 ): Promise<RoomInfo> {
   const res = await fetch(`${API_BASE}/rooms/${id}/settings`, {
     method: "PATCH",
@@ -537,6 +540,10 @@ export async function createRoom(data: {
   anthropicApiKey?: string;
   orgId?: string;
   controlMode?: "open" | "driver" | "host";
+  /** Start the first agent in plan mode (read-only explore/propose). */
+  planMode?: boolean;
+  /** Room-level approval gates for high-blast-radius tools. */
+  approvalMode?: "off" | "dangerous" | "all";
 }): Promise<RoomInfo> {
   const res = await fetch(`${API_BASE}/rooms`, {
     method: "POST",
@@ -658,6 +665,7 @@ export async function addRoomAgent(
     anthropicApiKey?: string;
     /** Cursor BYOK — reuse/replace the key saved from previous sessions. */
     apiKey?: string;
+    planMode?: boolean;
   },
 ): Promise<import("../../shared/events").AgentInfo> {
   const res = await fetch(`${API_BASE}/rooms/${roomId}/agents`, {
@@ -683,6 +691,7 @@ export async function updateRoomAgent(
     scopePath?: string | null;
     modelId?: string;
     cursorSessionId?: string | null;
+    planMode?: boolean;
   },
 ): Promise<import("../../shared/events").AgentInfo> {
   const res = await fetch(`${API_BASE}/rooms/${roomId}/agents/${agentId}`, {

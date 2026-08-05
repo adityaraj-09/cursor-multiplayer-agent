@@ -7,6 +7,8 @@ export type {
   OrganizationRow,
   OrganizationMemberRow,
   OrganizationInviteRow,
+  ApprovalRequestRow,
+  CreateApprovalRequestInput,
 } from "./sqlite.js";
 
 const url = process.env.DATABASE_URL ?? "";
@@ -52,6 +54,7 @@ export const getPairingCode = backend.getPairingCode;
 export const usePairingCode = backend.usePairingCode;
 export const setRoomOwner = backend.setRoomOwner;
 export const setRoomControlMode = backend.setRoomControlMode;
+export const setRoomApprovalMode = backend.setRoomApprovalMode;
 export const addRoomMember = backend.addRoomMember;
 export const removeRoomMember = backend.removeRoomMember;
 export const getRoomMembers = backend.getRoomMembers;
@@ -102,6 +105,7 @@ export const setAgentSessionId = backend.setAgentSessionId;
 export const setAgentSdkId = backend.setAgentSdkId;
 export const setAgentModel = backend.setAgentModel;
 export const setAgentLabel = backend.setAgentLabel;
+export const setAgentPlanMode = backend.setAgentPlanMode;
 export const setAgentScope = backend.setAgentScope;
 export const setAgentPr = backend.setAgentPr;
 export const deleteAgent = backend.deleteAgent;
@@ -121,3 +125,10 @@ export const deleteFileLocksForRoom = backend.deleteFileLocksForRoom;
 export const deleteExpiredFileLocks = backend.deleteExpiredFileLocks;
 export const deleteExpiredFileLocksForRoom =
   backend.deleteExpiredFileLocksForRoom;
+
+// Approval requests
+export const createApprovalRequest = backend.createApprovalRequest;
+export const getApprovalRequest = backend.getApprovalRequest;
+export const listPendingApprovals = backend.listPendingApprovals;
+export const resolveApprovalRequest = backend.resolveApprovalRequest;
+export const expireApprovalRequest = backend.expireApprovalRequest;

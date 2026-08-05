@@ -1,7 +1,14 @@
 import type { AgentBackendKind } from "./backends/types.js";
+import type { ApprovalMode, AgentMode, ApprovalRequestInfo } from "./approvals.js";
 import type { ControlMode, RoomRole } from "./roomPermissions.js";
 
 export type { ControlMode, RoomInviteRole, RoomRole } from "./roomPermissions.js";
+export type {
+  ApprovalMode,
+  AgentMode,
+  ApprovalStatus,
+  ApprovalRequestInfo,
+} from "./approvals.js";
 
 export interface Participant {
   socketId: string;
@@ -62,6 +69,8 @@ export interface AgentInfo {
   sdkAgentId?: string;
   branch?: string;
   prUrl?: string;
+  /** Plan mode = read-only explore/propose (Cursor --mode plan / Claude permission-mode plan). */
+  planMode?: boolean;
 }
 
 export interface AgentConflict {
@@ -99,6 +108,8 @@ export interface ChatMessage {
   content: string;
   senderName?: string;
   senderColor?: string;
+  /** Durable Clerk/user id of the human who sent this message (for git attribution). */
+  senderUserId?: string;
   toolName?: string;
   /** Unified diff when this message is a file edit. */
   diffPatch?: string;
@@ -108,6 +119,8 @@ export interface ChatMessage {
   ts: number;
   /** Room-level agent that produced or received this message. */
   agentId?: string;
+  /** Pending/decided approval gate attached to this tool row (if any). */
+  approval?: ApprovalRequestInfo;
 }
 
 export interface CloudMeta {
@@ -131,6 +144,11 @@ export interface RoomInfo {
   modelId: string;
   /** Who may steer agents in this room. */
   controlMode: ControlMode;
+  /**
+   * Human approval gates for irreversible / high-blast-radius tools.
+   * Separate from file locks and driver control.
+   */
+  approvalMode: ApprovalMode;
   repoUrl?: string;
   startingRef?: string;
   prUrl?: string;
@@ -234,6 +252,12 @@ export interface ServerToClientEvents {
   "control-mode-updated": (mode: ControlMode) => void;
   /** Room membership roster changed (roles / joins / removals). */
   "members-updated": (members: RoomMemberInfo[]) => void;
+  /** Agent proposed a high-blast-radius action that needs human sign-off. */
+  "tool-approval-requested": (request: ApprovalRequestInfo) => void;
+  /** Pending approval was approved/denied/expired. */
+  "tool-approval-resolved": (request: ApprovalRequestInfo) => void;
+  /** Full snapshot of open approvals for the room (on join / reconnect). */
+  "tool-approvals": (requests: ApprovalRequestInfo[]) => void;
   error: (message: string) => void;
 }
 
@@ -246,6 +270,14 @@ export interface ClientToServerEvents {
   "request-drive": (agentId?: string) => void;
   "release-drive": (agentId?: string) => void;
   "grant-drive": (toSocketIdOrAgentId: string, toSocketId?: string) => void;
+  /**
+   * Approve or deny a pending tool-approval request.
+   * Any non-driver human in the room may decide (editors+).
+   */
+  "tool-approval-decision": (
+    requestId: string,
+    approved: boolean,
+  ) => void;
   "leave-room": () => void;
   "remove-member": (userId: string) => void;
 }
@@ -316,6 +348,8 @@ export interface ServerToWorkerEvents {
     sessionId?: string | null;
     /** Agent CLI backend — defaults to cursor when omitted. */
     backend?: AgentBackendKind;
+    /** Plan vs agent mode for this run. */
+    mode?: AgentMode;
   }) => void;
   "worker:abort": (data: { roomId: string; agentId?: string }) => void;
   "worker:pick-folder": (data: { requestId: string }) => void;

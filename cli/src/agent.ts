@@ -55,6 +55,7 @@ export function runAgent(
   sessionId?: string | null,
   runKey = `run_${Date.now()}`,
   backendKind: AgentBackendKind = "cursor",
+  mode: "agent" | "plan" = "agent",
 ): Promise<void> {
   return runAgentWithHandle(
     repoPath,
@@ -64,6 +65,7 @@ export function runAgent(
     sessionId,
     runKey,
     backendKind,
+    mode,
   ).promise;
 }
 
@@ -75,6 +77,7 @@ export function runAgentWithHandle(
   sessionId?: string | null,
   runKey = `run_${Date.now()}`,
   backendKind: AgentBackendKind = "cursor",
+  mode: "agent" | "plan" = "agent",
 ): RunHandle {
   const kind: AgentBackendKind =
     backendKind === "claude-code" ? "claude-code" : "cursor";
@@ -85,6 +88,7 @@ export function runAgentWithHandle(
       prompt,
       modelId,
       sessionId,
+      mode,
     });
 
     const child = spawn(backend.command, args, {

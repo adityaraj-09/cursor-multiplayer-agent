@@ -26,6 +26,7 @@ interface AddAgentDialogProps {
     modelId?: string;
     anthropicApiKey?: string;
     apiKey?: string;
+    planMode?: boolean;
   }) => Promise<void>;
   /** Fallback Cursor models from the room page (may be Claude models if a Claude agent is selected). */
   models: ModelInfo[];
@@ -63,6 +64,7 @@ export default function AddAgentDialog({
   const [serverKeyConfigured, setServerKeyConfigured] = useState(false);
   const [e2bConfigured, setE2bConfigured] = useState(false);
   const [byokAvailable, setByokAvailable] = useState(false);
+  const [planMode, setPlanMode] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -263,6 +265,7 @@ export default function AddAgentDialog({
         backend,
         scopePath: scopePath.trim() || undefined,
         modelId,
+        planMode,
         anthropicApiKey:
           backend === "claude-code" && anthropicApiKey.trim()
             ? anthropicApiKey.trim()
@@ -273,6 +276,7 @@ export default function AddAgentDialog({
       setLabel("");
       setScopePath("");
       setBackend("cursor");
+      setPlanMode(false);
       setAnthropicApiKey("");
       setApiKey("");
       onClose();
@@ -484,6 +488,32 @@ export default function AddAgentDialog({
             </option>
           ))}
         </select>
+
+        <label className="block text-[11px] text-[#6e6e6e] mb-1">Mode</label>
+        <div className="grid grid-cols-2 gap-2 mb-3">
+          <button
+            type="button"
+            onClick={() => setPlanMode(false)}
+            className={`h-9 rounded-md border text-[12px] ${
+              !planMode
+                ? "border-[#4d9fff] bg-[#252525] text-[#e4e4e4]"
+                : "border-[#2b2b2b] bg-[#1a1a1a] text-[#6e6e6e]"
+            }`}
+          >
+            Agent
+          </button>
+          <button
+            type="button"
+            onClick={() => setPlanMode(true)}
+            className={`h-9 rounded-md border text-[12px] ${
+              planMode
+                ? "border-[#4d9fff] bg-[#252525] text-[#e4e4e4]"
+                : "border-[#2b2b2b] bg-[#1a1a1a] text-[#6e6e6e]"
+            }`}
+          >
+            Plan
+          </button>
+        </div>
 
         {error && (
           <p className="text-[12px] text-[#f07070] mb-3">{error}</p>
