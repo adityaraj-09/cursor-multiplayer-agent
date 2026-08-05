@@ -484,17 +484,27 @@ app.get("/api/rooms/:id", requireAuth, (req, res) => {
 
 /**
  * PATCH /api/rooms/:id/settings — host updates collaboration settings.
- * Body: { controlMode: "open" | "driver" | "host" }
+ * Body: { controlMode?: "open" | "driver" | "host", approvalMode?: "off" | "dangerous" | "all" }
  */
 app.patch("/api/rooms/:id/settings", requireAuth, (req, res) => {
   const id = routeParam(req.params.id);
   try {
-    const room = roomManager.setControlMode(
-      id,
-      String(req.body?.controlMode || ""),
-      req.user!.id,
-    );
-    res.json(room);
+    let room;
+    if (req.body?.controlMode !== undefined) {
+      room = roomManager.setControlMode(
+        id,
+        String(req.body.controlMode || ""),
+        req.user!.id,
+      );
+    }
+    if (req.body?.approvalMode !== undefined) {
+      room = roomManager.setApprovalMode(
+        id,
+        String(req.body.approvalMode || ""),
+        req.user!.id,
+      );
+    }
+    res.json(room ?? roomManager.getRoomInfo(id, req.user!.id));
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to update settings";
     const status =
@@ -610,6 +620,10 @@ app.post("/api/rooms", requireAuth, async (req, res) => {
       typeof req.body?.controlMode === "string"
         ? req.body.controlMode.trim()
         : "";
+    const approvalModeRaw =
+      typeof req.body?.approvalMode === "string"
+        ? req.body.approvalMode.trim()
+        : "";
     const room = await roomManager.createRoom({
       name: req.body?.name,
       runtime,
@@ -633,6 +647,8 @@ app.post("/api/rooms", requireAuth, async (req, res) => {
         controlModeRaw === "host"
           ? controlModeRaw
           : undefined,
+      planMode: Boolean(req.body?.planMode),
+      approvalMode: approvalModeRaw || undefined,
     });
     res.status(201).json(room);
   } catch (err) {
@@ -746,6 +762,7 @@ app.post("/api/rooms/:id/agents", requireAuth, (req, res) => {
           ? String(req.body.anthropicApiKey)
           : undefined,
         apiKey: req.body?.apiKey ? String(req.body.apiKey) : undefined,
+        planMode: Boolean(req.body?.planMode),
       },
       req.user!.id,
     );
@@ -833,6 +850,14 @@ app.patch("/api/rooms/:id/agents/:agentId", requireAuth, (req, res) => {
                 : null
               : undefined,
         },
+        req.user!.id,
+      );
+    }
+    if (req.body?.planMode !== undefined) {
+      roomManager.setAgentPlanMode(
+        id,
+        agentId,
+        Boolean(req.body.planMode),
         req.user!.id,
       );
     }
@@ -1023,6 +1048,9 @@ io.on("connection", (socket) => {
   );
   socket.on("release-drive", (agentId) =>
     roomManager.handleReleaseDrive(socket, agentId),
+  );
+  socket.on("tool-approval-decision", (requestId, approved) =>
+    roomManager.handleToolApprovalDecision(socket, requestId, approved),
   );
   socket.on("leave-room", () => roomManager.handleLeaveRoom(socket));
   socket.on("remove-member", (targetUserId) =>

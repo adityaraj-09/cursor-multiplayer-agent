@@ -28,6 +28,14 @@ import { listCliModels } from "./cliModels.js";
 import { WorkerRelay } from "./workerRelay.js";
 import * as db from "./db.js";
 import {
+  approvalActionKey,
+  parseApprovalMode,
+  requiresApproval,
+  type ApprovalMode,
+  type ApprovalRequestInfo,
+} from "../shared/approvals.js";
+import { attributionPromptSuffix, type SteerAuthor } from "../shared/attribution.js";
+import {
   DEFAULT_AGENT_COMMAND,
   DEFAULT_MODEL,
   DEFAULT_REPO_PATH,
@@ -109,6 +117,10 @@ export interface CreateRoomRequest {
   anthropicApiKey?: string;
   /** Collaboration control mode. Defaults by runtime (local → driver, cloud → open). */
   controlMode?: ControlMode;
+  /** Start the default agent in read-only plan mode. */
+  planMode?: boolean;
+  /** Human approval gate for high-blast-radius tools. Defaults to "off". */
+  approvalMode?: string;
 }
 
 type AgentBackend = AgentRunner | SdkAgentSession | ClaudeSandboxSession;
@@ -139,6 +151,13 @@ interface AgentState {
    * In-flight runAgent / worker handlers ignore events when this no longer matches.
    */
   runGeneration: number;
+  /**
+   * Approval gate action keys the room has already signed off on — lets the
+   * exact same tool call resume without re-prompting on the next turn.
+   */
+  preApprovedActions: Set<string>;
+  /** Human who most recently steered this agent (for git attribution). */
+  lastSteeredBy: SteerAuthor | null;
 }
 
 interface RoomState {
@@ -496,6 +515,7 @@ export class RoomManager {
         repoUrl: runtime === "cloud" ? repoUrl! : undefined,
         startingRef: startingRef || undefined,
         autoCreatePR,
+        mode: req.planMode ? "plan" : "agent",
       });
       cursorAgentId = await sdk.ensureStarted();
       existingBackend = sdk;
@@ -533,6 +553,7 @@ export class RoomManager {
       ownerId,
       orgId,
       controlMode,
+      approvalMode: parseApprovalMode(req.approvalMode),
     });
 
     if (ownerId) {
@@ -551,6 +572,7 @@ export class RoomManager {
       sdkAgentId: cursorAgentId,
       modelId,
       createdBy: ownerId,
+      planMode: Boolean(req.planMode),
     });
 
     const existingByAgentId = new Map<string, AgentBackend>();
@@ -679,7 +701,11 @@ export class RoomManager {
         filePatches: new Map(),
         touchedPaths: new Set(),
         runGeneration: 0,
+        preApprovedActions: new Set(),
+        lastSteeredBy: null,
       });
+
+      this.applyBackendMode(agents.get(agentRow.id)!);
     }
 
     this.rooms.set(row.id, {
@@ -741,6 +767,31 @@ export class RoomManager {
       sdkAgentId: row.sdk_agent_id || undefined,
       branch: row.branch || undefined,
       prUrl: row.pr_url || undefined,
+      planMode: Boolean(row.plan_mode),
+    };
+  }
+
+  /** Push the agent's persisted plan/agent mode onto its live backend. */
+  private applyBackendMode(agent: AgentState): void {
+    const mode: "agent" | "plan" = agent.row.plan_mode ? "plan" : "agent";
+    const backend = agent.backend as { setMode?: (mode: "agent" | "plan") => void };
+    backend.setMode?.(mode);
+  }
+
+  private approvalRowToInfo(row: db.ApprovalRequestRow): ApprovalRequestInfo {
+    return {
+      id: row.id,
+      roomId: row.room_id,
+      agentId: row.agent_id,
+      callId: row.call_id,
+      toolName: row.tool_name,
+      detail: row.detail,
+      path: row.path || undefined,
+      status: row.status,
+      createdAt: row.created_at,
+      decidedAt: row.decided_at || undefined,
+      decidedByUserId: row.decided_by_user_id || undefined,
+      decidedByName: row.decided_by_name || undefined,
     };
   }
 
@@ -767,6 +818,7 @@ export class RoomManager {
       sandboxId: agentRow.sdk_agent_id,
       branch: agentRow.branch,
       prUrl: agentRow.pr_url,
+      mode: agentRow.plan_mode ? "plan" : "agent",
       githubToken: githubTokenFromEnv(),
       onReady: ({ sandboxId, branch }) => {
         // Persist sandbox identity as soon as the E2B box is up (not only on done).
@@ -852,6 +904,31 @@ export class RoomManager {
       this.broadcastAgents(room);
       this.broadcastConflicts(room);
     }
+    return this.toAgentInfo(agentRow);
+  }
+
+  setAgentPlanMode(
+    roomId: string,
+    agentId: string,
+    planMode: boolean,
+    actorUserId?: string,
+  ): AgentInfo {
+    const row = db.getRoom(roomId);
+    if (!row || row.status !== "active") throw new Error("Room not found");
+    this.assertCanManage(roomId, actorUserId);
+    const room = this.rooms.get(roomId);
+    const agent = room?.agents.get(agentId);
+    const agentRow = agent?.row || db.getAgent(agentId);
+    if (!agentRow || agentRow.room_id !== roomId) {
+      throw new Error("Agent not found");
+    }
+    db.setAgentPlanMode(agentId, planMode);
+    agentRow.plan_mode = planMode ? 1 : 0;
+    if (agent) {
+      agent.row = agentRow;
+      this.applyBackendMode(agent);
+    }
+    if (room) this.broadcastAgents(room);
     return this.toAgentInfo(agentRow);
   }
 
@@ -1137,6 +1214,74 @@ export class RoomManager {
   }
 
   // -----------------------------------------------------------------------
+  // Approval gates — pause high-blast-radius tools for human sign-off
+  // -----------------------------------------------------------------------
+
+  /**
+   * Checks whether a tool call needs human approval under the room's
+   * approval mode. When it does — and the exact action hasn't already been
+   * pre-approved — aborts the in-flight run, records a pending approval
+   * request, and notifies the room. Returns true when the caller should
+   * stop processing this tool event (approval already handled).
+   */
+  private gateDangerousTool(
+    room: RoomState,
+    agent: AgentState,
+    event: { callId: string; name: string; detail: string; path?: string },
+    abort: () => void,
+  ): boolean {
+    const mode = parseApprovalMode(room.row.approval_mode);
+    if (
+      !requiresApproval({
+        mode,
+        toolName: event.name,
+        detail: event.detail,
+        path: event.path,
+        isEditTool,
+      })
+    ) {
+      return false;
+    }
+
+    const key = approvalActionKey(event.name, event.detail, event.path);
+    if (agent.preApprovedActions.has(key)) {
+      agent.preApprovedActions.delete(key);
+      return false;
+    }
+
+    abort();
+
+    const approvalRow = db.createApprovalRequest({
+      roomId: room.id,
+      agentId: agent.row.id,
+      callId: event.callId,
+      toolName: event.name,
+      detail: event.detail,
+      path: event.path || null,
+    });
+    const info = this.approvalRowToInfo(approvalRow);
+
+    const pathSuffix = event.path ? ` on \`${event.path}\`` : "";
+    const sysMsg: ChatMessage = {
+      id: nanoid(12),
+      roomId: room.id,
+      role: "system",
+      content: `${agent.row.label} wants to run **${event.name}**${pathSuffix}: ${event.detail || ""}\n\nWaiting for approval.`,
+      status: "done",
+      ts: Date.now(),
+      agentId: agent.row.id,
+      approval: info,
+    };
+    db.insertMessage(sysMsg);
+    this.io.to(room.id).emit("chat-message", sysMsg);
+    this.io.to(room.id).emit("tool-approval-requested", info);
+
+    this.emitAgentStatus(room, agent.row.id, "idle");
+
+    return true;
+  }
+
+  // -----------------------------------------------------------------------
   // joinRoom
   // -----------------------------------------------------------------------
 
@@ -1184,6 +1329,10 @@ export class RoomManager {
     }));
     socket.emit("agent-conflicts", detectAgentConflicts(conflictData));
     socket.emit("file-locks", this.fileLocks.list(roomId));
+    socket.emit(
+      "tool-approvals",
+      db.listPendingApprovals(roomId).map((r) => this.approvalRowToInfo(r)),
+    );
 
     if (room.row.runtime === "cloud") {
       socket.emit("cloud-meta", room.cloudMeta);
@@ -1499,6 +1648,15 @@ export class RoomManager {
 
     agent.workerRunActive = true;
 
+    const userRow = p?.userId ? db.getUserById(p.userId) : undefined;
+    const steeredBy: SteerAuthor | null = p
+      ? { userId: p.userId, name: p.name, email: userRow?.email }
+      : null;
+    agent.lastSteeredBy = steeredBy;
+    if (agent.backend instanceof ClaudeSandboxSession) {
+      agent.backend.setSteeredBy(steeredBy);
+    }
+
     const userMsg: ChatMessage = {
       id: nanoid(12),
       roomId: room.id,
@@ -1506,6 +1664,7 @@ export class RoomManager {
       content: sanitized,
       senderName: p?.name || "Unknown",
       senderColor: p?.color || "#888",
+      senderUserId: p?.userId,
       status: "done",
       ts: Date.now(),
       agentId,
@@ -1514,7 +1673,8 @@ export class RoomManager {
     db.insertMessage(userMsg);
     this.io.to(room.id).emit("chat-message", userMsg);
     db.updateRoomActivity(room.id);
-    void this.runAgent(room, agent, sanitized);
+    const promptWithAttr = sanitized + attributionPromptSuffix(steeredBy);
+    void this.runAgent(room, agent, promptWithAttr);
   }
 
   // -----------------------------------------------------------------------
@@ -1536,6 +1696,8 @@ export class RoomManager {
       : null;
 
     if (!worker) return false;
+
+    this.applyBackendMode(agent);
 
     for (const c of agent.workerRunCleanups) c();
     agent.workerRunCleanups = [];
@@ -1704,6 +1866,24 @@ export class RoomManager {
               this.workerRelay?.abortRun(room.id, agent.row.id);
               break;
             }
+            if (
+              this.gateDangerousTool(
+                room,
+                agent,
+                {
+                  callId: event.callId || nanoid(12),
+                  name: event.name || "tool",
+                  detail: event.detail || "",
+                  path: toolPath,
+                },
+                () => {
+                  this.workerRelay?.abortRun(room.id, agent.row.id);
+                  finishWorkerRun("idle");
+                },
+              )
+            ) {
+              break;
+            }
             this.upsertAgentToolMessage(room, agent, {
               callId: event.callId,
               name: event.name || "tool",
@@ -1794,6 +1974,7 @@ export class RoomManager {
         agent.row.id,
         agent.cwd,
         agent.row.backend,
+        agent.row.plan_mode ? "plan" : "agent",
       );
     } catch (err) {
       // Multi-agent CLI upgrade error
@@ -1904,6 +2085,11 @@ export class RoomManager {
       this.emitAgentStatus(room, agent.row.id, "error", msg);
       this.emitAgentStatus(room, agent.row.id, "idle");
       return;
+    }
+
+    this.applyBackendMode(agent);
+    if (agent.backend instanceof ClaudeSandboxSession) {
+      agent.backend.setSteeredBy(agent.lastSteeredBy);
     }
 
     this.emitAgentStatus(room, agent.row.id, "running");
@@ -2092,6 +2278,24 @@ export class RoomManager {
               throw new Error(
                 this.lockConflictMessage(room, path || "file", holder),
               );
+            }
+            if (
+              this.gateDangerousTool(
+                room,
+                agent,
+                {
+                  callId: event.callId,
+                  name: event.name || "tool",
+                  detail: event.detail || "",
+                  path,
+                },
+                () => {
+                  agent.runGeneration++;
+                  void agent.backend.abortAndWait();
+                },
+              )
+            ) {
+              break;
             }
             this.upsertAgentToolMessage(room, agent, {
               callId: event.callId,
@@ -2418,6 +2622,98 @@ export class RoomManager {
   }
 
   // -----------------------------------------------------------------------
+  // Tool approval decisions
+  // -----------------------------------------------------------------------
+
+  /**
+   * Any editor (or the host) who is not currently driving the agent may
+   * approve/deny a pending tool call. The host can always decide, even
+   * while driving; a plain editor driving the agent cannot self-approve.
+   */
+  handleToolApprovalDecision(
+    socket: Socket,
+    requestId: string,
+    approved: boolean,
+  ): void {
+    const room = this.getRoomForSocket(socket.id);
+    if (!room) return;
+
+    const approvalRow = db.getApprovalRequest(requestId);
+    if (!approvalRow || approvalRow.room_id !== room.id) {
+      socket.emit("error", "Approval request not found");
+      return;
+    }
+    if (approvalRow.status !== "pending") {
+      socket.emit("error", "This approval has already been decided");
+      return;
+    }
+
+    const p = room.participants.get(socket.id);
+    if (!p?.userId) {
+      socket.emit("error", "Sign in required to decide approvals");
+      return;
+    }
+
+    const role = this.resolveUserRoomRole(room.id, p.userId);
+    if (role !== "owner" && role !== "editor") {
+      socket.emit("error", "Only editors or the host can decide approvals");
+      return;
+    }
+
+    const agent = room.agents.get(approvalRow.agent_id);
+    const isDriver = Boolean(
+      agent &&
+        (agent.driverSocketId === socket.id ||
+          (room.agents.size <= 1 && room.driverSocketId === socket.id)),
+    );
+    if (role !== "owner" && isDriver) {
+      socket.emit(
+        "error",
+        "You are driving this agent — ask another editor or the host to decide",
+      );
+      return;
+    }
+
+    const decidedByName = p.name || "Someone";
+    const resolved = db.resolveApprovalRequest(
+      requestId,
+      approved ? "approved" : "denied",
+      p.userId,
+      decidedByName,
+    );
+    if (!resolved) return;
+
+    const info = this.approvalRowToInfo(resolved);
+    this.io.to(room.id).emit("tool-approval-resolved", info);
+
+    const sysMsg: ChatMessage = {
+      id: nanoid(12),
+      roomId: room.id,
+      role: "system",
+      content: `${approved ? "Approved" : "Denied"} by ${decidedByName}.`,
+      status: "done",
+      ts: Date.now(),
+      agentId: approvalRow.agent_id,
+      approval: info,
+    };
+    db.insertMessage(sysMsg);
+    this.io.to(room.id).emit("chat-message", sysMsg);
+
+    if (!agent || !approved) return;
+    if (agent.workerRunActive || agent.backend.isBusy()) return;
+
+    const key = approvalActionKey(
+      approvalRow.tool_name,
+      approvalRow.detail,
+      approvalRow.path || undefined,
+    );
+    agent.preApprovedActions.add(key);
+
+    const resumePrompt = `Your proposed action was approved by ${decidedByName}. Proceed with it now:\n\nTool: ${approvalRow.tool_name}\n${approvalRow.detail}\n${approvalRow.path ? `Path: ${approvalRow.path}` : ""}\n\nDo not ask for approval again for this exact action.`;
+    void this.runAgent(room, agent, resumePrompt);
+  }
+
+  // -----------------------------------------------------------------------
   // addAgent / stopAgent
   // -----------------------------------------------------------------------
 
@@ -2432,6 +2728,8 @@ export class RoomManager {
       anthropicApiKey?: string;
       /** Optional Cursor API key (BYOK). Reuses / saves the user's Cursor key from previous sessions. */
       apiKey?: string;
+      /** Start this agent in read-only plan mode. */
+      planMode?: boolean;
     },
     actorUserId: string,
   ): AgentInfo {
@@ -2541,6 +2839,7 @@ export class RoomManager {
       scopePath: opts.scopePath || null,
       modelId,
       createdBy: actorUserId,
+      planMode: Boolean(opts.planMode),
     });
 
     const cwd = row.runtime === "local"
@@ -2563,6 +2862,7 @@ export class RoomManager {
         repoUrl: row.repo_url || undefined,
         startingRef: row.starting_ref || undefined,
         autoCreatePR: Boolean(row.auto_create_pr),
+        mode: agentRow.plan_mode ? "plan" : "agent",
       });
     }
 
@@ -2605,9 +2905,12 @@ export class RoomManager {
       filePatches: new Map(),
       touchedPaths: new Set(),
       runGeneration: 0,
+      preApprovedActions: new Set(),
+      lastSteeredBy: null,
     };
 
     room.agents.set(agentRow.id, agentState);
+    this.applyBackendMode(agentState);
     this.broadcastAgents(room);
     this.broadcastConflicts(room);
 
@@ -3063,6 +3366,38 @@ export class RoomManager {
     );
   }
 
+  setApprovalMode(
+    roomId: string,
+    approvalModeRaw: string,
+    actorUserId: string,
+  ): RoomInfo {
+    const row = db.getRoom(roomId);
+    if (!row || row.status !== "active") {
+      throw new Error("Room not found");
+    }
+    this.assertCanManage(roomId, actorUserId);
+    const normalized = String(approvalModeRaw || "").trim().toLowerCase();
+    if (
+      normalized !== "off" &&
+      normalized !== "dangerous" &&
+      normalized !== "all"
+    ) {
+      throw new Error("approvalMode must be off, dangerous, or all");
+    }
+    const mode = normalized as ApprovalMode;
+    db.setRoomApprovalMode(roomId, mode);
+    row.approval_mode = mode;
+    const room = this.rooms.get(roomId);
+    if (room) {
+      room.row.approval_mode = mode;
+    }
+    return this.toRoomInfo(
+      row,
+      room?.participants.size || 0,
+      actorUserId,
+    );
+  }
+
   /** Host / org admin can manage room-level settings. */
   userCanManageRoom(roomId: string, userId: string): boolean {
     return userCanManageRoomAccess(roomId, userId);
@@ -3464,6 +3799,7 @@ export class RoomManager {
       authMode: (row.auth_mode as AuthMode) || "cli",
       modelId: row.model_id || DEFAULT_MODEL,
       controlMode: this.getControlMode(row),
+      approvalMode: parseApprovalMode(row.approval_mode),
       repoUrl: row.repo_url || undefined,
       startingRef: row.starting_ref || undefined,
       prUrl: row.pr_url || undefined,
