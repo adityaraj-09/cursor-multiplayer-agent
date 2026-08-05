@@ -118,6 +118,53 @@ describe("ClaudeCodeBackend", () => {
     expect((done[0] as { diffPatch?: string }).diffPatch).toContain(
       "src/a.ts",
     );
+    expect((done[0] as { detail?: string }).detail).toBe("ok");
+  });
+
+  it("keeps full shell/tool_result text instead of truncating to 160 chars", () => {
+    const backend = new ClaudeCodeBackend();
+    const ctx = {
+      assistantBuf: { value: "" },
+      gotTerminalEvent: { value: false },
+    };
+    backend.parseLine(
+      {
+        type: "assistant",
+        message: {
+          content: [
+            {
+              type: "tool_use",
+              id: "bash_1",
+              name: "Bash",
+              input: { command: "seq 1 50" },
+            },
+          ],
+        },
+      },
+      ctx,
+    );
+    const longOut = Array.from({ length: 40 }, (_, i) => `line-${i + 1}`).join(
+      "\n",
+    );
+    const done = backend.parseLine(
+      {
+        type: "user",
+        message: {
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "bash_1",
+              content: longOut,
+            },
+          ],
+        },
+      },
+      ctx,
+    );
+    expect(done[0]).toMatchObject({ kind: "tool_done", name: "Bash" });
+    expect((done[0] as { detail: string }).detail).toContain("line-1");
+    expect((done[0] as { detail: string }).detail).toContain("line-40");
+    expect((done[0] as { detail: string }).detail.length).toBeGreaterThan(160);
   });
 
   it("maps nested subagent tools via parent_tool_use_id", () => {

@@ -21,11 +21,15 @@ function extractText(message: unknown): string {
     .join("");
 }
 
+/** Max chars of tool result text we persist into chat content. */
+export const TOOL_RESULT_DETAIL_LIMIT = 8_000;
+
 function toolInfo(toolCall: Record<string, unknown> | undefined): {
   name: string;
   detail: string;
   path?: string;
   args?: Record<string, unknown>;
+  result?: unknown;
   parentCallId?: string;
 } {
   if (!toolCall) return { name: "tool", detail: "" };
@@ -49,6 +53,7 @@ function toolInfo(toolCall: Record<string, unknown> | undefined): {
   const body = key ? (toolCall[key] as Record<string, unknown>) : undefined;
   const rawArgs = body?.args ?? body?.input ?? body?.parameters;
   const args = coerceArgsObject(rawArgs);
+  const result = body?.result;
   let detail = "";
   let path: string | undefined;
   if (args) {
@@ -64,6 +69,9 @@ function toolInfo(toolCall: Record<string, unknown> | undefined): {
         break;
       }
     }
+    // editToolCall.result.success.path is often the authoritative absolute path
+    const resultPath = pathFromToolResult(result);
+    if (!path && resultPath) path = resultPath;
     const todos = todosFromToolArgs(args);
     if (isTodoTool(name) || todos.length > 0) {
       detail = todos.length
@@ -72,9 +80,19 @@ function toolInfo(toolCall: Record<string, unknown> | undefined): {
     } else {
       detail =
         String(
-          args.command ?? args.globPattern ?? path ?? args.targetDirectory ?? "",
+          args.command ??
+            args.pattern ??
+            args.globPattern ??
+            args.glob_pattern ??
+            args.query ??
+            path ??
+            args.targetDirectory ??
+            "",
         ) || JSON.stringify(args).slice(0, 120);
     }
+  } else {
+    const resultPath = pathFromToolResult(result);
+    if (resultPath) path = resultPath;
   }
   const parentCallId =
     typeof toolCall.parentToolCallId === "string"
@@ -82,7 +100,231 @@ function toolInfo(toolCall: Record<string, unknown> | undefined): {
       : typeof toolCall.parent_tool_call_id === "string"
         ? (toolCall.parent_tool_call_id as string)
         : undefined;
-  return { name, detail, path, args, parentCallId };
+  return { name, detail, path, args, result, parentCallId };
+}
+
+/** Unwrap CLI `{success:{…}}` / SDK `{status,value}` / bare object result shapes. */
+export function unwrapToolResultPayload(result: unknown): Record<string, unknown> | null {
+  if (!result || typeof result !== "object") return null;
+  const r = result as Record<string, unknown>;
+  if (r.success && typeof r.success === "object") {
+    return r.success as Record<string, unknown>;
+  }
+  if (r.failure && typeof r.failure === "object") {
+    return r.failure as Record<string, unknown>;
+  }
+  if (r.error && typeof r.error === "object") {
+    return r.error as Record<string, unknown>;
+  }
+  if (
+    (r.status === "success" || r.status === "error" || r.status === "failure") &&
+    r.value &&
+    typeof r.value === "object"
+  ) {
+    return r.value as Record<string, unknown>;
+  }
+  return r;
+}
+
+function pathFromToolResult(result: unknown): string | undefined {
+  const payload = unwrapToolResultPayload(result);
+  if (!payload) return undefined;
+  for (const k of ["path", "filePath", "file_path", "target_file"]) {
+    if (typeof payload[k] === "string" && String(payload[k]).trim()) {
+      return String(payload[k]).trim();
+    }
+  }
+  return undefined;
+}
+
+function truncateDetail(text: string, limit = TOOL_RESULT_DETAIL_LIMIT): string {
+  if (text.length <= limit) return text;
+  return `${text.slice(0, limit)}\n…(truncated)`;
+}
+
+/**
+ * Human-readable tool output for chat. Prefers completed `result` payloads
+ * (stdout, file content, diff summary) over the start-time args summary.
+ */
+export function formatToolResultDetail(
+  name: string,
+  args: Record<string, unknown> | undefined,
+  result: unknown,
+  fallback = "",
+): string {
+  const payload = unwrapToolResultPayload(result);
+  if (payload) {
+    if (typeof payload.stdout === "string" || typeof payload.stderr === "string") {
+      const stdout = typeof payload.stdout === "string" ? payload.stdout : "";
+      const stderr = typeof payload.stderr === "string" ? payload.stderr : "";
+      const exit =
+        typeof payload.exitCode === "number"
+          ? `exit ${payload.exitCode}`
+          : typeof payload.exit_code === "number"
+            ? `exit ${payload.exit_code}`
+            : "";
+      const parts = [stdout, stderr].filter((s) => s.trim().length > 0);
+      const body = parts.join(parts.length === 2 ? "\n--- stderr ---\n" : "");
+      if (body.trim()) {
+        return truncateDetail(exit ? `${exit}\n${body}` : body);
+      }
+      if (exit) return exit;
+    }
+
+    if (typeof payload.content === "string" && payload.content.length > 0) {
+      return truncateDetail(payload.content);
+    }
+    if (typeof payload.resultForModel === "string" && payload.resultForModel.trim()) {
+      const linesAdded =
+        typeof payload.linesAdded === "number" ? payload.linesAdded : undefined;
+      const linesRemoved =
+        typeof payload.linesRemoved === "number" ? payload.linesRemoved : undefined;
+      const stats =
+        linesAdded != null || linesRemoved != null
+          ? ` (+${linesAdded ?? 0}/-${linesRemoved ?? 0})`
+          : "";
+      return truncateDetail(`${payload.resultForModel}${stats}`);
+    }
+    if (typeof payload.diffString === "string" && payload.diffString.trim()) {
+      const path =
+        (typeof payload.path === "string" && payload.path) ||
+        (args && typeof args.path === "string" && args.path) ||
+        "file";
+      const linesAdded =
+        typeof payload.linesAdded === "number" ? payload.linesAdded : undefined;
+      const linesRemoved =
+        typeof payload.linesRemoved === "number" ? payload.linesRemoved : undefined;
+      if (linesAdded != null || linesRemoved != null) {
+        return `${path} (+${linesAdded ?? 0}/-${linesRemoved ?? 0})`;
+      }
+      return path;
+    }
+    if (typeof payload.errorMessage === "string" && payload.errorMessage.trim()) {
+      return truncateDetail(payload.errorMessage);
+    }
+    if (Array.isArray(payload.content)) {
+      const text = payload.content
+        .map((item) => {
+          if (typeof item === "string") return item;
+          if (!item || typeof item !== "object") return "";
+          const o = item as Record<string, unknown>;
+          if (typeof o.text === "string") return o.text;
+          if (o.text && typeof o.text === "object") {
+            const inner = (o.text as { text?: unknown }).text;
+            if (typeof inner === "string") return inner;
+          }
+          if (typeof o.content === "string") return o.content;
+          return "";
+        })
+        .filter(Boolean)
+        .join("\n");
+      if (text.trim()) return truncateDetail(text);
+    }
+    if (Array.isArray(payload.entries)) {
+      return truncateDetail(
+        payload.entries
+          .map((e) => (typeof e === "string" ? e : JSON.stringify(e)))
+          .join("\n"),
+      );
+    }
+    if (Array.isArray(payload.files)) {
+      return truncateDetail(
+        payload.files
+          .map((e) => (typeof e === "string" ? e : JSON.stringify(e)))
+          .join("\n"),
+      );
+    }
+    if (Array.isArray(payload.matches)) {
+      try {
+        return truncateDetail(JSON.stringify(payload.matches, null, 2));
+      } catch {
+        /* fall through */
+      }
+    }
+    if (typeof payload.linesCreated === "number") {
+      const path =
+        (typeof payload.path === "string" && payload.path) ||
+        (args && typeof args.path === "string" && args.path) ||
+        "file";
+      return `${path} · ${payload.linesCreated} lines`;
+    }
+  }
+
+  if (typeof result === "string" && result.trim()) {
+    return truncateDetail(result);
+  }
+
+  // Fall back to args summary (start-time detail) when result has no text.
+  if (args) {
+    const todos = todosFromToolArgs(args);
+    if (isTodoTool(name) || todos.length > 0) {
+      return todos.length
+        ? `${todos.length} todo${todos.length === 1 ? "" : "s"} · ${todoStatusSummary(todos)}`
+        : "Updating todos";
+    }
+  }
+  return fallback || "Done";
+}
+
+/**
+ * Pull a unified diff out of a completed tool `result` payload.
+ * Cursor editToolCall puts the real patch in `result.success.diffString`.
+ */
+export function diffFromToolResult(result: unknown, pathHint?: string): string {
+  const payload = unwrapToolResultPayload(result);
+  if (!payload) return "";
+
+  const ready =
+    (typeof payload.diffString === "string" && payload.diffString) ||
+    (typeof payload.diff === "string" && payload.diff) ||
+    (typeof payload.unifiedDiff === "string" && payload.unifiedDiff) ||
+    (typeof payload.unified_diff === "string" && payload.unified_diff) ||
+    (typeof payload.patch === "string" && payload.patch) ||
+    "";
+  if (ready && /diff --git|@@ /.test(ready)) {
+    return ready.trim();
+  }
+  // editToolCall often emits a short hunk without git headers — wrap it.
+  if (typeof payload.diffString === "string" && payload.diffString.trim()) {
+    const path =
+      (typeof payload.path === "string" && payload.path) ||
+      pathHint ||
+      "file";
+    const body = payload.diffString.trim();
+    if (body.startsWith("diff --git") || body.includes("\n@@ ") || body.startsWith("@@ ")) {
+      if (body.startsWith("diff --git")) return body;
+      return [
+        `diff --git a/${path} b/${path}`,
+        `--- a/${path}`,
+        `+++ b/${path}`,
+        body.startsWith("@@") ? body : `@@ -1,1 +1,1 @@\n${body}`,
+      ].join("\n");
+    }
+    // Line-oriented +/- dump without hunk header
+    if (/^[+-]/m.test(body) || body.includes("\n+") || body.includes("\n-")) {
+      const lines = body.split("\n");
+      return [
+        `diff --git a/${path} b/${path}`,
+        `--- a/${path}`,
+        `+++ b/${path}`,
+        `@@ -1,${lines.filter((l) => l.startsWith("-")).length || 0} +1,${lines.filter((l) => l.startsWith("+")).length || 0} @@`,
+        body,
+      ].join("\n");
+    }
+  }
+
+  const after =
+    (typeof payload.afterFullFileContent === "string" &&
+      payload.afterFullFileContent) ||
+    (typeof payload.afterContent === "string" && payload.afterContent) ||
+    undefined;
+  if (typeof after === "string") {
+    const path =
+      (typeof payload.path === "string" && payload.path) || pathHint || "file";
+    return buildUnifiedDiff(path, "", after);
+  }
+
+  return "";
 }
 
 function buildUnifiedDiff(
@@ -124,33 +366,155 @@ export function diffFromToolArgs(
     (typeof args.path === "string" && args.path) ||
     (typeof args.file_path === "string" && args.file_path) ||
     (typeof args.target_file === "string" && args.target_file) ||
+    (typeof args.filePath === "string" && args.filePath) ||
     "file";
   const name = toolName.replace(/ToolCall$/i, "").toLowerCase();
+
+  // Flat StrReplace / Edit args (Claude + older Cursor)
   const oldStr =
     (typeof args.old_string === "string" && args.old_string) ||
     (typeof args.oldString === "string" && args.oldString) ||
+    (typeof args.old_str === "string" && args.old_str) ||
+    (typeof args.OldString === "string" && args.OldString) ||
     undefined;
   const newStr =
     (typeof args.new_string === "string" && args.new_string) ||
     (typeof args.newString === "string" && args.newString) ||
+    (typeof args.new_str === "string" && args.new_str) ||
+    (typeof args.NewString === "string" && args.NewString) ||
     undefined;
   if (typeof oldStr === "string" && typeof newStr === "string") {
     return buildUnifiedDiff(path, oldStr, newStr);
   }
+
+  // Cursor editToolCall nested strategies
+  const strReplace =
+    args.strReplace && typeof args.strReplace === "object"
+      ? (args.strReplace as Record<string, unknown>)
+      : null;
+  if (strReplace) {
+    const oldText =
+      (typeof strReplace.oldText === "string" && strReplace.oldText) ||
+      (typeof strReplace.old_string === "string" && strReplace.old_string) ||
+      undefined;
+    const newText =
+      (typeof strReplace.newText === "string" && strReplace.newText) ||
+      (typeof strReplace.new_string === "string" && strReplace.new_string) ||
+      undefined;
+    if (typeof oldText === "string" && typeof newText === "string") {
+      return buildUnifiedDiff(path, oldText, newText);
+    }
+  }
+
+  const multi =
+    args.multiStrReplace && typeof args.multiStrReplace === "object"
+      ? (args.multiStrReplace as Record<string, unknown>)
+      : null;
+  if (multi && Array.isArray(multi.edits)) {
+    const parts: string[] = [];
+    for (const edit of multi.edits) {
+      if (!edit || typeof edit !== "object") continue;
+      const e = edit as Record<string, unknown>;
+      const o =
+        (typeof e.oldText === "string" && e.oldText) ||
+        (typeof e.old_string === "string" && e.old_string) ||
+        undefined;
+      const n =
+        (typeof e.newText === "string" && e.newText) ||
+        (typeof e.new_string === "string" && e.new_string) ||
+        undefined;
+      if (typeof o === "string" && typeof n === "string") {
+        const hunk = buildUnifiedDiff(path, o, n);
+        if (hunk) parts.push(hunk);
+      }
+    }
+    if (parts.length) return parts.join("\n");
+  }
+
+  const applyPatch =
+    args.applyPatch && typeof args.applyPatch === "object"
+      ? (args.applyPatch as Record<string, unknown>)
+      : null;
+  if (applyPatch) {
+    const patchContent =
+      (typeof applyPatch.patchContent === "string" && applyPatch.patchContent) ||
+      (typeof applyPatch.patch === "string" && applyPatch.patch) ||
+      "";
+    if (patchContent && /diff --git|@@ /.test(patchContent)) {
+      return patchContent.trim();
+    }
+    if (patchContent.trim()) {
+      return [
+        `diff --git a/${path} b/${path}`,
+        `--- a/${path}`,
+        `+++ b/${path}`,
+        patchContent.trim().startsWith("@@")
+          ? patchContent.trim()
+          : `@@\n${patchContent.trim()}`,
+      ].join("\n");
+    }
+  }
+
+  // writeToolCall uses fileText (CLI) or contents/content
   const contents =
+    (typeof args.fileText === "string" && args.fileText) ||
+    (typeof args.file_text === "string" && args.file_text) ||
     (typeof args.contents === "string" && args.contents) ||
     (typeof args.content === "string" && args.content) ||
+    (typeof args.new_contents === "string" && args.new_contents) ||
+    (typeof args.newContents === "string" && args.newContents) ||
+    (typeof args.text === "string" && args.text) ||
     undefined;
   if (
     typeof contents === "string" &&
-    /^(write|create|updatefile|writefile)/i.test(name)
+    /^(write|create|updatefile|writefile|editnotebook)/i.test(name)
   ) {
     return buildUnifiedDiff(path, "", contents);
   }
+  // Bare edit with only full contents (some agents)
+  if (
+    typeof contents === "string" &&
+    name === "edit" &&
+    !strReplace &&
+    !multi &&
+    !applyPatch
+  ) {
+    return buildUnifiedDiff(path, "", contents);
+  }
+
   if (typeof args.patch === "string" && /diff --git|@@ /.test(args.patch)) {
     return args.patch.trim();
   }
+  if (
+    typeof args.unifiedDiff === "string" &&
+    /diff --git|@@ /.test(args.unifiedDiff)
+  ) {
+    return args.unifiedDiff.trim();
+  }
+  if (
+    typeof args.unified_diff === "string" &&
+    /diff --git|@@ /.test(args.unified_diff)
+  ) {
+    return args.unified_diff.trim();
+  }
+  if (/^delete/i.test(name)) {
+    return buildUnifiedDiff(path, `/* deleted: ${path} */\n`, "");
+  }
   return "";
+}
+
+/** Prefer result.diffString, then synthesize from args. */
+export function diffFromToolEvent(
+  toolName: string,
+  args?: Record<string, unknown>,
+  result?: unknown,
+): string {
+  const fromResult = diffFromToolResult(
+    result,
+    args && typeof args.path === "string" ? args.path : undefined,
+  );
+  if (fromResult) return fromResult;
+  return diffFromToolArgs(toolName, args);
 }
 
 const EDIT_TOOL_RE =
@@ -424,26 +788,40 @@ export class CursorAgentBackend implements WorkerBackend {
       }
       const todos = info.args ? todosFromToolArgs(info.args) : [];
       const todoTool = isTodoTool(info.name) || todos.length > 0;
+      const toolName =
+        todoTool && !isTodoTool(info.name) ? "todo" : info.name;
       if (ev.subtype === "started") {
         out.push({
           kind: "tool_start",
           callId,
-          name: todoTool && !isTodoTool(info.name) ? "todo" : info.name,
+          name: toolName,
           detail: info.detail,
           path: info.path,
           todos: todos.length ? todos : undefined,
         });
       } else if (ev.subtype === "completed") {
+        const path = info.path || pathFromToolResult(info.result);
+        const detail = formatToolResultDetail(
+          info.name,
+          info.args,
+          info.result,
+          info.detail || path || "Done",
+        );
+        const fromResult = !todoTool
+          ? diffFromToolResult(info.result, path)
+          : "";
         const diffPatch =
-          isEditTool(info.name) && info.args
+          fromResult ||
+          (!todoTool && isEditTool(info.name)
             ? diffFromToolArgs(info.name, info.args)
-            : undefined;
+            : "") ||
+          undefined;
         out.push({
           kind: "tool_done",
           callId,
-          name: todoTool && !isTodoTool(info.name) ? "todo" : info.name,
-          detail: info.detail,
-          path: info.path,
+          name: toolName,
+          detail,
+          path,
           diffPatch: diffPatch || undefined,
           todos: todos.length ? todos : undefined,
         });

@@ -10,7 +10,16 @@ export type {
   RunGitInfo,
   WorkerBackend,
 } from "./types.js";
-export { CursorAgentBackend, cursorAgentBackend, isEditTool, diffFromToolArgs } from "./cursor.js";
+export {
+  CursorAgentBackend,
+  cursorAgentBackend,
+  isEditTool,
+  diffFromToolArgs,
+  diffFromToolResult,
+  diffFromToolEvent,
+  formatToolResultDetail,
+  unwrapToolResultPayload,
+} from "./cursor.js";
 export { ClaudeCodeBackend, claudeCodeBackend };
 
 /** Singletons for availability checks / UI. Cursor is stateless; Claude is not. */

@@ -13,7 +13,11 @@ import {
   todoStatusSummary,
   todosFromToolArgs,
 } from "../shared/backends/cursor.js";
-import { diffFromToolArgs, isEditTool } from "./gitDiff.js";
+import {
+  diffFromToolEvent,
+  formatToolResultDetail,
+  unwrapToolResultPayload,
+} from "../shared/backends/cursor.js";
 
 export interface RunGitInfo {
   branches: Array<{
@@ -295,8 +299,15 @@ export class SdkAgentSession {
             event.args && typeof event.args === "object"
               ? (event.args as Record<string, unknown>)
               : undefined;
-          const detail = toolDetail(event.name, event.args);
-          const path = toolPath(event.args);
+          const result =
+            "result" in event ? (event as { result?: unknown }).result : undefined;
+          const startDetail = toolDetail(event.name, event.args);
+          const resultPayload = unwrapToolResultPayload(result);
+          const pathFromResult =
+            resultPayload && typeof resultPayload.path === "string"
+              ? resultPayload.path.trim()
+              : undefined;
+          const path = toolPath(event.args) || pathFromResult || undefined;
           const todos = args ? todosFromToolArgs(args) : [];
           const toolName =
             todos.length > 0 && !isTodoTool(event.name) ? "todo" : event.name;
@@ -305,20 +316,26 @@ export class SdkAgentSession {
               kind: "tool_start",
               callId: event.call_id,
               name: toolName,
-              detail,
+              detail: startDetail,
               path,
               todos: todos.length ? todos : undefined,
             });
           } else {
-            const diffPatch =
-              isEditTool(event.name) && args
-                ? diffFromToolArgs(event.name, args)
-                : undefined;
+            const detail = formatToolResultDetail(
+              event.name,
+              args,
+              result,
+              startDetail ||
+                (event.status === "error" ? "error" : path || "done"),
+            );
+            const diffPatch = !todos.length
+              ? diffFromToolEvent(event.name, args, result)
+              : undefined;
             item.onEvent({
               kind: "tool_done",
               callId: event.call_id,
               name: toolName,
-              detail: detail || (event.status === "error" ? "error" : "done"),
+              detail,
               path,
               diffPatch: diffPatch || undefined,
               todos: todos.length ? todos : undefined,
