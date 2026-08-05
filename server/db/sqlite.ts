@@ -10,6 +10,7 @@ import type {
   ChatMessage,
   SteerLogEntry,
 } from "../../shared/events.js";
+import type { ApprovalStatus } from "../../shared/approvals.js";
 
 function newId(prefix = ""): string {
   return `${prefix}${randomBytes(8).toString("hex")}`;
@@ -65,7 +66,8 @@ db.exec(`
     key_hint TEXT,
     owner_id TEXT,
     org_id TEXT,
-    control_mode TEXT NOT NULL DEFAULT 'open'
+    control_mode TEXT NOT NULL DEFAULT 'open',
+    approval_mode TEXT NOT NULL DEFAULT 'off'
   );
 
   CREATE TABLE IF NOT EXISTS steer_messages (
@@ -88,7 +90,8 @@ db.exec(`
     diff_patch TEXT,
     todos_json TEXT,
     status TEXT NOT NULL DEFAULT 'done',
-    ts INTEGER NOT NULL
+    ts INTEGER NOT NULL,
+    sender_user_id TEXT
   );
 
   CREATE TABLE IF NOT EXISTS settings (
@@ -165,7 +168,8 @@ db.exec(`
     pr_url TEXT,
     created_by TEXT,
     created_at INTEGER NOT NULL,
-    sort_order INTEGER NOT NULL DEFAULT 0
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    plan_mode INTEGER NOT NULL DEFAULT 0
   );
 
   CREATE TABLE IF NOT EXISTS agent_drivers (
@@ -212,10 +216,26 @@ db.exec(`
     expires_at INTEGER
   );
 
+  CREATE TABLE IF NOT EXISTS approval_requests (
+    id TEXT PRIMARY KEY,
+    room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    agent_id TEXT NOT NULL,
+    call_id TEXT NOT NULL,
+    tool_name TEXT NOT NULL,
+    detail TEXT NOT NULL DEFAULT '',
+    path TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    created_at INTEGER NOT NULL,
+    decided_at INTEGER,
+    decided_by_user_id TEXT,
+    decided_by_name TEXT
+  );
+
   CREATE INDEX IF NOT EXISTS idx_steer_room_ts ON steer_messages(room_id, ts);
   CREATE INDEX IF NOT EXISTS idx_messages_room_ts ON messages(room_id, ts);
   CREATE INDEX IF NOT EXISTS idx_agents_room ON agents(room_id, sort_order);
   CREATE INDEX IF NOT EXISTS idx_org_members_user ON organization_members(user_id);
+  CREATE INDEX IF NOT EXISTS idx_approval_requests_room_status ON approval_requests(room_id, status);
 `);
 
 const migrations = [
@@ -238,6 +258,9 @@ const migrations = [
   `ALTER TABLE rooms ADD COLUMN org_id TEXT`,
   `ALTER TABLE rooms ADD COLUMN control_mode TEXT NOT NULL DEFAULT 'open'`,
   `ALTER TABLE invite_links ADD COLUMN role TEXT NOT NULL DEFAULT 'viewer'`,
+  `ALTER TABLE rooms ADD COLUMN approval_mode TEXT NOT NULL DEFAULT 'off'`,
+  `ALTER TABLE agents ADD COLUMN plan_mode INTEGER NOT NULL DEFAULT 0`,
+  `ALTER TABLE messages ADD COLUMN sender_user_id TEXT`,
 ];
 
 for (const sql of migrations) {
@@ -329,18 +352,43 @@ try {
   // ignore
 }
 
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS approval_requests (
+      id TEXT PRIMARY KEY,
+      room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+      agent_id TEXT NOT NULL,
+      call_id TEXT NOT NULL,
+      tool_name TEXT NOT NULL,
+      detail TEXT NOT NULL DEFAULT '',
+      path TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at INTEGER NOT NULL,
+      decided_at INTEGER,
+      decided_by_user_id TEXT,
+      decided_by_name TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_approval_requests_room_status ON approval_requests(room_id, status);
+  `);
+} catch {
+  // ignore
+}
+
 const stmts = {
   insertRoom: db.prepare(`
     INSERT INTO rooms (
       id, name, repo_path, agent_command, created_at, last_active_at, status,
       runtime, auth_mode, model_id, repo_url, starting_ref, cursor_agent_id,
       cursor_session_id, pr_url, auto_create_pr, key_ciphertext, key_hint, owner_id, org_id,
-      control_mode
-    ) VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      control_mode, approval_mode
+    ) VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `),
   updateRoomOwner: db.prepare(`UPDATE rooms SET owner_id = ? WHERE id = ?`),
   updateControlMode: db.prepare(
     `UPDATE rooms SET control_mode = ? WHERE id = ?`,
+  ),
+  updateApprovalMode: db.prepare(
+    `UPDATE rooms SET approval_mode = ? WHERE id = ?`,
   ),
   listRooms: db.prepare(`SELECT * FROM rooms ORDER BY last_active_at DESC`),
   getRoom: db.prepare(`SELECT * FROM rooms WHERE id = ?`),
@@ -369,8 +417,8 @@ const stmts = {
     ORDER BY ts DESC LIMIT ?
   `),
   insertMessage: db.prepare(`
-    INSERT INTO messages (id, room_id, role, content, sender_name, sender_color, tool_name, diff_patch, todos_json, status, ts, agent_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO messages (id, room_id, role, content, sender_name, sender_color, tool_name, diff_patch, todos_json, status, ts, agent_id, sender_user_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `),
   updateMessageContent: db.prepare(
     `UPDATE messages SET content = ?, status = ? WHERE id = ?`,
@@ -400,8 +448,8 @@ const stmts = {
   insertAgent: db.prepare(`
     INSERT INTO agents (
       id, room_id, backend, label, scope_path, session_id, sdk_agent_id,
-      model_id, status, branch, pr_url, created_by, created_at, sort_order
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      model_id, status, branch, pr_url, created_by, created_at, sort_order, plan_mode
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `),
   getAgent: db.prepare(`SELECT * FROM agents WHERE id = ?`),
   listAgents: db.prepare(`
@@ -412,6 +460,9 @@ const stmts = {
   updateAgentSdkId: db.prepare(`UPDATE agents SET sdk_agent_id = ? WHERE id = ?`),
   updateAgentModel: db.prepare(`UPDATE agents SET model_id = ? WHERE id = ?`),
   updateAgentLabel: db.prepare(`UPDATE agents SET label = ? WHERE id = ?`),
+  updateAgentPlanMode: db.prepare(
+    `UPDATE agents SET plan_mode = ? WHERE id = ?`,
+  ),
   updateAgentScope: db.prepare(`UPDATE agents SET scope_path = ? WHERE id = ?`),
   updateAgentPr: db.prepare(`UPDATE agents SET pr_url = ?, branch = ? WHERE id = ?`),
   deleteAgent: db.prepare(`DELETE FROM agents WHERE id = ?`),
@@ -628,6 +679,25 @@ const stmts = {
       AND (max_uses IS NULL OR use_count < max_uses)
       AND (expires_at IS NULL OR expires_at > ?)
   `),
+
+  insertApprovalRequest: db.prepare(`
+    INSERT INTO approval_requests (
+      id, room_id, agent_id, call_id, tool_name, detail, path, status, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+  `),
+  getApprovalRequest: db.prepare(`SELECT * FROM approval_requests WHERE id = ?`),
+  listPendingApprovals: db.prepare(`
+    SELECT * FROM approval_requests WHERE room_id = ? AND status = 'pending'
+    ORDER BY created_at ASC
+  `),
+  resolveApprovalRequest: db.prepare(`
+    UPDATE approval_requests
+    SET status = ?, decided_at = ?, decided_by_user_id = ?, decided_by_name = ?
+    WHERE id = ?
+  `),
+  expireApprovalRequest: db.prepare(`
+    UPDATE approval_requests SET status = 'expired', decided_at = ? WHERE id = ?
+  `),
 };
 
 export interface RoomRow {
@@ -652,6 +722,7 @@ export interface RoomRow {
   owner_id: string | null;
   org_id: string | null;
   control_mode: string;
+  approval_mode: string;
 }
 
 export interface CreateRoomInput {
@@ -673,6 +744,7 @@ export interface CreateRoomInput {
   ownerId?: string | null;
   orgId?: string | null;
   controlMode?: string | null;
+  approvalMode?: string;
 }
 
 export type OrgRoleRow = "owner" | "admin" | "member";
@@ -730,6 +802,7 @@ function rowToMessage(r: {
   status: string;
   ts: number;
   agent_id?: string | null;
+  sender_user_id?: string | null;
 }): ChatMessage {
   return {
     id: r.id,
@@ -744,6 +817,7 @@ function rowToMessage(r: {
     status: r.status as ChatMessage["status"],
     ts: r.ts,
     agentId: r.agent_id || undefined,
+    senderUserId: r.sender_user_id || undefined,
   };
 }
 
@@ -762,6 +836,7 @@ export interface AgentRow {
   created_by: string | null;
   created_at: number;
   sort_order: number;
+  plan_mode: number;
 }
 
 export interface CreateAgentInput {
@@ -778,6 +853,7 @@ export interface CreateAgentInput {
   prUrl?: string | null;
   createdBy?: string | null;
   sortOrder?: number;
+  planMode?: boolean;
 }
 
 export function createRoom(input: CreateRoomInput): RoomRow {
@@ -806,6 +882,7 @@ export function createRoom(input: CreateRoomInput): RoomRow {
     input.ownerId ?? null,
     input.orgId ?? null,
     controlMode,
+    input.approvalMode?.trim() || "off",
   );
   return stmts.getRoom.get(input.id) as RoomRow;
 }
@@ -818,6 +895,10 @@ export function setRoomControlMode(roomId: string, controlMode: string): void {
   stmts.updateControlMode.run(controlMode, roomId);
 }
 
+export function setRoomApprovalMode(roomId: string, approvalMode: string): void {
+  stmts.updateApprovalMode.run(approvalMode, roomId);
+}
+
 export function listRooms(): RoomRow[] {
   return stmts.listRooms.all() as RoomRow[];
 }
@@ -826,6 +907,7 @@ export function getRoom(id: string): RoomRow | undefined {
   const row = stmts.getRoom.get(id) as RoomRow | undefined;
   if (!row) return undefined;
   if (!row.control_mode) row.control_mode = "open";
+  if (!row.approval_mode) row.approval_mode = "off";
   return row;
 }
 
@@ -912,6 +994,7 @@ export function insertMessage(msg: ChatMessage): void {
     msg.status,
     msg.ts,
     msg.agentId ?? null,
+    msg.senderUserId ?? null,
   );
 }
 
@@ -966,6 +1049,7 @@ export function getMessages(roomId: string, limit = 500): ChatMessage[] {
     status: string;
     ts: number;
     agent_id: string | null;
+    sender_user_id: string | null;
   }>;
   // Query is newest-first (LIMIT); chat UI expects chronological order.
   return rows.map(rowToMessage).reverse();
@@ -1397,6 +1481,7 @@ function rowToAgent(r: Record<string, unknown>): AgentRow {
     created_by: (r.created_by as string) ?? null,
     created_at: r.created_at as number,
     sort_order: (r.sort_order as number) ?? 0,
+    plan_mode: (r.plan_mode as number) ?? 0,
   };
 }
 
@@ -1422,6 +1507,7 @@ export function createAgent(input: CreateAgentInput): AgentRow {
     input.createdBy ?? null,
     now,
     sortOrder,
+    input.planMode ? 1 : 0,
   );
   return stmts.getAgent.get(id) as AgentRow;
 }
@@ -1458,6 +1544,10 @@ export function setAgentModel(id: string, modelId: string): void {
 
 export function setAgentLabel(id: string, label: string): void {
   stmts.updateAgentLabel.run(label, id);
+}
+
+export function setAgentPlanMode(id: string, planMode: boolean): void {
+  stmts.updateAgentPlanMode.run(planMode ? 1 : 0, id);
 }
 
 export function setAgentScope(id: string, scopePath: string | null): void {
@@ -1569,6 +1659,78 @@ export function deleteExpiredFileLocksForRoom(
   now: number,
 ): void {
   stmts.deleteExpiredFileLocksForRoom.run(roomId, now);
+}
+
+// --- Approval requests ---
+
+export interface ApprovalRequestRow {
+  id: string;
+  room_id: string;
+  agent_id: string;
+  call_id: string;
+  tool_name: string;
+  detail: string;
+  path: string | null;
+  status: ApprovalStatus;
+  created_at: number;
+  decided_at: number | null;
+  decided_by_user_id: string | null;
+  decided_by_name: string | null;
+}
+
+export interface CreateApprovalRequestInput {
+  id?: string;
+  roomId: string;
+  agentId: string;
+  callId: string;
+  toolName: string;
+  detail?: string;
+  path?: string | null;
+}
+
+export function createApprovalRequest(
+  input: CreateApprovalRequestInput,
+): ApprovalRequestRow {
+  const id = input.id || newId("apr_");
+  stmts.insertApprovalRequest.run(
+    id,
+    input.roomId,
+    input.agentId,
+    input.callId,
+    input.toolName,
+    input.detail ?? "",
+    input.path ?? null,
+    Date.now(),
+  );
+  return stmts.getApprovalRequest.get(id) as ApprovalRequestRow;
+}
+
+export function getApprovalRequest(id: string): ApprovalRequestRow | undefined {
+  return stmts.getApprovalRequest.get(id) as ApprovalRequestRow | undefined;
+}
+
+export function listPendingApprovals(roomId: string): ApprovalRequestRow[] {
+  return stmts.listPendingApprovals.all(roomId) as ApprovalRequestRow[];
+}
+
+export function resolveApprovalRequest(
+  id: string,
+  status: "approved" | "denied",
+  decidedByUserId: string,
+  decidedByName: string,
+): ApprovalRequestRow | undefined {
+  stmts.resolveApprovalRequest.run(
+    status,
+    Date.now(),
+    decidedByUserId,
+    decidedByName,
+    id,
+  );
+  return getApprovalRequest(id);
+}
+
+export function expireApprovalRequest(id: string): void {
+  stmts.expireApprovalRequest.run(Date.now(), id);
 }
 
 export function migrateAgentsV1(): void {
