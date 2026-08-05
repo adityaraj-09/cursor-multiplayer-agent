@@ -40,7 +40,9 @@ async function initSchema() {
       owner_id TEXT,
       org_id TEXT,
       control_mode TEXT NOT NULL DEFAULT 'open',
-      approval_mode TEXT NOT NULL DEFAULT 'off'
+      approval_mode TEXT NOT NULL DEFAULT 'off',
+      slack_webhook_ciphertext TEXT,
+      slack_webhook_hint TEXT
     );
 
     CREATE TABLE IF NOT EXISTS steer_messages (
@@ -221,6 +223,33 @@ async function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_approval_requests_room_status ON approval_requests(room_id, status);
   `);
 
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS room_pings (
+      id TEXT PRIMARY KEY,
+      room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+      actor_user_id TEXT NOT NULL,
+      actor_name TEXT NOT NULL,
+      note TEXT NOT NULL DEFAULT '',
+      targets TEXT NOT NULL DEFAULT 'everyone',
+      status TEXT NOT NULL DEFAULT 'open',
+      created_at BIGINT NOT NULL
+    );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS room_ping_acks (
+      ping_id TEXT NOT NULL REFERENCES room_pings(id) ON DELETE CASCADE,
+      user_id TEXT NOT NULL,
+      user_name TEXT NOT NULL,
+      acked_at BIGINT NOT NULL,
+      PRIMARY KEY (ping_id, user_id)
+    );
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_room_pings_room_status ON room_pings(room_id, status);
+  `);
+
   const migrations = [
     `ALTER TABLE rooms ADD COLUMN IF NOT EXISTS cursor_session_id TEXT`,
     `ALTER TABLE rooms ADD COLUMN IF NOT EXISTS runtime TEXT NOT NULL DEFAULT 'local'`,
@@ -244,6 +273,8 @@ async function initSchema() {
     `ALTER TABLE rooms ADD COLUMN IF NOT EXISTS approval_mode TEXT NOT NULL DEFAULT 'off'`,
     `ALTER TABLE agents ADD COLUMN IF NOT EXISTS plan_mode INTEGER NOT NULL DEFAULT 0`,
     `ALTER TABLE messages ADD COLUMN IF NOT EXISTS sender_user_id TEXT`,
+    `ALTER TABLE rooms ADD COLUMN IF NOT EXISTS slack_webhook_ciphertext TEXT`,
+    `ALTER TABLE rooms ADD COLUMN IF NOT EXISTS slack_webhook_hint TEXT`,
   ];
 
   for (const sql of migrations) {
@@ -307,6 +338,8 @@ export interface RoomRow {
   org_id: string | null;
   control_mode: string;
   approval_mode: string;
+  slack_webhook_ciphertext: string | null;
+  slack_webhook_hint: string | null;
 }
 
 export interface CreateRoomInput {
@@ -384,6 +417,8 @@ function pgRowToRoom(r: Record<string, unknown>): RoomRow {
     org_id: (r.org_id as string) ?? null,
     control_mode: ((r.control_mode as string) || "open"),
     approval_mode: ((r.approval_mode as string) || "off"),
+    slack_webhook_ciphertext: (r.slack_webhook_ciphertext as string) ?? null,
+    slack_webhook_hint: (r.slack_webhook_hint as string) ?? null,
   };
 }
 
@@ -549,6 +584,24 @@ export function setRoomApprovalMode(roomId: string, approvalMode: string): void 
     approvalMode,
     roomId,
   ]);
+}
+
+export function setRoomSlackWebhook(
+  roomId: string,
+  ciphertext: string,
+  hint: string,
+): void {
+  syncQuery(
+    `UPDATE rooms SET slack_webhook_ciphertext = $1, slack_webhook_hint = $2 WHERE id = $3`,
+    [ciphertext, hint, roomId],
+  );
+}
+
+export function clearRoomSlackWebhook(roomId: string): void {
+  syncQuery(
+    `UPDATE rooms SET slack_webhook_ciphertext = NULL, slack_webhook_hint = NULL WHERE id = $1`,
+    [roomId],
+  );
 }
 
 export function listRooms(): RoomRow[] {
@@ -1731,6 +1784,128 @@ export function expireApprovalRequest(id: string): void {
     `UPDATE approval_requests SET status = 'expired', decided_at = $1 WHERE id = $2`,
     [Date.now(), id],
   );
+}
+
+// --- Room review pings ---
+
+export type RoomPingStatus = "open" | "dismissed";
+
+export interface RoomPingRow {
+  id: string;
+  room_id: string;
+  actor_user_id: string;
+  actor_name: string;
+  note: string;
+  targets: string;
+  status: RoomPingStatus;
+  created_at: number;
+}
+
+export interface RoomPingAckRow {
+  ping_id: string;
+  user_id: string;
+  user_name: string;
+  acked_at: number;
+}
+
+export interface CreateRoomPingInput {
+  id?: string;
+  roomId: string;
+  actorUserId: string;
+  actorName: string;
+  note?: string;
+  targets?: "everyone" | string[];
+}
+
+function rowToRoomPing(r: Record<string, unknown>): RoomPingRow {
+  return {
+    id: r.id as string,
+    room_id: r.room_id as string,
+    actor_user_id: r.actor_user_id as string,
+    actor_name: r.actor_name as string,
+    note: (r.note as string) ?? "",
+    targets: (r.targets as string) || "everyone",
+    status: ((r.status as RoomPingStatus) || "open"),
+    created_at: num(r.created_at as string)!,
+  };
+}
+
+function rowToRoomPingAck(r: Record<string, unknown>): RoomPingAckRow {
+  return {
+    ping_id: r.ping_id as string,
+    user_id: r.user_id as string,
+    user_name: r.user_name as string,
+    acked_at: num(r.acked_at as string)!,
+  };
+}
+
+export function createRoomPing(input: CreateRoomPingInput): RoomPingRow {
+  const id = input.id || newId("ping_");
+  const targets =
+    !input.targets || input.targets === "everyone"
+      ? "everyone"
+      : JSON.stringify(input.targets);
+  const rows = syncQuery<Record<string, unknown>>(
+    `INSERT INTO room_pings (
+      id, room_id, actor_user_id, actor_name, note, targets, status, created_at
+    ) VALUES ($1,$2,$3,$4,$5,$6,'open',$7)
+    RETURNING *`,
+    [
+      id,
+      input.roomId,
+      input.actorUserId,
+      input.actorName,
+      (input.note || "").slice(0, 2000),
+      targets,
+      Date.now(),
+    ],
+  );
+  return rowToRoomPing(rows[0]);
+}
+
+export function getRoomPing(id: string): RoomPingRow | undefined {
+  const rows = syncQuery<Record<string, unknown>>(
+    `SELECT * FROM room_pings WHERE id = $1`,
+    [id],
+  );
+  return rows.length ? rowToRoomPing(rows[0]) : undefined;
+}
+
+export function listOpenRoomPings(roomId: string): RoomPingRow[] {
+  return syncQuery<Record<string, unknown>>(
+    `SELECT * FROM room_pings WHERE room_id = $1 AND status = 'open' ORDER BY created_at DESC`,
+    [roomId],
+  ).map(rowToRoomPing);
+}
+
+export function dismissRoomPing(id: string): RoomPingRow | undefined {
+  syncQuery(
+    `UPDATE room_pings SET status = 'dismissed' WHERE id = $1 AND status = 'open'`,
+    [id],
+  );
+  return getRoomPing(id);
+}
+
+export function ackRoomPing(
+  pingId: string,
+  userId: string,
+  userName: string,
+): boolean {
+  const rows = syncQuery<Record<string, unknown>>(
+    `INSERT INTO room_ping_acks (ping_id, user_id, user_name, acked_at)
+     VALUES ($1,$2,$3,$4)
+     ON CONFLICT (ping_id, user_id) DO NOTHING
+     RETURNING *`,
+    [pingId, userId, userName.slice(0, 80) || "Someone", Date.now()],
+  );
+  return rows.length > 0;
+}
+
+export function listRoomPingAcks(pingId: string): RoomPingAckRow[] {
+  return syncQuery<Record<string, unknown>>(
+    `SELECT * FROM room_ping_acks WHERE ping_id = $1 ORDER BY acked_at ASC`,
+    [pingId],
+  ).map(rowToRoomPingAck);
 }
 
 export function migrateAgentsV1(): void {

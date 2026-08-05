@@ -5,6 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import {
   Activity,
+  Bell,
   Bot,
   Cloud,
   Download,
@@ -22,6 +23,7 @@ import { useSocket } from "../../../hooks/useSocket";
 import { useAuth } from "../../../components/AuthProvider";
 import {
   abortRoomRun,
+  ackRoomPing,
   addRoomAgent,
   exportRoomTranscript,
   fetchOrJoinRoom,
@@ -51,10 +53,14 @@ import MemberRoster from "../../../components/MemberRoster";
 import AgentTabs from "../../../components/AgentTabs";
 import AddAgentDialog from "../../../components/AddAgentDialog";
 import LockPanel from "../../../components/LockPanel";
+import FlagForReviewDialog from "../../../components/FlagForReviewDialog";
+import ReviewPingBanner from "../../../components/ReviewPingBanner";
+import SlackConnectModal from "../../../components/SlackConnectModal";
 import type {
   ApprovalMode,
   ControlMode,
   ModelInfo,
+  PingInfo,
   RoomInfo,
   RoomMemberInfo,
 } from "../../../../shared/events";
@@ -257,6 +263,7 @@ function LiveRoom({
     fileLocks,
     lastBlocked,
     pendingApprovals,
+    openPings,
     typingByAgent,
     agentStatus,
     agentError,
@@ -272,6 +279,9 @@ function LiveRoom({
     releaseDrive,
     grantDrive,
     decideApproval,
+    flagReview,
+    ackReview,
+    dismissReview,
     leaveRoom,
     removeMember,
     dismissDriveRequest,
@@ -290,6 +300,7 @@ function LiveRoom({
       : "editor");
   const amHost = myRole === "owner";
   const canManage = Boolean(roomInfo?.myCanManage || amHost);
+  const canFlag = myRole === "owner" || myRole === "editor";
   const [models, setModels] = useState<ModelInfo[]>(FALLBACK_MODELS);
   const [modelError, setModelError] = useState("");
   const [savingModel, setSavingModel] = useState(false);
@@ -299,6 +310,9 @@ function LiveRoom({
   const [decidingApprovalId, setDecidingApprovalId] = useState<string | null>(
     null,
   );
+  const [flagOpen, setFlagOpen] = useState(false);
+  const [slackOpen, setSlackOpen] = useState(false);
+  const deepAckedRef = useRef<string | null>(null);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [rosterOpen, setRosterOpen] = useState(false);
   const [rosterMembers, setRosterMembers] = useState<RoomMemberInfo[]>([]);
@@ -371,6 +385,37 @@ function LiveRoom({
       socket.off("control-mode-updated", onControlMode);
     };
   }, [socket, roomInfo, onRoomInfo]);
+
+  // Deep-link ack from Slack: /room/:id?ping=:pingId
+  useEffect(() => {
+    if (typeof window === "undefined" || !user?.id) return;
+    const params = new URLSearchParams(window.location.search);
+    const pingId = params.get("ping");
+    if (!pingId) return;
+    if (deepAckedRef.current === pingId) return;
+    deepAckedRef.current = pingId;
+    void ackRoomPing(roomId, pingId, userName)
+      .catch((err) => {
+        console.warn(
+          "Failed to ack review ping:",
+          err instanceof Error ? err.message : err,
+        );
+      })
+      .finally(() => {
+        params.delete("ping");
+        const qs = params.toString();
+        router.replace(qs ? `/room/${roomId}?${qs}` : `/room/${roomId}`, {
+          scroll: false,
+        });
+      });
+  }, [roomId, user?.id, userName, router]);
+
+  const relevantPings: PingInfo[] = openPings.filter((ping) => {
+    if (ping.targets === "everyone") return true;
+    if (user?.id && ping.targets.includes(user.id)) return true;
+    if (user?.id && ping.actorUserId === user.id) return true;
+    return canManage;
+  });
 
   useEffect(() => {
     if (!socket || !roomInfo) return;
@@ -770,6 +815,27 @@ function LiveRoom({
               <Share2 className="h-3.5 w-3.5" strokeWidth={1.75} />
               <span className="hidden sm:inline">Invite</span>
             </button>
+            {canFlag && (
+              <button
+                type="button"
+                onClick={() => setFlagOpen(true)}
+                className="inline-flex h-8 items-center gap-1.5 px-2.5 sm:px-3 rounded-lg text-[11px] sm:text-[12px] text-[#e8a23a] hover:text-[#f0b85a] border border-[#3c3220] hover:border-[#5a4a30] bg-[#1f1a14] transition-colors"
+                title="Flag for review"
+              >
+                <Bell className="h-3.5 w-3.5" strokeWidth={1.75} />
+                <span className="hidden sm:inline">Flag</span>
+              </button>
+            )}
+            {canManage && (
+              <button
+                type="button"
+                onClick={() => setSlackOpen(true)}
+                className="hidden md:inline-flex h-8 items-center gap-1.5 px-3 rounded-lg text-[12px] text-[#a0a0a0] hover:text-[#e4e4e4] border border-[#2b2b2b] hover:border-[#3c3c3c] bg-[#1f1f1f] transition-colors"
+                title="Slack webhook"
+              >
+                Slack
+              </button>
+            )}
             <button
               type="button"
               onClick={() => void handleExport()}
@@ -967,6 +1033,22 @@ function LiveRoom({
         />
 
         <div className="flex-1 flex flex-col min-h-0 min-w-0 overflow-hidden bg-[#121212]/80">
+          {relevantPings.length > 0 && (
+            <div className="shrink-0 border-b border-[#3a2a1c] bg-[#14110e] px-3 py-2 space-y-2 max-h-[35%] overflow-y-auto">
+              {relevantPings.map((ping) => (
+                <ReviewPingBanner
+                  key={ping.id}
+                  ping={ping}
+                  myUserId={user?.id}
+                  canDismiss={
+                    canManage || Boolean(user?.id && ping.actorUserId === user.id)
+                  }
+                  onAck={() => ackReview(ping.id)}
+                  onDismiss={() => dismissReview(ping.id)}
+                />
+              ))}
+            </div>
+          )}
           {pendingApprovals.length > 0 && (
             <div className="shrink-0 border-b border-[#2e2a1c] bg-[#16140f] px-3 py-2 space-y-2 max-h-[40%] overflow-y-auto">
               {pendingApprovals.map((req) => {
@@ -1056,6 +1138,29 @@ function LiveRoom({
         open={inviteOpen}
         onClose={() => setInviteOpen(false)}
         canManage={canManage}
+      />
+
+      <FlagForReviewDialog
+        open={flagOpen}
+        onClose={() => setFlagOpen(false)}
+        members={rosterMembers.length ? rosterMembers : liveMembers}
+        myUserId={user?.id}
+        slackConfigured={Boolean(roomInfo?.slackNotifyConfigured)}
+        onFlag={(payload) => flagReview(payload)}
+        onOpenSlack={() => {
+          setFlagOpen(false);
+          setSlackOpen(true);
+        }}
+      />
+
+      <SlackConnectModal
+        roomId={roomId}
+        open={slackOpen}
+        onClose={() => setSlackOpen(false)}
+        canManage={canManage}
+        onUpdated={() => {
+          void fetchOrJoinRoom(roomId).then(onRoomInfo).catch(() => {});
+        }}
       />
 
       <MemberRoster

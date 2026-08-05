@@ -9,6 +9,10 @@ export type {
   OrganizationInviteRow,
   ApprovalRequestRow,
   CreateApprovalRequestInput,
+  RoomPingRow,
+  RoomPingAckRow,
+  CreateRoomPingInput,
+  RoomPingStatus,
 } from "./sqlite.js";
 
 const url = process.env.DATABASE_URL ?? "";
@@ -132,3 +136,13 @@ export const getApprovalRequest = backend.getApprovalRequest;
 export const listPendingApprovals = backend.listPendingApprovals;
 export const resolveApprovalRequest = backend.resolveApprovalRequest;
 export const expireApprovalRequest = backend.expireApprovalRequest;
+
+// Slack webhook + review pings
+export const setRoomSlackWebhook = backend.setRoomSlackWebhook;
+export const clearRoomSlackWebhook = backend.clearRoomSlackWebhook;
+export const createRoomPing = backend.createRoomPing;
+export const getRoomPing = backend.getRoomPing;
+export const listOpenRoomPings = backend.listOpenRoomPings;
+export const dismissRoomPing = backend.dismissRoomPing;
+export const ackRoomPing = backend.ackRoomPing;
+export const listRoomPingAcks = backend.listRoomPingAcks;

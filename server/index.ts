@@ -483,6 +483,106 @@ app.get("/api/rooms/:id", requireAuth, (req, res) => {
 });
 
 /**
+ * GET /api/rooms/:id/slack-webhook — whether Slack is connected for this room.
+ */
+app.get("/api/rooms/:id/slack-webhook", requireAuth, (req, res) => {
+  try {
+    res.json(
+      roomManager.getSlackWebhookStatus(
+        routeParam(req.params.id),
+        req.user!.id,
+      ),
+    );
+  } catch (err) {
+    const message =
+      err instanceof Error ? err.message : "Failed to load Slack status";
+    const status = message.includes("not found") ? 404 : 400;
+    res.status(status).json({ error: message });
+  }
+});
+
+/**
+ * PUT /api/rooms/:id/slack-webhook — host stores an encrypted Slack webhook.
+ * Body: { webhookUrl: string }
+ */
+app.put("/api/rooms/:id/slack-webhook", requireAuth, (req, res) => {
+  try {
+    const room = roomManager.setRoomSlackWebhook(
+      routeParam(req.params.id),
+      String(req.body?.webhookUrl || ""),
+      req.user!.id,
+    );
+    res.json({
+      ok: true,
+      configured: true,
+      hint: room.slackWebhookHint || null,
+      room,
+    });
+  } catch (err) {
+    const message =
+      err instanceof Error ? err.message : "Failed to save Slack webhook";
+    const status =
+      message.includes("Only the host") || message.includes("Not allowed")
+        ? 403
+        : message.includes("not found")
+          ? 404
+          : 400;
+    res.status(status).json({ error: message });
+  }
+});
+
+/**
+ * DELETE /api/rooms/:id/slack-webhook — host removes the room Slack webhook.
+ */
+app.delete("/api/rooms/:id/slack-webhook", requireAuth, (req, res) => {
+  try {
+    const room = roomManager.clearRoomSlackWebhook(
+      routeParam(req.params.id),
+      req.user!.id,
+    );
+    res.json({ ok: true, configured: false, room });
+  } catch (err) {
+    const message =
+      err instanceof Error ? err.message : "Failed to remove Slack webhook";
+    const status =
+      message.includes("Only the host") || message.includes("Not allowed")
+        ? 403
+        : message.includes("not found")
+          ? 404
+          : 400;
+    res.status(status).json({ error: message });
+  }
+});
+
+/**
+ * POST /api/rooms/:id/pings/:pingId/ack — acknowledge a review ping (deep link).
+ */
+app.post("/api/rooms/:id/pings/:pingId/ack", requireAuth, (req, res) => {
+  const roomId = routeParam(req.params.id);
+  const pingId = routeParam(req.params.pingId);
+  if (!roomManager.userCanAccessRoom(roomId, req.user!.id)) {
+    res.status(404).json({ error: "Room not found" });
+    return;
+  }
+  try {
+    const name =
+      String(req.body?.name || req.user!.name || "").trim().slice(0, 80) ||
+      "Someone";
+    const ping = roomManager.ackPing(roomId, pingId, req.user!.id, name);
+    res.json({ ok: true, ping });
+  } catch (err) {
+    const message =
+      err instanceof Error ? err.message : "Failed to acknowledge ping";
+    const status = message.includes("not found")
+      ? 404
+      : message.includes("not a target")
+        ? 403
+        : 400;
+    res.status(status).json({ error: message });
+  }
+});
+
+/**
  * PATCH /api/rooms/:id/settings — host updates collaboration settings.
  * Body: { controlMode?: "open" | "driver" | "host", approvalMode?: "off" | "dangerous" | "all" }
  */
@@ -1051,6 +1151,15 @@ io.on("connection", (socket) => {
   );
   socket.on("tool-approval-decision", (requestId, approved) =>
     roomManager.handleToolApprovalDecision(socket, requestId, approved),
+  );
+  socket.on("flag-review", (payload) =>
+    roomManager.handleFlagReview(socket, payload || {}),
+  );
+  socket.on("ack-review", (pingId) =>
+    roomManager.handleAckReview(socket, String(pingId || "")),
+  );
+  socket.on("dismiss-review", (pingId) =>
+    roomManager.handleDismissReview(socket, String(pingId || "")),
   );
   socket.on("leave-room", () => roomManager.handleLeaveRoom(socket));
   socket.on("remove-member", (targetUserId) =>

@@ -49,3 +49,12 @@ export const SLACK_WEBHOOK_URL = process.env.SLACK_WEBHOOK_URL?.trim() || "";
  * Receives { kind, title, text, roomId?, orgId?, … }.
  */
 export const NOTIFY_WEBHOOK_URL = process.env.NOTIFY_WEBHOOK_URL?.trim() || "";
+
+/**
+ * Public web origin used in Slack deep links (e.g. https://app.example.com).
+ * Falls back to the first CORS_ORIGIN, then local Next.js.
+ */
+export const APP_ORIGIN =
+  process.env.APP_ORIGIN?.trim() ||
+  CORS_ORIGINS[0] ||
+  "http://localhost:3001";

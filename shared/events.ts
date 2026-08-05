@@ -167,6 +167,31 @@ export interface RoomInfo {
   myRole?: RoomRole;
   /** Host or org admin — can manage invites, members, agents, settings. */
   myCanManage?: boolean;
+  /** Room has a Slack incoming webhook configured (or env fallback available). */
+  slackNotifyConfigured?: boolean;
+  /** Masked hint for the room webhook — only for managers. */
+  slackWebhookHint?: string;
+}
+
+/** One person's acknowledgement of a review ping. */
+export interface PingAckInfo {
+  userId: string;
+  name: string;
+  ts: number;
+}
+
+/** In-room + Slack "flag for review" interrupt. */
+export interface PingInfo {
+  id: string;
+  roomId: string;
+  actorUserId: string;
+  actorName: string;
+  note?: string;
+  /** Everyone in the room, or a subset of member user ids. */
+  targets: "everyone" | string[];
+  status: "open" | "dismissed";
+  createdAt: number;
+  acks: PingAckInfo[];
 }
 
 export interface UserInfo {
@@ -258,6 +283,14 @@ export interface ServerToClientEvents {
   "tool-approval-resolved": (request: ApprovalRequestInfo) => void;
   /** Full snapshot of open approvals for the room (on join / reconnect). */
   "tool-approvals": (requests: ApprovalRequestInfo[]) => void;
+  /** Full snapshot of open review pings (on join / reconnect). */
+  "room-pings": (pings: PingInfo[]) => void;
+  /** Someone flagged the session for human review. */
+  "review-flagged": (ping: PingInfo) => void;
+  /** Someone acknowledged a review ping. */
+  "review-acked": (ping: PingInfo) => void;
+  /** A review ping was dismissed. */
+  "review-dismissed": (ping: PingInfo) => void;
   error: (message: string) => void;
 }
 
@@ -278,6 +311,18 @@ export interface ClientToServerEvents {
     requestId: string,
     approved: boolean,
   ) => void;
+  /**
+   * Flag the session for review — pings the room + optional Slack webhook.
+   * Editors and the host may flag. Empty/omitted targetUserIds = everyone.
+   */
+  "flag-review": (payload: {
+    note?: string;
+    targetUserIds?: string[];
+  }) => void;
+  /** Acknowledge a review ping (in-room; deep-link uses REST). */
+  "ack-review": (pingId: string) => void;
+  /** Dismiss an open review ping (actor or host). */
+  "dismiss-review": (pingId: string) => void;
   "leave-room": () => void;
   "remove-member": (userId: string) => void;
 }
