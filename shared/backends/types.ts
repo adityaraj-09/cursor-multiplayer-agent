@@ -56,6 +56,8 @@ export interface BuildArgsOptions {
   prompt: string;
   modelId: string;
   sessionId?: string | null;
+  /** Cursor `--mode plan` / Claude `--permission-mode plan`. */
+  mode?: "agent" | "plan";
 }
 
 /**

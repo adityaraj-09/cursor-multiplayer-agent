@@ -62,6 +62,8 @@ export interface SdkAgentConfig {
   repoUrl?: string;
   startingRef?: string;
   autoCreatePR?: boolean;
+  /** Cursor SDK conversation mode. */
+  mode?: "agent" | "plan";
 }
 
 interface QueueItem {
@@ -146,6 +148,14 @@ export class SdkAgentSession {
     return this.config.model.id;
   }
 
+  setMode(mode: "agent" | "plan"): void {
+    this.config.mode = mode === "plan" ? "plan" : "agent";
+  }
+
+  getMode(): "agent" | "plan" {
+    return this.config.mode === "plan" ? "plan" : "agent";
+  }
+
   isBusy(): boolean {
     return this.processing || this.queue.length > 0;
   }
@@ -203,6 +213,7 @@ export class SdkAgentSession {
       }
       this.agent = await Agent.create({
         ...base,
+        mode: this.config.mode === "plan" ? "plan" : "agent",
         cloud: {
           repos: [
             {
@@ -220,6 +231,7 @@ export class SdkAgentSession {
       }
       this.agent = await Agent.create({
         ...base,
+        mode: this.config.mode === "plan" ? "plan" : "agent",
         local: { cwd: this.config.localCwd },
       });
     }
@@ -266,6 +278,7 @@ export class SdkAgentSession {
 
       const run = await this.agent.send(item.prompt, {
         model: this.config.model,
+        mode: this.config.mode === "plan" ? "plan" : "agent",
       });
 
       if (gen !== this.abortGeneration) {

@@ -507,6 +507,7 @@ export class WorkerRelay {
     agentId?: string,
     cwd?: string,
     backend?: string,
+    mode?: "agent" | "plan",
   ): boolean {
     const worker = this.workers.get(workerId);
     if (!worker) return false;
@@ -544,6 +545,7 @@ export class WorkerRelay {
       modelId,
       sessionId,
       backend: backend === "claude-code" ? "claude-code" : "cursor",
+      mode: mode === "plan" ? "plan" : "agent",
     });
 
     return true;

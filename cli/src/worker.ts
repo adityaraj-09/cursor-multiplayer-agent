@@ -74,6 +74,8 @@ interface RunPromptPayload {
   sessionId?: string | null;
   /** `cursor` (default) or `claude-code` */
   backend?: string;
+  /** Plan vs agent mode for this run. */
+  mode?: "agent" | "plan";
 }
 
 interface AbortPayload {
@@ -209,6 +211,7 @@ export function startWorker(repoPathOverride?: string): void {
     const agentId = payload.agentId || "default";
     const backendKind =
       payload.backend === "claude-code" ? "claude-code" : "cursor";
+    const mode = payload.mode === "plan" ? "plan" : "agent";
     const runKey = makeRunKey(roomId, agentId);
     const repoPath = repoPathOverride || payloadCwd || payloadRepoPath;
     const cwd = payloadCwd || repoPath;
@@ -390,6 +393,7 @@ export function startWorker(repoPathOverride?: string): void {
       sessionId,
       runKey,
       backendKind,
+      mode,
     );
     runState.abort = handle.abort;
 

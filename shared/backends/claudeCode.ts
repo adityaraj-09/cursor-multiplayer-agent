@@ -135,8 +135,13 @@ export class ClaudeCodeBackend implements WorkerBackend {
       "stream-json",
       "--verbose",
       "--include-partial-messages",
-      "--dangerously-skip-permissions",
     ];
+    if (opts.mode === "plan") {
+      // Plan mode: explore + propose, no edits until the room exits plan.
+      args.push("--permission-mode", "plan");
+    } else {
+      args.push("--dangerously-skip-permissions");
+    }
     if (opts.modelId && opts.modelId !== "auto") {
       args.push("--model", opts.modelId);
     }

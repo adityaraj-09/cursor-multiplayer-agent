@@ -7,6 +7,11 @@ import {
   type RunGitInfo,
 } from "../shared/backends/index.js";
 import {
+  buildAttributedCommitMessage,
+  steeredByLine,
+  type SteerAuthor,
+} from "../shared/attribution.js";
+import {
   authedGithubHttpsUrl,
   createPullRequest,
   githubTokenFromEnv,
@@ -39,6 +44,10 @@ export interface ClaudeSandboxConfig {
   branch?: string | null;
   /** Already-opened PR URL (skip recreate) */
   prUrl?: string | null;
+  /** Plan mode → `--permission-mode plan`. */
+  mode?: "agent" | "plan";
+  /** Human who most recently steered this agent (for Co-authored-by). */
+  steeredBy?: { name: string; email: string; userId?: string } | null;
   /** Fired once the sandbox + working branch are ready (for durable identity). */
   onReady?: (info: {
     sandboxId: string;
@@ -119,6 +128,26 @@ export class ClaudeSandboxSession {
 
   getModel(): string {
     return this.config.model;
+  }
+
+  setMode(mode: "agent" | "plan"): void {
+    this.config.mode = mode === "plan" ? "plan" : "agent";
+  }
+
+  getMode(): "agent" | "plan" {
+    return this.config.mode === "plan" ? "plan" : "agent";
+  }
+
+  setSteeredBy(author: SteerAuthor | null | undefined): void {
+    if (!author?.name?.trim()) {
+      this.config.steeredBy = null;
+      return;
+    }
+    this.config.steeredBy = {
+      name: author.name.trim(),
+      email: author.email?.trim() || "",
+      userId: author.userId,
+    };
   }
 
   /**
@@ -376,14 +405,19 @@ export class ClaudeSandboxSession {
     }
 
     if (dirty) {
-      const msg = `steer: ${this.config.name.slice(0, 60)}`.replace(
-        /"/g,
-        "'",
+      const msg = buildAttributedCommitMessage(
+        `steer: ${this.config.name.slice(0, 60)}`,
+        this.config.steeredBy,
       );
+      // Use -F so Co-authored-by trailers (multi-line) survive shell quoting.
+      const msgPath = `/tmp/steer-commit-${nanoid(8)}.txt`;
+      const b64 = Buffer.from(msg, "utf8").toString("base64");
       await sbx.commands.run(
         [
+          `printf '%s' ${shellQuote(b64)} | base64 -d > ${shellQuote(msgPath)}`,
           `git add -A`,
-          `git diff --cached --quiet || git commit -m ${shellQuote(msg)}`,
+          `git diff --cached --quiet || git commit -F ${shellQuote(msgPath)}`,
+          `rm -f ${shellQuote(msgPath)}`,
         ].join(" && "),
         { cwd: REPO_DIR, timeoutMs: 60_000 },
       );
@@ -417,7 +451,12 @@ export class ClaudeSandboxSession {
             `- Agent: \`${this.config.name}\``,
             `- Branch: \`${this.branch}\``,
             `- Base: \`${base}\``,
-          ].join("\n"),
+            steeredByLine(this.config.steeredBy)
+              ? `- ${steeredByLine(this.config.steeredBy)}`
+              : "",
+          ]
+            .filter(Boolean)
+            .join("\n"),
           head: this.branch,
           base,
           token,
@@ -449,6 +488,7 @@ export class ClaudeSandboxSession {
       prompt: item.prompt,
       modelId: this.config.model,
       sessionId: this.sessionId,
+      mode: this.config.mode === "plan" ? "plan" : "agent",
     });
 
     const sbx = await this.ensureSandbox();
