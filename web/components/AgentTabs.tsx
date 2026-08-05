@@ -269,6 +269,14 @@ export default function AgentTabs({
                       active
                     </span>
                   )}
+                  {agent.planMode && (
+                    <span
+                      className="text-[9px] px-1.5 py-0.5 rounded-md bg-[#17202a] text-[#4d9fff] shrink-0"
+                      title="Plan mode — explore & propose only"
+                    >
+                      plan
+                    </span>
+                  )}
                 </span>
                 <span className="mt-0.5 flex items-center gap-1.5 min-w-0 text-[10px] text-[#6e6e6e]">
                   <span className="uppercase tracking-wide shrink-0">

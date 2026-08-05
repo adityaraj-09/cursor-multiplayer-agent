@@ -8,6 +8,7 @@ import type {
   AgentConflictBlocked,
   AgentInfo,
   AgentRunStatus,
+  ApprovalRequestInfo,
   ChatMessage,
   CloudMeta,
   FileLease,
@@ -31,6 +32,8 @@ interface UseSocketReturn {
   conflicts: AgentConflict[];
   fileLocks: FileLease[];
   lastBlocked: AgentConflictBlocked | null;
+  /** Open approval gates waiting for a human decision. */
+  pendingApprovals: ApprovalRequestInfo[];
   /** Peer typists keyed by agent id (excludes the local socket). */
   typingByAgent: Record<string, TypingUser[]>;
   /** Legacy single-agent status (default / selected agent). */
@@ -53,6 +56,7 @@ interface UseSocketReturn {
   requestDrive: (agentId?: string) => void;
   releaseDrive: (agentId?: string) => void;
   grantDrive: (toSocketId: string, agentId?: string) => void;
+  decideApproval: (requestId: string, approved: boolean) => void;
   leaveRoom: () => void;
   removeMember: (userId: string) => void;
   dismissDriveRequest: () => void;
@@ -99,6 +103,9 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
   const [diffByAgent, setDiffByAgent] = useState<Record<string, string>>({});
   const [conflicts, setConflicts] = useState<AgentConflict[]>([]);
   const [fileLocks, setFileLocks] = useState<FileLease[]>([]);
+  const [pendingApprovals, setPendingApprovals] = useState<
+    ApprovalRequestInfo[]
+  >([]);
   const [lastBlocked, setLastBlocked] =
     useState<AgentConflictBlocked | null>(null);
   const [agentStatus, setAgentStatus] = useState<AgentRunStatus>("idle");
@@ -245,6 +252,24 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
     const onAgents = (list: AgentInfo[]) => setAgents(list);
     const onConflicts = (c: AgentConflict[]) => setConflicts(c);
     const onFileLocks = (leases: FileLease[]) => setFileLocks(leases);
+    const onToolApprovals = (list: ApprovalRequestInfo[]) =>
+      setPendingApprovals(Array.isArray(list) ? list : []);
+    const onToolApprovalRequested = (req: ApprovalRequestInfo) => {
+      if (!req?.id) return;
+      setPendingApprovals((prev) => {
+        const idx = prev.findIndex((r) => r.id === req.id);
+        if (idx >= 0) {
+          const next = [...prev];
+          next[idx] = req;
+          return next;
+        }
+        return [...prev, req];
+      });
+    };
+    const onToolApprovalResolved = (req: ApprovalRequestInfo) => {
+      if (!req?.id) return;
+      setPendingApprovals((prev) => prev.filter((r) => r.id !== req.id));
+    };
     const onConflictBlocked = (payload: AgentConflictBlocked) =>
       setLastBlocked(payload);
     const onDriveRequested = (payload: {
@@ -372,6 +397,9 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
       s.on("agents", onAgents);
       s.on("agent-conflicts", onConflicts);
       s.on("file-locks", onFileLocks);
+      s.on("tool-approvals", onToolApprovals);
+      s.on("tool-approval-requested", onToolApprovalRequested);
+      s.on("tool-approval-resolved", onToolApprovalResolved);
       s.on("agent-conflict-blocked", onConflictBlocked);
       s.on("drive-requested", onDriveRequested);
       s.on("drive-request-pending", onDriveRequestPending);
@@ -400,6 +428,9 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
         attached.off("agents", onAgents);
         attached.off("agent-conflicts", onConflicts);
         attached.off("file-locks", onFileLocks);
+        attached.off("tool-approvals", onToolApprovals);
+        attached.off("tool-approval-requested", onToolApprovalRequested);
+        attached.off("tool-approval-resolved", onToolApprovalResolved);
         attached.off("agent-conflict-blocked", onConflictBlocked);
         attached.off("drive-requested", onDriveRequested);
         attached.off("drive-request-pending", onDriveRequestPending);
@@ -430,6 +461,7 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
       setDiffByAgent({});
       setConflicts([]);
       setFileLocks([]);
+      setPendingApprovals([]);
       setLastBlocked(null);
       setTypingByAgent({});
     };
@@ -485,6 +517,13 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
     setPendingRequest(null);
   }, []);
 
+  const decideApproval = useCallback(
+    (requestId: string, approved: boolean) => {
+      socketRef.current?.emit("tool-approval-decision", requestId, approved);
+    },
+    [],
+  );
+
   const leaveRoom = useCallback(() => {
     socketRef.current?.emit("leave-room");
   }, []);
@@ -508,6 +547,7 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
     conflicts,
     fileLocks,
     lastBlocked,
+    pendingApprovals,
     typingByAgent,
     agentStatus,
     agentError,
@@ -522,6 +562,7 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
     requestDrive,
     releaseDrive,
     grantDrive,
+    decideApproval,
     dismissDriveRequest,
     leaveRoom,
     removeMember,

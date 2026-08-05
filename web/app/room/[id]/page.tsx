@@ -29,6 +29,7 @@ import {
   forceReleaseFileLock,
   stopRoom,
   stopRoomAgent,
+  updateRoomAgent,
   updateRoomCursorSession,
   updateRoomModel,
   updateRoomSettings,
@@ -39,6 +40,7 @@ import {
   setCachedModels,
 } from "../../../lib/modelsCache";
 import ChatPanel from "../../../components/ChatPanel";
+import ApprovalCard from "../../../components/ApprovalCard";
 import SidePanel from "../../../components/SidePanel";
 import PresenceBar from "../../../components/PresenceBar";
 import SteerInput from "../../../components/SteerInput";
@@ -50,6 +52,7 @@ import AgentTabs from "../../../components/AgentTabs";
 import AddAgentDialog from "../../../components/AddAgentDialog";
 import LockPanel from "../../../components/LockPanel";
 import type {
+  ApprovalMode,
   ControlMode,
   ModelInfo,
   RoomInfo,
@@ -63,6 +66,10 @@ import {
   formatTypingIndicator,
   formatTypingIndicatorAll,
 } from "../../../../shared/typing";
+import {
+  approvalModeDescription,
+  approvalModeLabel,
+} from "../../../../shared/approvals";
 import {
   canRequestDrive,
   canSteerWithRole,
@@ -249,6 +256,7 @@ function LiveRoom({
     conflicts,
     fileLocks,
     lastBlocked,
+    pendingApprovals,
     typingByAgent,
     agentStatus,
     agentError,
@@ -263,6 +271,7 @@ function LiveRoom({
     requestDrive,
     releaseDrive,
     grantDrive,
+    decideApproval,
     leaveRoom,
     removeMember,
     dismissDriveRequest,
@@ -273,6 +282,7 @@ function LiveRoom({
   const runtime = roomInfo?.runtime || "local";
   const modelId = liveModelId || roomInfo?.modelId || "auto";
   const controlMode: ControlMode = roomInfo?.controlMode || "open";
+  const approvalMode: ApprovalMode = roomInfo?.approvalMode || "off";
   const myRole: RoomRole =
     roomInfo?.myRole ||
     (user?.id && roomInfo?.ownerId && user.id === roomInfo.ownerId
@@ -284,6 +294,11 @@ function LiveRoom({
   const [modelError, setModelError] = useState("");
   const [savingModel, setSavingModel] = useState(false);
   const [savingControlMode, setSavingControlMode] = useState(false);
+  const [savingApprovalMode, setSavingApprovalMode] = useState(false);
+  const [togglingPlanMode, setTogglingPlanMode] = useState(false);
+  const [decidingApprovalId, setDecidingApprovalId] = useState<string | null>(
+    null,
+  );
   const [inviteOpen, setInviteOpen] = useState(false);
   const [rosterOpen, setRosterOpen] = useState(false);
   const [rosterMembers, setRosterMembers] = useState<RoomMemberInfo[]>([]);
@@ -520,6 +535,7 @@ function LiveRoom({
       modelId?: string;
       anthropicApiKey?: string;
       apiKey?: string;
+      planMode?: boolean;
     }) => {
       const agent = await addRoomAgent(roomId, data);
       setSelectedAgentId(agent.id);
@@ -572,6 +588,53 @@ function LiveRoom({
       }
     },
     [canManage, controlMode, roomId, onRoomInfo],
+  );
+
+  const handleApprovalModeChange = useCallback(
+    async (mode: ApprovalMode) => {
+      if (!canManage || mode === approvalMode) return;
+      setSavingApprovalMode(true);
+      setActionError("");
+      try {
+        const updated = await updateRoomSettings(roomId, {
+          approvalMode: mode,
+        });
+        onRoomInfo(updated);
+      } catch (err) {
+        setActionError(
+          err instanceof Error ? err.message : "Failed to update approval mode",
+        );
+      } finally {
+        setSavingApprovalMode(false);
+      }
+    },
+    [canManage, approvalMode, roomId, onRoomInfo],
+  );
+
+  const handleTogglePlanMode = useCallback(async () => {
+    if (!canManage || !selectedAgentId || !selectedAgent) return;
+    setTogglingPlanMode(true);
+    setActionError("");
+    try {
+      await updateRoomAgent(roomId, selectedAgentId, {
+        planMode: !selectedAgent.planMode,
+      });
+    } catch (err) {
+      setActionError(
+        err instanceof Error ? err.message : "Failed to toggle plan mode",
+      );
+    } finally {
+      setTogglingPlanMode(false);
+    }
+  }, [canManage, selectedAgentId, selectedAgent, roomId]);
+
+  const handleDecideApproval = useCallback(
+    (requestId: string, approved: boolean) => {
+      setDecidingApprovalId(requestId);
+      decideApproval(requestId, approved);
+      window.setTimeout(() => setDecidingApprovalId(null), 800);
+    },
+    [decideApproval],
   );
 
   useEffect(() => {
@@ -797,9 +860,15 @@ function LiveRoom({
             {controlModeLabel(controlMode)}
             {" — "}
             {controlModeDescription(controlMode)}
+            {" · "}
+            {approvalModeLabel(approvalMode)}
+            {selectedAgent?.planMode ? " · Plan mode" : ""}
             {!canSteerSelected && steerLockReason ? (
               <span className="text-[#e8a23a]"> · {steerLockReason}</span>
             ) : null}
+          </p>
+          <p className="text-[11px] text-[#6e6e6e] mt-0.5">
+            {approvalModeDescription(approvalMode)}
           </p>
           {runtime === "local" && (
             <p className="text-[11px] text-[#a07a3a] mt-0.5">
@@ -821,6 +890,21 @@ function LiveRoom({
             <Download className="h-3.5 w-3.5" strokeWidth={1.75} />
             Export
           </button>
+          {canManage && selectedAgent && (
+            <button
+              type="button"
+              disabled={togglingPlanMode}
+              onClick={() => void handleTogglePlanMode()}
+              className={`h-8 px-2.5 rounded-md text-[11px] border shrink-0 ${
+                selectedAgent.planMode
+                  ? "border-[#4d9fff] bg-[#1a2430] text-[#8ec5ff]"
+                  : "border-[#2b2b2b] bg-[#1f1f1f] text-[#a0a0a0]"
+              }`}
+              title="Toggle plan mode for the selected agent"
+            >
+              {selectedAgent.planMode ? "Plan on" : "Plan off"}
+            </button>
+          )}
           {canManage && (
             <select
               value={controlMode}
@@ -834,6 +918,21 @@ function LiveRoom({
               <option value="open">Open collaboration</option>
               <option value="driver">Driver enforced</option>
               <option value="host">Host only</option>
+            </select>
+          )}
+          {canManage && (
+            <select
+              value={approvalMode}
+              disabled={savingApprovalMode}
+              onChange={(e) =>
+                void handleApprovalModeChange(e.target.value as ApprovalMode)
+              }
+              className="h-8 px-2 rounded-md bg-[#1f1f1f] border border-[#2b2b2b] text-[11px] text-[#e4e4e4] outline-none focus:border-[#c9a227] shrink-0"
+              title="Approval gates"
+            >
+              <option value="off">Approvals off</option>
+              <option value="dangerous">Approve dangerous</option>
+              <option value="all">Approve all tools</option>
             </select>
           )}
         </div>
@@ -868,6 +967,29 @@ function LiveRoom({
         />
 
         <div className="flex-1 flex flex-col min-h-0 min-w-0 overflow-hidden bg-[#121212]/80">
+          {pendingApprovals.length > 0 && (
+            <div className="shrink-0 border-b border-[#2e2a1c] bg-[#16140f] px-3 py-2 space-y-2 max-h-[40%] overflow-y-auto">
+              {pendingApprovals.map((req) => {
+                const drivingThis =
+                  drivingAgentIds.includes(req.agentId) ||
+                  (agents.length <= 1 && amDriver);
+                const canDecide =
+                  (myRole === "owner" || myRole === "editor") &&
+                  (myRole === "owner" || !drivingThis);
+                return (
+                  <ApprovalCard
+                    key={req.id}
+                    request={req}
+                    canDecide={canDecide}
+                    deciding={decidingApprovalId === req.id}
+                    onDecide={(approved) =>
+                      handleDecideApproval(req.id, approved)
+                    }
+                  />
+                );
+              })}
+            </div>
+          )}
           <ChatPanel
             messages={messages}
             agentStatus={selectedStatus}

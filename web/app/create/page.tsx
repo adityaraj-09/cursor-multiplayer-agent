@@ -47,6 +47,10 @@ export default function CreateSession() {
   const [controlMode, setControlMode] = useState<"open" | "driver" | "host">(
     "driver",
   );
+  const [planMode, setPlanMode] = useState(false);
+  const [approvalMode, setApprovalMode] = useState<
+    "off" | "dangerous" | "all"
+  >("dangerous");
   const [authMode, setAuthMode] = useState<AuthMode>("cli");
   const [apiKey, setApiKey] = useState("");
   const [anthropicApiKey, setAnthropicApiKey] = useState("");
@@ -389,6 +393,8 @@ export default function CreateSession() {
         authMode: effectiveAuth,
         backend,
         controlMode,
+        planMode,
+        approvalMode,
         modelId: isClaude
           ? modelId || DEFAULT_CLAUDE_MODEL
           : modelId || "auto",
@@ -598,6 +604,95 @@ export default function CreateSession() {
                 mode is recommended.
               </p>
             )}
+          </fieldset>
+
+          <fieldset>
+            <legend className="block text-[12px] text-[#a0a0a0] mb-1.5">
+              Agent mode
+            </legend>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {(
+                [
+                  {
+                    id: false as const,
+                    label: "Agent",
+                    body: "Full edit + shell access",
+                  },
+                  {
+                    id: true as const,
+                    label: "Plan",
+                    body: "Explore & propose only — no edits",
+                  },
+                ] as const
+              ).map((opt) => (
+                <button
+                  key={String(opt.id)}
+                  type="button"
+                  onClick={() => setPlanMode(opt.id)}
+                  className={`rounded-md border px-3 py-2 text-left transition-colors ${
+                    planMode === opt.id
+                      ? "bg-[#252525] border-[#4d9fff] text-[#e4e4e4]"
+                      : "bg-[#1a1a1a] border-[#2b2b2b] text-[#6e6e6e]"
+                  }`}
+                >
+                  <div className="text-[13px] text-[#e4e4e4]">{opt.label}</div>
+                  <div className="text-[11px] text-[#6e6e6e] mt-0.5">
+                    {opt.body}
+                  </div>
+                </button>
+              ))}
+            </div>
+            <p className="text-[11px] text-[#6e6e6e] mt-2">
+              Works for Cursor (`--mode plan`) and Claude Code
+              (`--permission-mode plan`). Toggle later from the room.
+            </p>
+          </fieldset>
+
+          <fieldset>
+            <legend className="block text-[12px] text-[#a0a0a0] mb-1.5">
+              Approval gates
+            </legend>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              {(
+                [
+                  {
+                    id: "off" as const,
+                    label: "Off",
+                    body: "No second sign-off",
+                  },
+                  {
+                    id: "dangerous" as const,
+                    label: "Dangerous",
+                    body: "Migrations, deletes, main pushes, secrets/CI",
+                  },
+                  {
+                    id: "all" as const,
+                    label: "All tools",
+                    body: "Every edit & shell pauses",
+                  },
+                ] as const
+              ).map((opt) => (
+                <button
+                  key={opt.id}
+                  type="button"
+                  onClick={() => setApprovalMode(opt.id)}
+                  className={`rounded-md border px-3 py-2 text-left transition-colors ${
+                    approvalMode === opt.id
+                      ? "bg-[#252525] border-[#c9a227] text-[#e4e4e4]"
+                      : "bg-[#1a1a1a] border-[#2b2b2b] text-[#6e6e6e]"
+                  }`}
+                >
+                  <div className="text-[13px] text-[#e4e4e4]">{opt.label}</div>
+                  <div className="text-[11px] text-[#6e6e6e] mt-0.5">
+                    {opt.body}
+                  </div>
+                </button>
+              ))}
+            </div>
+            <p className="text-[11px] text-[#6e6e6e] mt-2">
+              Separate from file locks — a non-driver editor must approve
+              high-blast-radius actions before the agent continues.
+            </p>
           </fieldset>
 
           {isClaude && (
