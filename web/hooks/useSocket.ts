@@ -13,6 +13,7 @@ import type {
   CloudMeta,
   FileLease,
   Participant,
+  PingInfo,
   RoomMemberInfo,
   TypingUser,
 } from "../../shared/events";
@@ -34,6 +35,8 @@ interface UseSocketReturn {
   lastBlocked: AgentConflictBlocked | null;
   /** Open approval gates waiting for a human decision. */
   pendingApprovals: ApprovalRequestInfo[];
+  /** Open review pings for this room. */
+  openPings: PingInfo[];
   /** Peer typists keyed by agent id (excludes the local socket). */
   typingByAgent: Record<string, TypingUser[]>;
   /** Legacy single-agent status (default / selected agent). */
@@ -57,6 +60,9 @@ interface UseSocketReturn {
   releaseDrive: (agentId?: string) => void;
   grantDrive: (toSocketId: string, agentId?: string) => void;
   decideApproval: (requestId: string, approved: boolean) => void;
+  flagReview: (payload: { note?: string; targetUserIds?: string[] }) => void;
+  ackReview: (pingId: string) => void;
+  dismissReview: (pingId: string) => void;
   leaveRoom: () => void;
   removeMember: (userId: string) => void;
   dismissDriveRequest: () => void;
@@ -106,6 +112,7 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
   const [pendingApprovals, setPendingApprovals] = useState<
     ApprovalRequestInfo[]
   >([]);
+  const [openPings, setOpenPings] = useState<PingInfo[]>([]);
   const [lastBlocked, setLastBlocked] =
     useState<AgentConflictBlocked | null>(null);
   const [agentStatus, setAgentStatus] = useState<AgentRunStatus>("idle");
@@ -270,6 +277,29 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
       if (!req?.id) return;
       setPendingApprovals((prev) => prev.filter((r) => r.id !== req.id));
     };
+    const upsertPing = (ping: PingInfo) => {
+      if (!ping?.id) return;
+      setOpenPings((prev) => {
+        if (ping.status !== "open") {
+          return prev.filter((p) => p.id !== ping.id);
+        }
+        const idx = prev.findIndex((p) => p.id === ping.id);
+        if (idx >= 0) {
+          const next = [...prev];
+          next[idx] = ping;
+          return next;
+        }
+        return [ping, ...prev];
+      });
+    };
+    const onRoomPings = (list: PingInfo[]) =>
+      setOpenPings(Array.isArray(list) ? list.filter((p) => p.status === "open") : []);
+    const onReviewFlagged = (ping: PingInfo) => upsertPing(ping);
+    const onReviewAcked = (ping: PingInfo) => upsertPing(ping);
+    const onReviewDismissed = (ping: PingInfo) => {
+      if (!ping?.id) return;
+      setOpenPings((prev) => prev.filter((p) => p.id !== ping.id));
+    };
     const onConflictBlocked = (payload: AgentConflictBlocked) =>
       setLastBlocked(payload);
     const onDriveRequested = (payload: {
@@ -400,6 +430,10 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
       s.on("tool-approvals", onToolApprovals);
       s.on("tool-approval-requested", onToolApprovalRequested);
       s.on("tool-approval-resolved", onToolApprovalResolved);
+      s.on("room-pings", onRoomPings);
+      s.on("review-flagged", onReviewFlagged);
+      s.on("review-acked", onReviewAcked);
+      s.on("review-dismissed", onReviewDismissed);
       s.on("agent-conflict-blocked", onConflictBlocked);
       s.on("drive-requested", onDriveRequested);
       s.on("drive-request-pending", onDriveRequestPending);
@@ -431,6 +465,10 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
         attached.off("tool-approvals", onToolApprovals);
         attached.off("tool-approval-requested", onToolApprovalRequested);
         attached.off("tool-approval-resolved", onToolApprovalResolved);
+        attached.off("room-pings", onRoomPings);
+        attached.off("review-flagged", onReviewFlagged);
+        attached.off("review-acked", onReviewAcked);
+        attached.off("review-dismissed", onReviewDismissed);
         attached.off("agent-conflict-blocked", onConflictBlocked);
         attached.off("drive-requested", onDriveRequested);
         attached.off("drive-request-pending", onDriveRequestPending);
@@ -462,6 +500,7 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
       setConflicts([]);
       setFileLocks([]);
       setPendingApprovals([]);
+      setOpenPings([]);
       setLastBlocked(null);
       setTypingByAgent({});
     };
@@ -524,6 +563,21 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
     [],
   );
 
+  const flagReview = useCallback(
+    (payload: { note?: string; targetUserIds?: string[] }) => {
+      socketRef.current?.emit("flag-review", payload);
+    },
+    [],
+  );
+
+  const ackReview = useCallback((pingId: string) => {
+    socketRef.current?.emit("ack-review", pingId);
+  }, []);
+
+  const dismissReview = useCallback((pingId: string) => {
+    socketRef.current?.emit("dismiss-review", pingId);
+  }, []);
+
   const leaveRoom = useCallback(() => {
     socketRef.current?.emit("leave-room");
   }, []);
@@ -548,6 +602,7 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
     fileLocks,
     lastBlocked,
     pendingApprovals,
+    openPings,
     typingByAgent,
     agentStatus,
     agentError,
@@ -563,6 +618,9 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
     releaseDrive,
     grantDrive,
     decideApproval,
+    flagReview,
+    ackReview,
+    dismissReview,
     dismissDriveRequest,
     leaveRoom,
     removeMember,

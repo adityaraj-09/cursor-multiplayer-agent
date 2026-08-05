@@ -452,6 +452,77 @@ export async function updateRoomSettings(
   return res.json();
 }
 
+export async function fetchRoomSlackWebhook(roomId: string): Promise<{
+  configured: boolean;
+  hint: string | null;
+  envFallback: boolean;
+}> {
+  const res = await fetch(`${API_BASE}/rooms/${roomId}/slack-webhook`, {
+    headers: await authHeaders(),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Failed to load Slack status");
+  }
+  return res.json();
+}
+
+export async function setRoomSlackWebhook(
+  roomId: string,
+  webhookUrl: string,
+): Promise<{ configured: boolean; hint: string | null; room: RoomInfo }> {
+  const res = await fetch(`${API_BASE}/rooms/${roomId}/slack-webhook`, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+      ...(await authHeaders()),
+    },
+    body: JSON.stringify({ webhookUrl }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Failed to save Slack webhook");
+  }
+  return res.json();
+}
+
+export async function clearRoomSlackWebhook(
+  roomId: string,
+): Promise<{ configured: boolean; room: RoomInfo }> {
+  const res = await fetch(`${API_BASE}/rooms/${roomId}/slack-webhook`, {
+    method: "DELETE",
+    headers: await authHeaders(),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Failed to remove Slack webhook");
+  }
+  return res.json();
+}
+
+export async function ackRoomPing(
+  roomId: string,
+  pingId: string,
+  name?: string,
+): Promise<{
+  ok: boolean;
+  ping: import("../../shared/events").PingInfo | null;
+}> {
+  const res = await fetch(`${API_BASE}/rooms/${roomId}/pings/${pingId}/ack`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(await authHeaders()),
+    },
+    body: JSON.stringify({ name }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Failed to acknowledge ping");
+  }
+  return res.json();
+}
+
 export type { RoomMemberInfo };
 
 export async function fetchRoomMembers(

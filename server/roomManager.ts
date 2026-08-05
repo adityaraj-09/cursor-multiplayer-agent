@@ -36,6 +36,7 @@ import {
 } from "../shared/approvals.js";
 import { attributionPromptSuffix, type SteerAuthor } from "../shared/attribution.js";
 import {
+  APP_ORIGIN,
   DEFAULT_AGENT_COMMAND,
   DEFAULT_MODEL,
   DEFAULT_REPO_PATH,
@@ -64,7 +65,7 @@ import {
 } from "../shared/roomPermissions.js";
 import { detectAgentConflicts, resolveAgentCwd, findScopeOverlap, formatScopeOverlapError } from "./agentConflicts.js";
 import { FileLockRegistry, broadcastFileLocks } from "./fileLocks.js";
-import { notifyEvent } from "./notify.js";
+import { envSlackWebhookConfigured, notifyEvent, notifyReviewFlag } from "./notify.js";
 import { userCanManageRoom as userCanManageRoomAccess } from "./roomAccess.js";
 import type {
   AgentInfo,
@@ -79,6 +80,7 @@ import type {
   CloudMeta,
   ModelInfo,
   Participant,
+  PingInfo,
   RoomMemberInfo,
   RoomInfo,
   ServerToClientEvents,
@@ -795,6 +797,52 @@ export class RoomManager {
     };
   }
 
+  private parsePingTargets(raw: string): PingInfo["targets"] {
+    if (!raw || raw === "everyone") return "everyone";
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed.filter((x): x is string => typeof x === "string");
+      }
+    } catch {
+      // ignore
+    }
+    return "everyone";
+  }
+
+  private pingRowToInfo(row: db.RoomPingRow): PingInfo {
+    const acks = db.listRoomPingAcks(row.id).map((a) => ({
+      userId: a.user_id,
+      name: a.user_name,
+      ts: a.acked_at,
+    }));
+    return {
+      id: row.id,
+      roomId: row.room_id,
+      actorUserId: row.actor_user_id,
+      actorName: row.actor_name,
+      note: row.note || undefined,
+      targets: this.parsePingTargets(row.targets),
+      status: row.status,
+      createdAt: row.created_at,
+      acks,
+    };
+  }
+
+  private decryptRoomSlackWebhook(row: db.RoomRow): string | undefined {
+    const cipher = row.slack_webhook_ciphertext?.trim();
+    if (!cipher || !encryptionConfigured()) return undefined;
+    try {
+      return decryptApiKey(cipher);
+    } catch (err) {
+      console.warn(
+        "[slack-webhook] decrypt failed",
+        err instanceof Error ? err.message : err,
+      );
+      return undefined;
+    }
+  }
+
   /** Cloud Claude Code via E2B sandbox (E2B_API_KEY server-side; Anthropic key BYOK). */
   private createClaudeSandboxBackend(
     row: db.RoomRow,
@@ -1332,6 +1380,10 @@ export class RoomManager {
     socket.emit(
       "tool-approvals",
       db.listPendingApprovals(roomId).map((r) => this.approvalRowToInfo(r)),
+    );
+    socket.emit(
+      "room-pings",
+      db.listOpenRoomPings(roomId).map((r) => this.pingRowToInfo(r)),
     );
 
     if (room.row.runtime === "cloud") {
@@ -2714,6 +2766,243 @@ export class RoomManager {
   }
 
   // -----------------------------------------------------------------------
+  // Review pings (Slack + in-room interrupt)
+  // -----------------------------------------------------------------------
+
+  handleFlagReview(
+    socket: Socket,
+    payload: { note?: string; targetUserIds?: string[] },
+  ): void {
+    const room = this.getRoomForSocket(socket.id);
+    if (!room) return;
+
+    const p = room.participants.get(socket.id);
+    if (!p?.userId) {
+      socket.emit("error", "Sign in required to flag for review");
+      return;
+    }
+
+    const role = this.resolveUserRoomRole(room.id, p.userId);
+    if (role !== "owner" && role !== "editor") {
+      socket.emit("error", "Only editors or the host can flag for review");
+      return;
+    }
+
+    const note = String(payload?.note || "").trim().slice(0, 2000);
+    const rawTargets = Array.isArray(payload?.targetUserIds)
+      ? payload.targetUserIds
+          .filter((id): id is string => typeof id === "string" && id.trim().length > 0)
+          .map((id) => id.trim())
+      : [];
+
+    let targets: "everyone" | string[] = "everyone";
+    if (rawTargets.length > 0) {
+      const members = db.getRoomMembers(room.id);
+      const memberIds = new Set(members.map((m) => m.user_id));
+      const filtered = [...new Set(rawTargets)].filter((id) => memberIds.has(id));
+      if (filtered.length === 0) {
+        socket.emit("error", "No valid target members selected");
+        return;
+      }
+      targets = filtered;
+    }
+
+    const pingRow = db.createRoomPing({
+      roomId: room.id,
+      actorUserId: p.userId,
+      actorName: p.name || "Someone",
+      note,
+      targets,
+    });
+    const info = this.pingRowToInfo(pingRow);
+
+    this.io.to(room.id).emit("review-flagged", info);
+    this.io.to(room.id).emit(
+      "room-pings",
+      db.listOpenRoomPings(room.id).map((r) => this.pingRowToInfo(r)),
+    );
+
+    const sysMsg: ChatMessage = {
+      id: nanoid(12),
+      roomId: room.id,
+      role: "system",
+      content: note
+        ? `${p.name} flagged for review: ${note}`
+        : `${p.name} flagged this session for review.`,
+      status: "done",
+      ts: Date.now(),
+    };
+    db.insertMessage(sysMsg);
+    this.io.to(room.id).emit("chat-message", sysMsg);
+
+    const joinUrl = `${APP_ORIGIN.replace(/\/$/, "")}/room/${room.id}?ping=${info.id}`;
+    const targetSummary =
+      targets === "everyone"
+        ? "everyone"
+        : `${targets.length} member${targets.length === 1 ? "" : "s"}`;
+    notifyReviewFlag({
+      webhookUrl: this.decryptRoomSlackWebhook(room.row),
+      roomId: room.id,
+      roomName: room.row.name,
+      actorName: p.name || "Someone",
+      note: note || undefined,
+      pingId: info.id,
+      joinUrl,
+      targetSummary,
+    });
+  }
+
+  handleAckReview(socket: Socket, pingId: string): void {
+    const room = this.getRoomForSocket(socket.id);
+    if (!room) return;
+    const p = room.participants.get(socket.id);
+    if (!p?.userId) {
+      socket.emit("error", "Sign in required to acknowledge");
+      return;
+    }
+    try {
+      this.ackPing(room.id, pingId, p.userId, p.name || "Someone");
+    } catch (err) {
+      socket.emit(
+        "error",
+        err instanceof Error ? err.message : "Failed to acknowledge ping",
+      );
+    }
+  }
+
+  handleDismissReview(socket: Socket, pingId: string): void {
+    const room = this.getRoomForSocket(socket.id);
+    if (!room) return;
+    const p = room.participants.get(socket.id);
+    if (!p?.userId) {
+      socket.emit("error", "Sign in required to dismiss");
+      return;
+    }
+
+    const ping = db.getRoomPing(pingId);
+    if (!ping || ping.room_id !== room.id) {
+      socket.emit("error", "Review ping not found");
+      return;
+    }
+    if (ping.status !== "open") return;
+
+    const role = this.resolveUserRoomRole(room.id, p.userId);
+    const isActor = ping.actor_user_id === p.userId;
+    if (!isActor && role !== "owner" && !this.userCanManageRoom(room.id, p.userId)) {
+      socket.emit("error", "Only the flagger or host can dismiss this ping");
+      return;
+    }
+
+    const dismissed = db.dismissRoomPing(pingId);
+    if (!dismissed) return;
+    const info = this.pingRowToInfo(dismissed);
+    this.io.to(room.id).emit("review-dismissed", info);
+    this.io.to(room.id).emit(
+      "room-pings",
+      db.listOpenRoomPings(room.id).map((r) => this.pingRowToInfo(r)),
+    );
+  }
+
+  /** REST + socket shared ack path. Returns updated ping or null if already acked. */
+  ackPing(
+    roomId: string,
+    pingId: string,
+    userId: string,
+    userName: string,
+  ): PingInfo | null {
+    const ping = db.getRoomPing(pingId);
+    if (!ping || ping.room_id !== roomId) {
+      throw new Error("Review ping not found");
+    }
+    if (ping.status !== "open") {
+      throw new Error("This review ping is no longer open");
+    }
+
+    const targets = this.parsePingTargets(ping.targets);
+    if (targets !== "everyone" && !targets.includes(userId)) {
+      // Actors / hosts may still ack so the Slack deep link works for them.
+      const role = this.resolveUserRoomRole(roomId, userId);
+      if (ping.actor_user_id !== userId && role !== "owner") {
+        throw new Error("You are not a target of this review ping");
+      }
+    }
+
+    const inserted = db.ackRoomPing(pingId, userId, userName);
+    const fresh = db.getRoomPing(pingId);
+    if (!fresh) return null;
+    const info = this.pingRowToInfo(fresh);
+    if (!inserted) return info;
+
+    const room = this.rooms.get(roomId);
+    if (room) {
+      this.io.to(roomId).emit("review-acked", info);
+    }
+    return info;
+  }
+
+  setRoomSlackWebhook(
+    roomId: string,
+    webhookUrl: string,
+    actorUserId: string,
+  ): RoomInfo {
+    if (!this.userCanManageRoom(roomId, actorUserId)) {
+      throw new Error("Only the host can connect Slack");
+    }
+    if (!encryptionConfigured()) {
+      throw new Error("KEY_ENCRYPTION_SECRET is required to store Slack webhooks");
+    }
+    const url = webhookUrl.trim();
+    if (!/^https:\/\/hooks\.slack\.com\/services\//i.test(url)) {
+      throw new Error(
+        "Webhook URL must be a Slack incoming webhook (hooks.slack.com/services/...)",
+      );
+    }
+    const ciphertext = encryptApiKey(url);
+    const hint = maskApiKey(url);
+    db.setRoomSlackWebhook(roomId, ciphertext, hint);
+    const row = db.getRoom(roomId);
+    if (!row) throw new Error("Room not found");
+    const live = this.rooms.get(roomId);
+    if (live) {
+      live.row.slack_webhook_ciphertext = ciphertext;
+      live.row.slack_webhook_hint = hint;
+    }
+    return this.toRoomInfo(row, live?.participants.size ?? 0, actorUserId);
+  }
+
+  clearRoomSlackWebhook(roomId: string, actorUserId: string): RoomInfo {
+    if (!this.userCanManageRoom(roomId, actorUserId)) {
+      throw new Error("Only the host can disconnect Slack");
+    }
+    db.clearRoomSlackWebhook(roomId);
+    const row = db.getRoom(roomId);
+    if (!row) throw new Error("Room not found");
+    const live = this.rooms.get(roomId);
+    if (live) {
+      live.row.slack_webhook_ciphertext = null;
+      live.row.slack_webhook_hint = null;
+    }
+    return this.toRoomInfo(row, live?.participants.size ?? 0, actorUserId);
+  }
+
+  getSlackWebhookStatus(
+    roomId: string,
+    actorUserId: string,
+  ): { configured: boolean; hint: string | null; envFallback: boolean } {
+    if (!this.userCanAccessRoom(roomId, actorUserId)) {
+      throw new Error("Room not found");
+    }
+    const row = db.getRoom(roomId);
+    if (!row) throw new Error("Room not found");
+    const canManage = this.userCanManageRoom(roomId, actorUserId);
+    return {
+      configured: Boolean(row.slack_webhook_ciphertext),
+      hint: canManage ? row.slack_webhook_hint || null : null,
+      envFallback: envSlackWebhookConfigured(),
+    };
+  }
+
+  // -----------------------------------------------------------------------
   // addAgent / stopAgent
   // -----------------------------------------------------------------------
 
@@ -3812,6 +4101,12 @@ export class RoomManager {
       agents: agentInfos,
       myRole,
       myCanManage,
+      slackNotifyConfigured: Boolean(
+        row.slack_webhook_ciphertext || envSlackWebhookConfigured(),
+      ),
+      slackWebhookHint: myCanManage
+        ? row.slack_webhook_hint || undefined
+        : undefined,
     };
   }
 }
