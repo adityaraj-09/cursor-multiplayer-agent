@@ -144,6 +144,31 @@ export function notifyEvent(payload: NotifyPayload): void {
 }
 
 /**
+ * Send a one-off test message to a Slack incoming webhook.
+ * Awaits delivery so callers can surface success/failure in the UI.
+ */
+export async function sendSlackTestMessage(opts: {
+  webhookUrl: string;
+  roomName: string;
+}): Promise<void> {
+  const url = opts.webhookUrl.trim();
+  if (!url) throw new Error("No Slack webhook configured");
+  const name = opts.roomName.trim() || "this session";
+  await postJson(url, {
+    text: `Steer test: Slack is connected for "${name}".`,
+    blocks: [
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: `*Steer test*\nSlack notifications are working for *${name}*.`,
+        },
+      },
+    ],
+  });
+}
+
+/**
  * Notify Slack (room webhook or env fallback) + generic webhook that a
  * session was flagged for human review. Fire-and-forget.
  */

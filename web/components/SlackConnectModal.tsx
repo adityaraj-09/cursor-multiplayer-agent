@@ -5,6 +5,7 @@ import {
   clearRoomSlackWebhook,
   fetchRoomSlackWebhook,
   setRoomSlackWebhook,
+  testRoomSlackWebhook,
 } from "../lib/api";
 
 export default function SlackConnectModal({
@@ -26,7 +27,11 @@ export default function SlackConnectModal({
   const [envFallback, setEnvFallback] = useState(false);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+
+  const canTest = configured || envFallback;
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -46,6 +51,7 @@ export default function SlackConnectModal({
   useEffect(() => {
     if (!open) return;
     setWebhookUrl("");
+    setNotice("");
     void refresh();
   }, [open, refresh]);
 
@@ -64,11 +70,13 @@ export default function SlackConnectModal({
     if (!canManage) return;
     setSaving(true);
     setError("");
+    setNotice("");
     try {
       const result = await setRoomSlackWebhook(roomId, webhookUrl.trim());
       setConfigured(true);
       setHint(result.hint);
       setWebhookUrl("");
+      setNotice("Webhook saved. Send a test message to confirm delivery.");
       onUpdated?.(true, result.hint);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save webhook");
@@ -82,6 +90,7 @@ export default function SlackConnectModal({
     if (!window.confirm("Remove this room’s Slack webhook?")) return;
     setSaving(true);
     setError("");
+    setNotice("");
     try {
       await clearRoomSlackWebhook(roomId);
       setConfigured(false);
@@ -91,6 +100,25 @@ export default function SlackConnectModal({
       setError(err instanceof Error ? err.message : "Failed to remove webhook");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleTest = async () => {
+    if (!canManage) return;
+    setTesting(true);
+    setError("");
+    setNotice("");
+    try {
+      const result = await testRoomSlackWebhook(roomId);
+      setNotice(
+        result.used === "room"
+          ? "Test message sent to this room’s webhook. Check Slack."
+          : "Test message sent via server SLACK_WEBHOOK_URL. Check Slack.",
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to send test");
+    } finally {
+      setTesting(false);
     }
   };
 
@@ -105,11 +133,11 @@ export default function SlackConnectModal({
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
-        aria-label="Connect Slack"
+        aria-label="Slack settings"
       >
         <div className="flex items-center justify-between px-4 h-11 border-b border-[#2b2b2b]">
           <h2 className="text-[14px] font-medium text-[#e4e4e4]">
-            Slack notifications
+            Slack settings
           </h2>
           <button
             type="button"
@@ -122,8 +150,8 @@ export default function SlackConnectModal({
 
         <div className="px-4 py-3 space-y-3">
           <p className="text-[12px] text-[#6e6e6e]">
-            Paste a Slack Incoming Webhook URL. It is encrypted at rest and used
-            when someone flags this session for review.
+            Room setting for review pings. Paste a Slack Incoming Webhook URL —
+            stored encrypted and used when someone flags this session.
           </p>
 
           {loading ? (
@@ -161,11 +189,21 @@ export default function SlackConnectModal({
                       className="mt-1 w-full h-9 px-3 bg-[#252525] border border-[#2b2b2b] rounded-md text-[13px] text-[#e4e4e4] placeholder:text-[#6e6e6e] outline-none focus:border-[#4d9fff]"
                     />
                   </label>
-                  <div className="flex gap-2 justify-end">
+                  <div className="flex flex-wrap gap-2 justify-end">
+                    {canTest && (
+                      <button
+                        type="button"
+                        disabled={saving || testing}
+                        onClick={() => void handleTest()}
+                        className="h-9 px-3 rounded-md text-[12px] text-[#8ec5ff] border border-[#2a3a4a] bg-[#141a22] hover:bg-[#1a2430] disabled:opacity-40"
+                      >
+                        {testing ? "Testing…" : "Send test"}
+                      </button>
+                    )}
                     {configured && (
                       <button
                         type="button"
-                        disabled={saving}
+                        disabled={saving || testing}
                         onClick={() => void handleClear()}
                         className="h-9 px-3 rounded-md text-[12px] text-[#f07070] border border-[#3c2b2b] disabled:opacity-40"
                       >
@@ -174,7 +212,7 @@ export default function SlackConnectModal({
                     )}
                     <button
                       type="button"
-                      disabled={saving || !webhookUrl.trim()}
+                      disabled={saving || testing || !webhookUrl.trim()}
                       onClick={() => void handleSave()}
                       className="h-9 px-3 rounded-md bg-[#e4e4e4] text-[#141414] text-[12px] font-medium hover:bg-white disabled:opacity-40"
                     >
@@ -190,6 +228,7 @@ export default function SlackConnectModal({
             </>
           )}
 
+          {notice && <p className="text-[12px] text-[#3ecf8e]">{notice}</p>}
           {error && <p className="text-[12px] text-[#f07070]">{error}</p>}
         </div>
       </div>

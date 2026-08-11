@@ -555,6 +555,29 @@ app.delete("/api/rooms/:id/slack-webhook", requireAuth, (req, res) => {
 });
 
 /**
+ * POST /api/rooms/:id/slack-webhook/test — host sends a test Slack message.
+ */
+app.post("/api/rooms/:id/slack-webhook/test", requireAuth, async (req, res) => {
+  try {
+    const result = await roomManager.testRoomSlackWebhook(
+      routeParam(req.params.id),
+      req.user!.id,
+    );
+    res.json(result);
+  } catch (err) {
+    const message =
+      err instanceof Error ? err.message : "Failed to send test message";
+    const status =
+      message.includes("Only the host") || message.includes("Not allowed")
+        ? 403
+        : message.includes("not found")
+          ? 404
+          : 400;
+    res.status(status).json({ error: message });
+  }
+});
+
+/**
  * POST /api/rooms/:id/pings/:pingId/ack — acknowledge a review ping (deep link).
  */
 app.post("/api/rooms/:id/pings/:pingId/ack", requireAuth, (req, res) => {

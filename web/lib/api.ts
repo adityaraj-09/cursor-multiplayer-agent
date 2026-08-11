@@ -500,6 +500,20 @@ export async function clearRoomSlackWebhook(
   return res.json();
 }
 
+export async function testRoomSlackWebhook(
+  roomId: string,
+): Promise<{ ok: true; used: "room" | "env" }> {
+  const res = await fetch(`${API_BASE}/rooms/${roomId}/slack-webhook/test`, {
+    method: "POST",
+    headers: await authHeaders(),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Failed to send test message");
+  }
+  return res.json();
+}
+
 export async function ackRoomPing(
   roomId: string,
   pingId: string,
