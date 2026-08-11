@@ -416,6 +416,9 @@ function LiveRoom({
     if (user?.id && ping.actorUserId === user.id) return true;
     return canManage;
   });
+  const unackedPingCount = relevantPings.filter(
+    (ping) => !user?.id || !ping.acks.some((a) => a.userId === user.id),
+  ).length;
 
   useEffect(() => {
     if (!socket || !roomInfo) return;
@@ -815,25 +818,35 @@ function LiveRoom({
               <Share2 className="h-3.5 w-3.5" strokeWidth={1.75} />
               <span className="hidden sm:inline">Invite</span>
             </button>
-            {canFlag && (
+            {(canFlag || unackedPingCount > 0) && (
               <button
                 type="button"
-                onClick={() => setFlagOpen(true)}
-                className="inline-flex h-8 items-center gap-1.5 px-2.5 sm:px-3 rounded-lg text-[11px] sm:text-[12px] text-[#e8a23a] hover:text-[#f0b85a] border border-[#3c3220] hover:border-[#5a4a30] bg-[#1f1a14] transition-colors"
-                title="Flag for review"
+                onClick={() => {
+                  if (canFlag) setFlagOpen(true);
+                  else {
+                    document
+                      .getElementById("review-pings")
+                      ?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+                  }
+                }}
+                className="relative inline-flex h-8 items-center gap-1.5 px-2.5 sm:px-3 rounded-lg text-[11px] sm:text-[12px] text-[#e8a23a] hover:text-[#f0b85a] border border-[#3c3220] hover:border-[#5a4a30] bg-[#1f1a14] transition-colors"
+                title={
+                  canFlag
+                    ? unackedPingCount > 0
+                      ? `Flag for review · ${unackedPingCount} open`
+                      : "Flag for review"
+                    : `${unackedPingCount} open review ping${unackedPingCount === 1 ? "" : "s"}`
+                }
               >
                 <Bell className="h-3.5 w-3.5" strokeWidth={1.75} />
-                <span className="hidden sm:inline">Flag</span>
-              </button>
-            )}
-            {canManage && (
-              <button
-                type="button"
-                onClick={() => setSlackOpen(true)}
-                className="hidden md:inline-flex h-8 items-center gap-1.5 px-3 rounded-lg text-[12px] text-[#a0a0a0] hover:text-[#e4e4e4] border border-[#2b2b2b] hover:border-[#3c3c3c] bg-[#1f1f1f] transition-colors"
-                title="Slack webhook"
-              >
-                Slack
+                <span className="hidden sm:inline">
+                  {canFlag ? "Flag" : "Reviews"}
+                </span>
+                {unackedPingCount > 0 && (
+                  <span className="absolute -top-1.5 -right-1.5 min-w-[16px] h-4 px-1 rounded-full bg-[#e8a23a] text-[#1a1208] text-[10px] font-semibold leading-4 text-center">
+                    {unackedPingCount > 9 ? "9+" : unackedPingCount}
+                  </span>
+                )}
               </button>
             )}
             <button
@@ -1001,6 +1014,20 @@ function LiveRoom({
               <option value="all">Approve all tools</option>
             </select>
           )}
+          {canManage && (
+            <button
+              type="button"
+              onClick={() => setSlackOpen(true)}
+              className={`h-8 px-2.5 rounded-md text-[11px] border shrink-0 ${
+                roomInfo?.slackNotifyConfigured
+                  ? "border-[#2a4a35] bg-[#1c2a22] text-[#7ddea8]"
+                  : "border-[#2b2b2b] bg-[#1f1f1f] text-[#a0a0a0]"
+              }`}
+              title="Slack notification settings"
+            >
+              {roomInfo?.slackNotifyConfigured ? "Slack on" : "Slack"}
+            </button>
+          )}
         </div>
       </div>
 
@@ -1034,7 +1061,10 @@ function LiveRoom({
 
         <div className="flex-1 flex flex-col min-h-0 min-w-0 overflow-hidden bg-[#121212]/80">
           {relevantPings.length > 0 && (
-            <div className="shrink-0 border-b border-[#3a2a1c] bg-[#14110e] px-3 py-2 space-y-2 max-h-[35%] overflow-y-auto">
+            <div
+              id="review-pings"
+              className="shrink-0 border-b border-[#3a2a1c] bg-[#14110e] px-3 py-2 space-y-2 max-h-[35%] overflow-y-auto"
+            >
               {relevantPings.map((ping) => (
                 <ReviewPingBanner
                   key={ping.id}

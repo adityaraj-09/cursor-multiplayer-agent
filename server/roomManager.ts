@@ -65,7 +65,12 @@ import {
 } from "../shared/roomPermissions.js";
 import { detectAgentConflicts, resolveAgentCwd, findScopeOverlap, formatScopeOverlapError } from "./agentConflicts.js";
 import { FileLockRegistry, broadcastFileLocks } from "./fileLocks.js";
-import { envSlackWebhookConfigured, notifyEvent, notifyReviewFlag } from "./notify.js";
+import {
+  envSlackWebhookConfigured,
+  notifyEvent,
+  notifyReviewFlag,
+  sendSlackTestMessage,
+} from "./notify.js";
 import { userCanManageRoom as userCanManageRoomAccess } from "./roomAccess.js";
 import type {
   AgentInfo,
@@ -3000,6 +3005,29 @@ export class RoomManager {
       hint: canManage ? row.slack_webhook_hint || null : null,
       envFallback: envSlackWebhookConfigured(),
     };
+  }
+
+  /** Posts a test message to the room webhook (or env fallback). */
+  async testRoomSlackWebhook(
+    roomId: string,
+    actorUserId: string,
+  ): Promise<{ ok: true; used: "room" | "env" }> {
+    if (!this.userCanManageRoom(roomId, actorUserId)) {
+      throw new Error("Only the host can test Slack");
+    }
+    const row = db.getRoom(roomId);
+    if (!row) throw new Error("Room not found");
+    const roomUrl = this.decryptRoomSlackWebhook(row);
+    const envUrl = process.env.SLACK_WEBHOOK_URL?.trim() || "";
+    const webhookUrl = roomUrl || envUrl;
+    if (!webhookUrl) {
+      throw new Error("Connect a Slack webhook first (or set SLACK_WEBHOOK_URL)");
+    }
+    await sendSlackTestMessage({
+      webhookUrl,
+      roomName: row.name,
+    });
+    return { ok: true, used: roomUrl ? "room" : "env" };
   }
 
   // -----------------------------------------------------------------------

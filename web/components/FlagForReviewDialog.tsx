@@ -111,14 +111,15 @@ export default function FlagForReviewDialog({
           {!slackConfigured && (
             <div className="rounded-md border border-[#3a3420] bg-[#16140f] px-3 py-2">
               <p className="text-[12px] text-[#c9a227]">
-                Slack is not connected for this room. In-room ping still works.
+                Slack is not configured in room settings. In-room ping still
+                works.
               </p>
               <button
                 type="button"
                 onClick={onOpenSlack}
                 className="mt-1.5 text-[12px] text-[#8ec5ff] hover:underline"
               >
-                Connect Slack webhook
+                Open Slack settings
               </button>
             </div>
           )}

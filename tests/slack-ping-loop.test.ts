@@ -2,6 +2,7 @@ import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import {
   notificationsConfigured,
   notifyReviewFlag,
+  sendSlackTestMessage,
 } from "../server/notify.js";
 
 describe("review ping notify", () => {
@@ -54,6 +55,24 @@ describe("review ping notify", () => {
     expect(body.blocks?.[0]?.text?.text).toContain("Demo");
     expect(body.blocks?.[0]?.text?.text).toContain("Please check the diff");
     expect(body.blocks?.[1]?.elements?.[0]?.url).toContain("ping=ping_abc");
+  });
+
+  it("sendSlackTestMessage posts a confirmation payload", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      text: async () => "",
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await sendSlackTestMessage({
+      webhookUrl: "https://hooks.slack.com/services/T/B/test",
+      roomName: "Demo",
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const body = JSON.parse(String(fetchMock.mock.calls[0][1].body));
+    expect(body.text).toContain("Demo");
+    expect(body.blocks?.[0]?.text?.text).toContain("Steer test");
   });
 
   it("falls back to env Slack webhook when room webhook omitted", async () => {
