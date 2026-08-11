@@ -8,13 +8,11 @@ import {
   Bell,
   Bot,
   Cloud,
-  Download,
   Home,
   PanelLeftOpen,
   PanelRightOpen,
-  Share2,
+  Settings2,
   Square,
-  StopCircle,
   Users,
   Wifi,
   WifiOff,
@@ -55,6 +53,7 @@ import AddAgentDialog from "../../../components/AddAgentDialog";
 import LockPanel from "../../../components/LockPanel";
 import FlagForReviewDialog from "../../../components/FlagForReviewDialog";
 import ReviewPingBanner from "../../../components/ReviewPingBanner";
+import RoomSettingsDialog from "../../../components/RoomSettingsDialog";
 import SlackConnectModal from "../../../components/SlackConnectModal";
 import type {
   ApprovalMode,
@@ -72,14 +71,10 @@ import {
   formatTypingIndicator,
   formatTypingIndicatorAll,
 } from "../../../../shared/typing";
-import {
-  approvalModeDescription,
-  approvalModeLabel,
-} from "../../../../shared/approvals";
+import { approvalModeLabel } from "../../../../shared/approvals";
 import {
   canRequestDrive,
   canSteerWithRole,
-  controlModeDescription,
   controlModeLabel,
   roomRoleLabel,
   steerDeniedReason,
@@ -312,6 +307,7 @@ function LiveRoom({
   );
   const [flagOpen, setFlagOpen] = useState(false);
   const [slackOpen, setSlackOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const deepAckedRef = useRef<string | null>(null);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [rosterOpen, setRosterOpen] = useState(false);
@@ -810,14 +806,6 @@ function LiveRoom({
               <Users className="h-3.5 w-3.5" strokeWidth={1.75} />
               <span className="hidden sm:inline">Members</span>
             </button>
-            <button
-              type="button"
-              onClick={() => setInviteOpen(true)}
-              className="inline-flex h-8 items-center gap-1.5 px-2.5 sm:px-3 rounded-lg text-[11px] sm:text-[12px] text-[#a0a0a0] hover:text-[#e4e4e4] border border-[#2b2b2b] hover:border-[#3c3c3c] bg-[#1f1f1f] transition-colors"
-            >
-              <Share2 className="h-3.5 w-3.5" strokeWidth={1.75} />
-              <span className="hidden sm:inline">Invite</span>
-            </button>
             {(canFlag || unackedPingCount > 0) && (
               <button
                 type="button"
@@ -851,13 +839,12 @@ function LiveRoom({
             )}
             <button
               type="button"
-              onClick={() => void handleExport()}
-              disabled={exporting}
-              className="hidden sm:inline-flex h-8 items-center gap-1.5 px-3 rounded-lg text-[12px] text-[#a0a0a0] hover:text-[#e4e4e4] border border-[#2b2b2b] hover:border-[#3c3c3c] bg-[#1f1f1f] transition-colors disabled:opacity-50"
-              title="Export transcript"
+              onClick={() => setSettingsOpen(true)}
+              className="inline-flex h-8 items-center gap-1.5 px-2.5 sm:px-3 rounded-lg text-[11px] sm:text-[12px] text-[#a0a0a0] hover:text-[#e4e4e4] border border-[#2b2b2b] hover:border-[#3c3c3c] bg-[#1f1f1f] transition-colors"
+              title="Room settings"
             >
-              <Download className="h-3.5 w-3.5" strokeWidth={1.75} />
-              {exporting ? "Exporting…" : "Export"}
+              <Settings2 className="h-3.5 w-3.5" strokeWidth={1.75} />
+              <span className="hidden sm:inline">Settings</span>
             </button>
             {selectedStatus === "running" && canSteerSelected && (
               <button
@@ -868,28 +855,6 @@ function LiveRoom({
               >
                 <Square className="h-3 w-3" strokeWidth={2} />
                 <span className="hidden sm:inline">{aborting ? "Stopping…" : "Abort"}</span>
-              </button>
-            )}
-            {canManage && (
-              <button
-                type="button"
-                onClick={() => void handleStopSession()}
-                disabled={stopping}
-                className="hidden sm:inline-flex h-8 items-center gap-1.5 px-3 rounded-lg text-[12px] text-[#a0a0a0] hover:text-[#f07070] border border-[#2b2b2b] hover:border-[#3c3c3c] bg-[#1f1f1f] transition-colors disabled:opacity-50"
-              >
-                <StopCircle className="h-3.5 w-3.5" strokeWidth={1.75} />
-                {stopping ? "Stopping…" : "Stop"}
-              </button>
-            )}
-            {!amHost && (
-              <button
-                type="button"
-                onClick={() => {
-                  if (window.confirm("Leave this session?")) leaveRoom();
-                }}
-                className="hidden sm:inline-flex h-8 items-center px-3 rounded-lg text-[12px] text-[#a0a0a0] hover:text-[#f07070] border border-[#2b2b2b] hover:border-[#3c3c3c] bg-[#1f1f1f] transition-colors"
-              >
-                Leave
               </button>
             )}
             <PresenceBar
@@ -929,107 +894,30 @@ function LiveRoom({
             )}
           </div>
         </div>
-      </header>
-
-      <div className="relative z-10 border-b border-[#2b2b2b] bg-[#141414] px-3 sm:px-4 py-2 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
-        <div className="min-w-0 flex-1">
-          <p className="text-[11px] text-[#a0a0a0]">
-            <span className="text-[#e4e4e4]">{roomRoleLabel(myRole)}</span>
+        <button
+          type="button"
+          onClick={() => setSettingsOpen(true)}
+          className="w-full px-3 sm:px-4 pb-2 -mt-0.5 text-left"
+          title="Open room settings"
+        >
+          <p className="text-[11px] text-[#6e6e6e] truncate">
+            <span className="text-[#a0a0a0]">{roomRoleLabel(myRole)}</span>
             {" · "}
             {controlModeLabel(controlMode)}
-            {" — "}
-            {controlModeDescription(controlMode)}
             {" · "}
             {approvalModeLabel(approvalMode)}
-            {selectedAgent?.planMode ? " · Plan mode" : ""}
+            {selectedAgent?.planMode ? (
+              <span className="text-[#8ec5ff]"> · Plan mode</span>
+            ) : null}
+            {roomInfo?.slackNotifyConfigured ? (
+              <span className="text-[#7ddea8]"> · Slack</span>
+            ) : null}
             {!canSteerSelected && steerLockReason ? (
               <span className="text-[#e8a23a]"> · {steerLockReason}</span>
             ) : null}
           </p>
-          <p className="text-[11px] text-[#6e6e6e] mt-0.5">
-            {approvalModeDescription(approvalMode)}
-          </p>
-          {runtime === "local" && (
-            <p className="text-[11px] text-[#a07a3a] mt-0.5">
-              Local agents can operate on the host machine
-              {selectedBackend === "claude-code"
-                ? " and may run commands with elevated permissions"
-                : ""}
-              . Invite viewers for watch-only access.
-            </p>
-          )}
-        </div>
-        <div className="flex items-center gap-2 shrink-0">
-          <button
-            type="button"
-            onClick={() => void handleExport()}
-            disabled={exporting}
-            className="sm:hidden inline-flex h-8 items-center gap-1.5 px-2.5 rounded-md text-[11px] text-[#a0a0a0] border border-[#2b2b2b] bg-[#1f1f1f]"
-          >
-            <Download className="h-3.5 w-3.5" strokeWidth={1.75} />
-            Export
-          </button>
-          {canManage && selectedAgent && (
-            <button
-              type="button"
-              disabled={togglingPlanMode}
-              onClick={() => void handleTogglePlanMode()}
-              className={`h-8 px-2.5 rounded-md text-[11px] border shrink-0 ${
-                selectedAgent.planMode
-                  ? "border-[#4d9fff] bg-[#1a2430] text-[#8ec5ff]"
-                  : "border-[#2b2b2b] bg-[#1f1f1f] text-[#a0a0a0]"
-              }`}
-              title="Toggle plan mode for the selected agent"
-            >
-              {selectedAgent.planMode ? "Plan on" : "Plan off"}
-            </button>
-          )}
-          {canManage && (
-            <select
-              value={controlMode}
-              disabled={savingControlMode}
-              onChange={(e) =>
-                void handleControlModeChange(e.target.value as ControlMode)
-              }
-              className="h-8 px-2 rounded-md bg-[#1f1f1f] border border-[#2b2b2b] text-[11px] text-[#e4e4e4] outline-none focus:border-[#4d9fff] shrink-0"
-              title="Control mode"
-            >
-              <option value="open">Open collaboration</option>
-              <option value="driver">Driver enforced</option>
-              <option value="host">Host only</option>
-            </select>
-          )}
-          {canManage && (
-            <select
-              value={approvalMode}
-              disabled={savingApprovalMode}
-              onChange={(e) =>
-                void handleApprovalModeChange(e.target.value as ApprovalMode)
-              }
-              className="h-8 px-2 rounded-md bg-[#1f1f1f] border border-[#2b2b2b] text-[11px] text-[#e4e4e4] outline-none focus:border-[#c9a227] shrink-0"
-              title="Approval gates"
-            >
-              <option value="off">Approvals off</option>
-              <option value="dangerous">Approve dangerous</option>
-              <option value="all">Approve all tools</option>
-            </select>
-          )}
-          {canManage && (
-            <button
-              type="button"
-              onClick={() => setSlackOpen(true)}
-              className={`h-8 px-2.5 rounded-md text-[11px] border shrink-0 ${
-                roomInfo?.slackNotifyConfigured
-                  ? "border-[#2a4a35] bg-[#1c2a22] text-[#7ddea8]"
-                  : "border-[#2b2b2b] bg-[#1f1f1f] text-[#a0a0a0]"
-              }`}
-              title="Slack notification settings"
-            >
-              {roomInfo?.slackNotifyConfigured ? "Slack on" : "Slack"}
-            </button>
-          )}
-        </div>
-      </div>
+        </button>
+      </header>
 
       <LockPanel
         conflicts={conflicts}
@@ -1163,6 +1051,42 @@ function LiveRoom({
         />
       )}
 
+      <RoomSettingsDialog
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        roomName={roomInfo?.name || roomId}
+        roomId={roomId}
+        myRole={myRole}
+        controlMode={controlMode}
+        approvalMode={approvalMode}
+        canManage={canManage}
+        amHost={amHost}
+        selectedAgent={selectedAgent}
+        slackConfigured={Boolean(roomInfo?.slackNotifyConfigured)}
+        runtime={runtime}
+        planModeBusy={togglingPlanMode}
+        savingControlMode={savingControlMode}
+        savingApprovalMode={savingApprovalMode}
+        exporting={exporting}
+        stopping={stopping}
+        onControlModeChange={(mode) => void handleControlModeChange(mode)}
+        onApprovalModeChange={(mode) => void handleApprovalModeChange(mode)}
+        onTogglePlanMode={() => void handleTogglePlanMode()}
+        onOpenSlack={() => {
+          setSettingsOpen(false);
+          setSlackOpen(true);
+        }}
+        onOpenInvites={() => {
+          setSettingsOpen(false);
+          setInviteOpen(true);
+        }}
+        onExport={() => void handleExport()}
+        onStopSession={() => void handleStopSession()}
+        onLeave={() => {
+          if (window.confirm("Leave this session?")) leaveRoom();
+        }}
+      />
+
       <InvitePanel
         roomId={roomId}
         open={inviteOpen}
@@ -1179,7 +1103,7 @@ function LiveRoom({
         onFlag={(payload) => flagReview(payload)}
         onOpenSlack={() => {
           setFlagOpen(false);
-          setSlackOpen(true);
+          setSettingsOpen(true);
         }}
       />
 
