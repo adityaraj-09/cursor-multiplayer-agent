@@ -73,6 +73,8 @@ export default function ChatPanel({
 }: ChatPanelProps) {
   const scrollerRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
+  const lastMessageCount = useRef(0);
+  const touchYRef = useRef<number | null>(null);
 
   const agentLabel = (id?: string) =>
     agents.find((a) => a.id === id)?.label || (id ? id.slice(0, 6) : undefined);
@@ -84,25 +86,63 @@ export default function ChatPanel({
         )
       : messages;
 
+  const updateStickFromScroll = () => {
+    const el = scrollerRef.current;
+    if (!el) return;
+    const gap = el.scrollHeight - el.scrollTop - el.clientHeight;
+    stickToBottom.current = gap < 64;
+  };
+
+  // Re-bind whenever the scroller mounts (empty-state → timeline) so upward
+  // scrolls actually clear the stick-to-bottom flag.
   useEffect(() => {
     const el = scrollerRef.current;
     if (!el) return;
-    const onScroll = () => {
-      const gap = el.scrollHeight - el.scrollTop - el.clientHeight;
-      stickToBottom.current = gap < 80;
+    updateStickFromScroll();
+    const onScroll = () => updateStickFromScroll();
+    // Unpin immediately on intentional upward gestures — don't wait for the
+    // next scroll event after a streaming re-pin race.
+    const onWheel = (e: WheelEvent) => {
+      if (e.deltaY < 0) stickToBottom.current = false;
     };
-    el.addEventListener("scroll", onScroll);
-    return () => el.removeEventListener("scroll", onScroll);
-  }, []);
+    const onTouchStart = (e: TouchEvent) => {
+      touchYRef.current = e.touches[0]?.clientY ?? null;
+    };
+    const onTouchMove = (e: TouchEvent) => {
+      const y = e.touches[0]?.clientY;
+      if (y == null || touchYRef.current == null) return;
+      if (y > touchYRef.current + 2) stickToBottom.current = false;
+      touchYRef.current = y;
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    el.addEventListener("wheel", onWheel, { passive: true });
+    el.addEventListener("touchstart", onTouchStart, { passive: true });
+    el.addEventListener("touchmove", onTouchMove, { passive: true });
+    return () => {
+      el.removeEventListener("scroll", onScroll);
+      el.removeEventListener("wheel", onWheel);
+      el.removeEventListener("touchstart", onTouchStart);
+      el.removeEventListener("touchmove", onTouchMove);
+    };
+  }, [filtered.length > 0]);
 
   useEffect(() => {
     const scroller = scrollerRef.current;
-    if (!scroller || !stickToBottom.current) return;
+    if (!scroller) return;
+
+    const grew = filtered.length >= lastMessageCount.current;
+    lastMessageCount.current = filtered.length;
+
+    // Only auto-follow when the user is already near the bottom. Streaming
+    // deltas and new posts must not yank the viewport while reading history.
+    if (!stickToBottom.current) return;
+    if (!grew && agentStatus !== "running") return;
 
     // Keep movement inside the chat scroller. scrollIntoView() may scroll all
     // ancestors, including the document, which shifts the header and composer.
     const frame = requestAnimationFrame(() => {
-      scroller.scrollTop = scroller.scrollHeight;
+      if (!stickToBottom.current || !scrollerRef.current) return;
+      scrollerRef.current.scrollTop = scrollerRef.current.scrollHeight;
     });
     return () => cancelAnimationFrame(frame);
   }, [filtered, agentStatus]);
@@ -199,11 +239,8 @@ function ToolCallGroup({
   agentLabel?: string;
 }) {
   const anyStreaming = messages.some((m) => m.status === "streaming");
-  const hasDiffs = messages.some((m) => Boolean(m.diffPatch));
-  // Keep tools collapsed by default; auto-open when the group includes edits
-  // so file diffs aren't easy to miss. Manual toggles win after that.
-  const [manualOpen, setManualOpen] = useState<boolean | null>(null);
-  const open = manualOpen ?? hasDiffs;
+  // Always collapsed by default — including groups that contain edits.
+  const [open, setOpen] = useState(false);
 
   const doneCount = messages.filter((m) => m.status === "done").length;
   const editCount = messages.filter((m) => Boolean(m.diffPatch)).length;
@@ -216,7 +253,7 @@ function ToolCallGroup({
     <div className="rounded-xl border border-[#2b2b2b] bg-[#181818] overflow-hidden shadow-[0_14px_34px_rgba(0,0,0,0.16)]">
       <button
         type="button"
-        onClick={() => setManualOpen(!open)}
+        onClick={() => setOpen((v) => !v)}
         className="w-full flex items-center gap-2.5 px-3.5 h-10 text-left hover:bg-[#1f1f1f] transition-colors"
       >
         <Chevron open={open} />
@@ -268,15 +305,14 @@ function ToolCallGroup({
 
 function ToolCallRow({ message }: { message: ChatMessage }) {
   const hasDiff = Boolean(message.diffPatch);
-  // Expand edit rows by default so the file diff is visible inside Tools.
-  const [manualOpen, setManualOpen] = useState<boolean | null>(null);
-  const open = manualOpen ?? hasDiff;
+  // Edit rows stay collapsed until the user opens them.
+  const [open, setOpen] = useState(false);
 
   return (
     <div className="bg-[#151515]">
       <button
         type="button"
-        onClick={() => setManualOpen(!open)}
+        onClick={() => setOpen((v) => !v)}
         className="w-full flex items-start gap-2.5 px-3.5 py-2.5 text-left hover:bg-[#1a1a1a] transition-colors"
       >
         <Chevron open={open} className="mt-0.5" />
@@ -325,9 +361,7 @@ function ToolCallRow({ message }: { message: ChatMessage }) {
               {message.content}
             </p>
           )}
-          {message.diffPatch && (
-            <InlineDiff patch={message.diffPatch} defaultOpen />
-          )}
+          {message.diffPatch && <InlineDiff patch={message.diffPatch} />}
         </div>
       )}
     </div>
