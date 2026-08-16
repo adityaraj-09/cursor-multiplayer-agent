@@ -24,6 +24,7 @@ import {
 import { DiffWatcher } from "./diffWatcher.js";
 import { extractToolPath, getFileDiff, isEditTool } from "./gitDiff.js";
 import { isTodoTool } from "../shared/backends/cursor.js";
+import type { NormalizedAgentEvent } from "../shared/backends/index.js";
 import { listCliModels } from "./cliModels.js";
 import { WorkerRelay } from "./workerRelay.js";
 import * as db from "./db.js";
@@ -41,6 +42,8 @@ import {
   materializeUploadsForAgent,
   resolveUploads,
   toAttachment,
+  toPromptImages,
+  type PromptImage,
 } from "./uploads.js";
 import {
   APP_ORIGIN,
@@ -138,6 +141,12 @@ export interface CreateRoomRequest {
 }
 
 type AgentBackend = AgentRunner | SdkAgentSession | ClaudeSandboxSession;
+
+type AgentPrompt = string | { text: string; images: PromptImage[] };
+
+function promptText(prompt: AgentPrompt): string {
+  return typeof prompt === "string" ? prompt : prompt.text;
+}
 
 interface AgentState {
   row: db.AgentRow;
@@ -1728,7 +1737,12 @@ export class RoomManager {
     );
     const attachments = uploads.map(toAttachment);
     const materialized = materializeUploadsForAgent(agent.cwd, uploads);
-    const attachSuffix = buildAttachmentPromptSuffix(uploads, materialized);
+    const sdkImages = toPromptImages(uploads);
+    const canSendImages =
+      agent.backend instanceof SdkAgentSession && sdkImages.length > 0;
+    const attachSuffix = buildAttachmentPromptSuffix(uploads, materialized, {
+      imagesAttachedToMessage: canSendImages,
+    });
 
     const userMsg: ChatMessage = {
       id: nanoid(12),
@@ -1749,7 +1763,13 @@ export class RoomManager {
     db.updateRoomActivity(room.id);
     const promptWithAttr =
       sanitized + attachSuffix + attributionPromptSuffix(steeredBy);
-    void this.runAgent(room, agent, promptWithAttr);
+    void this.runAgent(
+      room,
+      agent,
+      canSendImages
+        ? { text: promptWithAttr, images: sdkImages }
+        : promptWithAttr,
+    );
   }
 
   handleApprovePlan(
@@ -1879,7 +1899,7 @@ export class RoomManager {
   private tryDispatchToWorker(
     room: RoomState,
     agent: AgentState,
-    prompt: string,
+    prompt: AgentPrompt,
   ): boolean {
     if (!this.workerRelay) return false;
     if (room.row.auth_mode !== "cli") return false;
@@ -2163,7 +2183,7 @@ export class RoomManager {
       dispatched = this.workerRelay.dispatchToWorker(
         room.id,
         worker.workerId,
-        prompt,
+        promptText(prompt),
         room.row.repo_path,
         agent.row.model_id || "auto",
         agent.row.session_id,
@@ -2254,7 +2274,7 @@ export class RoomManager {
   private async runAgent(
     room: RoomState,
     agent: AgentState,
-    prompt: string,
+    prompt: AgentPrompt,
   ): Promise<void> {
     if (this.tryDispatchToWorker(room, agent, prompt)) return;
 
@@ -2438,7 +2458,7 @@ export class RoomManager {
         }
       }
 
-      await agent.backend.run(prompt, (event) => {
+      const onAgentEvent = (event: SdkStreamEvent | NormalizedAgentEvent) => {
         if (!isCurrent()) return;
         switch (event.kind) {
           case "session":
@@ -2583,7 +2603,13 @@ export class RoomManager {
             break;
           }
         }
-      });
+      };
+
+      if (agent.backend instanceof SdkAgentSession) {
+        await agent.backend.run(prompt, onAgentEvent);
+      } else {
+        await agent.backend.run(promptText(prompt), onAgentEvent);
+      }
 
       // Aborted while running — abortRun already finalized UI state.
       if (!isCurrent()) return;

@@ -6,6 +6,7 @@ import {
   type Run,
   type SDKAgent,
   type SDKMessage,
+  type SDKUserMessage,
 } from "@cursor/sdk";
 import type { AgentRuntime, AgentTodoItem } from "../shared/events.js";
 import {
@@ -66,8 +67,10 @@ export interface SdkAgentConfig {
   mode?: "agent" | "plan";
 }
 
+export type SdkPrompt = string | SDKUserMessage;
+
 interface QueueItem {
-  prompt: string;
+  prompt: SdkPrompt;
   onEvent: (event: SdkStreamEvent) => void;
   resolve: () => void;
   reject: (err: Error) => void;
@@ -241,7 +244,7 @@ export class SdkAgentSession {
   }
 
   run(
-    prompt: string,
+    prompt: SdkPrompt,
     onEvent: (event: SdkStreamEvent) => void,
   ): Promise<void> {
     return new Promise((resolve, reject) => {
