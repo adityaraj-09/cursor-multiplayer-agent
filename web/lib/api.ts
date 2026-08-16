@@ -514,6 +514,47 @@ export async function testRoomSlackWebhook(
   return res.json();
 }
 
+export async function uploadRoomFile(
+  roomId: string,
+  file: File,
+): Promise<import("../../shared/events").ChatAttachment> {
+  const data = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error("Failed to read file"));
+    reader.readAsDataURL(file);
+  });
+  const res = await fetch(`${API_BASE}/rooms/${roomId}/uploads`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(await authHeaders()),
+    },
+    body: JSON.stringify({
+      name: file.name,
+      mime: file.type,
+      data,
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Failed to upload file");
+  }
+  const body = await res.json();
+  return body.attachment;
+}
+
+export async function fetchRoomUploadBlob(
+  roomId: string,
+  fileId: string,
+): Promise<Blob> {
+  const res = await fetch(`${API_BASE}/rooms/${roomId}/uploads/${fileId}`, {
+    headers: await authHeaders(),
+  });
+  if (!res.ok) throw new Error("Failed to load attachment");
+  return res.blob();
+}
+
 export async function ackRoomPing(
   roomId: string,
   pingId: string,

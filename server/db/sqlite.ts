@@ -286,6 +286,8 @@ const migrations = [
   `ALTER TABLE messages ADD COLUMN sender_user_id TEXT`,
   `ALTER TABLE rooms ADD COLUMN slack_webhook_ciphertext TEXT`,
   `ALTER TABLE rooms ADD COLUMN slack_webhook_hint TEXT`,
+  `ALTER TABLE messages ADD COLUMN plan_status TEXT`,
+  `ALTER TABLE messages ADD COLUMN attachments_json TEXT`,
 ];
 
 for (const sql of migrations) {
@@ -467,9 +469,12 @@ const stmts = {
     ORDER BY ts DESC LIMIT ?
   `),
   insertMessage: db.prepare(`
-    INSERT INTO messages (id, room_id, role, content, sender_name, sender_color, tool_name, diff_patch, todos_json, status, ts, agent_id, sender_user_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO messages (id, room_id, role, content, sender_name, sender_color, tool_name, diff_patch, todos_json, status, ts, agent_id, sender_user_id, plan_status, attachments_json)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `),
+  updateMessagePlanStatus: db.prepare(
+    `UPDATE messages SET plan_status = ? WHERE id = ?`,
+  ),
   updateMessageContent: db.prepare(
     `UPDATE messages SET content = ?, status = ? WHERE id = ?`,
   ),
@@ -856,6 +861,19 @@ export interface OrganizationInviteRow {
   expires_at: number | null;
 }
 
+function parseAttachmentsJson(
+  raw: string | null | undefined,
+): ChatMessage["attachments"] {
+  if (!raw) return undefined;
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed) || parsed.length === 0) return undefined;
+    return parsed as NonNullable<ChatMessage["attachments"]>;
+  } catch {
+    return undefined;
+  }
+}
+
 function parseTodosJson(
   raw: string | null | undefined,
 ): ChatMessage["todos"] {
@@ -883,7 +901,15 @@ function rowToMessage(r: {
   ts: number;
   agent_id?: string | null;
   sender_user_id?: string | null;
+  plan_status?: string | null;
+  attachments_json?: string | null;
 }): ChatMessage {
+  const planStatus =
+    r.plan_status === "pending" ||
+    r.plan_status === "approved" ||
+    r.plan_status === "dismissed"
+      ? r.plan_status
+      : undefined;
   return {
     id: r.id,
     roomId: r.room_id,
@@ -898,6 +924,8 @@ function rowToMessage(r: {
     ts: r.ts,
     agentId: r.agent_id || undefined,
     senderUserId: r.sender_user_id || undefined,
+    planStatus,
+    attachments: parseAttachmentsJson(r.attachments_json),
   };
 }
 
@@ -1094,7 +1122,27 @@ export function insertMessage(msg: ChatMessage): void {
     msg.ts,
     msg.agentId ?? null,
     msg.senderUserId ?? null,
+    msg.planStatus ?? null,
+    msg.attachments?.length ? JSON.stringify(msg.attachments) : null,
   );
+}
+
+export function updateMessagePlanStatus(
+  id: string,
+  planStatus: NonNullable<ChatMessage["planStatus"]> | null,
+): ChatMessage | undefined {
+  stmts.updateMessagePlanStatus.run(planStatus, id);
+  const hit = db
+    .prepare(`SELECT * FROM messages WHERE id = ?`)
+    .get(id) as Parameters<typeof rowToMessage>[0] | undefined;
+  return hit ? rowToMessage(hit) : undefined;
+}
+
+export function getMessage(id: string): ChatMessage | undefined {
+  const hit = db
+    .prepare(`SELECT * FROM messages WHERE id = ?`)
+    .get(id) as Parameters<typeof rowToMessage>[0] | undefined;
+  return hit ? rowToMessage(hit) : undefined;
 }
 
 export function updateMessageContent(

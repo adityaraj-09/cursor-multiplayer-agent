@@ -43,6 +43,13 @@ import {
   userAnthropicByokHint,
 } from "./userAnthropicByok.js";
 import { isClaudeSandboxConfigured } from "./claudeSandbox.js";
+import {
+  getUpload,
+  purgeExpiredUploads,
+  readUpload,
+  saveUpload,
+  toAttachment,
+} from "./uploads.js";
 import type {
   ServerToClientEvents,
   ClientToServerEvents,
@@ -81,11 +88,11 @@ const app = express();
 app.use(
   cors({
     origin: corsOrigin,
-    methods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization", "X-Cursor-Api-Key"],
   }),
 );
-app.use(express.json({ limit: "1mb" }));
+app.use(express.json({ limit: "12mb" }));
 
 // Auth middleware — Clerk JWT or CLI session token → req.user
 app.use(authMiddleware());
@@ -575,6 +582,55 @@ app.post("/api/rooms/:id/slack-webhook/test", requireAuth, async (req, res) => {
           : 400;
     res.status(status).json({ error: message });
   }
+});
+
+/**
+ * POST /api/rooms/:id/uploads — store a temporary image/file (base64 JSON).
+ * Body: { name: string, mime?: string, data: string }
+ */
+app.post("/api/rooms/:id/uploads", requireAuth, (req, res) => {
+  const roomId = routeParam(req.params.id);
+  if (!roomManager.userCanAccessRoom(roomId, req.user!.id)) {
+    res.status(404).json({ error: "Room not found" });
+    return;
+  }
+  try {
+    const name = String(req.body?.name || "file").slice(0, 200);
+    const mime = req.body?.mime ? String(req.body.mime) : undefined;
+    const raw = String(req.body?.data || "");
+    const comma = raw.indexOf(",");
+    const b64 = raw.startsWith("data:") && comma >= 0 ? raw.slice(comma + 1) : raw;
+    const data = Buffer.from(b64, "base64");
+    const rec = saveUpload({ roomId, name, mime, data });
+    res.json({ attachment: toAttachment(rec) });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Upload failed";
+    res.status(400).json({ error: message });
+  }
+});
+
+/**
+ * GET /api/rooms/:id/uploads/:fileId — download a temporary attachment.
+ */
+app.get("/api/rooms/:id/uploads/:fileId", requireAuth, (req, res) => {
+  const roomId = routeParam(req.params.id);
+  const fileId = routeParam(req.params.fileId);
+  if (!roomManager.userCanAccessRoom(roomId, req.user!.id)) {
+    res.status(404).json({ error: "Room not found" });
+    return;
+  }
+  const rec = getUpload(roomId, fileId);
+  if (!rec) {
+    res.status(404).json({ error: "File expired or not found" });
+    return;
+  }
+  res.setHeader("Content-Type", rec.mime);
+  res.setHeader(
+    "Content-Disposition",
+    `inline; filename="${rec.name.replace(/"/g, "")}"`,
+  );
+  res.setHeader("Cache-Control", "private, max-age=3600");
+  res.send(readUpload(rec));
 });
 
 /**
@@ -1156,8 +1212,14 @@ io.on("connection", (socket) => {
     return;
   }
 
-  socket.on("steer-message", (textOrAgentId, text) =>
-    roomManager.handleSteerMessage(socket, textOrAgentId, text),
+  socket.on("steer-message", (textOrAgentId, text, extras) =>
+    roomManager.handleSteerMessage(socket, textOrAgentId, text, extras),
+  );
+  socket.on("approve-plan", (payload) =>
+    roomManager.handleApprovePlan(socket, payload || { messageId: "" }),
+  );
+  socket.on("dismiss-plan", (payload) =>
+    roomManager.handleDismissPlan(socket, payload || { messageId: "" }),
   );
   socket.on("typing", (agentId) => roomManager.handleTyping(socket, agentId));
   socket.on("typing-stop", (agentId) =>
@@ -1193,6 +1255,11 @@ io.on("connection", (socket) => {
 
 void attachRedisAdapter().finally(() => {
   httpServer.listen(PORT, "0.0.0.0", () => {
+    try {
+      purgeExpiredUploads();
+    } catch {
+      // ignore
+    }
     console.log(`\n  Shared Agent Session API running at:`);
     console.log(`    Local:   http://localhost:${PORT}`);
     console.log(`    API:     http://localhost:${PORT}/api/rooms`);

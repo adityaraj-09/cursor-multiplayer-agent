@@ -52,7 +52,7 @@ interface UseSocketReturn {
   lastDiff: string;
   cloudMeta: CloudMeta | null;
   modelId: string | null;
-  sendSteer: (text: string, agentId?: string) => void;
+  sendSteer: (text: string, agentId?: string, attachmentIds?: string[]) => void;
   /** Throttled by callers — announces typing toward an agent. */
   notifyTyping: (agentId: string) => void;
   notifyTypingStop: (agentId?: string) => void;
@@ -60,6 +60,8 @@ interface UseSocketReturn {
   releaseDrive: (agentId?: string) => void;
   grantDrive: (toSocketId: string, agentId?: string) => void;
   decideApproval: (requestId: string, approved: boolean) => void;
+  approvePlan: (messageId: string, agentId?: string) => void;
+  dismissPlan: (messageId: string) => void;
   flagReview: (payload: { note?: string; targetUserIds?: string[] }) => void;
   ackReview: (pingId: string) => void;
   dismissReview: (pingId: string) => void;
@@ -513,15 +515,20 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
     setTypingByAgent({});
   }, [roomId]);
 
-  const sendSteer = useCallback((text: string, agentId?: string) => {
-    if (agentId) {
-      socketRef.current?.emit("typing-stop", agentId);
-      socketRef.current?.emit("steer-message", agentId, text);
-    } else {
-      socketRef.current?.emit("typing-stop");
-      socketRef.current?.emit("steer-message", text);
-    }
-  }, []);
+  const sendSteer = useCallback(
+    (text: string, agentId?: string, attachmentIds?: string[]) => {
+      const extras =
+        attachmentIds && attachmentIds.length ? { attachmentIds } : undefined;
+      if (agentId) {
+        socketRef.current?.emit("typing-stop", agentId);
+        socketRef.current?.emit("steer-message", agentId, text, extras);
+      } else {
+        socketRef.current?.emit("typing-stop");
+        socketRef.current?.emit("steer-message", text, undefined, extras);
+      }
+    },
+    [],
+  );
 
   const notifyTyping = useCallback((agentId: string) => {
     if (!agentId) return;
@@ -562,6 +569,14 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
     },
     [],
   );
+
+  const approvePlan = useCallback((messageId: string, agentId?: string) => {
+    socketRef.current?.emit("approve-plan", { messageId, agentId });
+  }, []);
+
+  const dismissPlan = useCallback((messageId: string) => {
+    socketRef.current?.emit("dismiss-plan", { messageId });
+  }, []);
 
   const flagReview = useCallback(
     (payload: { note?: string; targetUserIds?: string[] }) => {
@@ -618,6 +633,8 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
     releaseDrive,
     grantDrive,
     decideApproval,
+    approvePlan,
+    dismissPlan,
     flagReview,
     ackReview,
     dismissReview,
