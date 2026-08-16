@@ -176,18 +176,40 @@ export function materializeUploadsForAgent(
   });
 }
 
+export interface PromptImage {
+  data: string;
+  mimeType: string;
+}
+
+/** Base64 images for Cursor SDK `send({ text, images })`. */
+export function toPromptImages(uploads: StoredUpload[]): PromptImage[] {
+  return uploads
+    .filter((u) => isImageUpload(u.mime))
+    .map((u) => ({
+      data: readUpload(u).toString("base64"),
+      mimeType: u.mime,
+    }));
+}
+
 export function buildAttachmentPromptSuffix(
   uploads: StoredUpload[],
   materialized: Array<{ rec: StoredUpload; agentPath: string }>,
+  opts?: { imagesAttachedToMessage?: boolean },
 ): string {
   if (uploads.length === 0) return "";
   const byId = new Map(materialized.map((m) => [m.rec.id, m.agentPath]));
   const parts = ["\n\nThe user attached the following file(s) for this message:"];
   for (const rec of uploads) {
     const local = byId.get(rec.id);
+    const vision =
+      opts?.imagesAttachedToMessage && isImageUpload(rec.mime);
     const where = local
       ? `saved at \`${local}\` — read this file`
-      : "available in the Steer session (no workspace path)";
+      : vision
+        ? "attached as an image on this message (you can see it)"
+        : isTextUpload(rec.mime)
+          ? "contents inlined below"
+          : "available in the Steer session (no workspace path)";
     parts.push(`- ${rec.name} (${rec.mime}, ${rec.size} bytes) — ${where}`);
     if (isTextUpload(rec.mime) && rec.size <= 64 * 1024) {
       const text = readFileSync(rec.path, "utf8").slice(0, 16_000);

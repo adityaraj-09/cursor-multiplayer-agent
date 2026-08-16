@@ -9,6 +9,7 @@ import {
   saveUpload,
   getUpload,
   toAttachment,
+  toPromptImages,
   buildAttachmentPromptSuffix,
   materializeUploadsForAgent,
 } from "../server/uploads.js";
@@ -122,5 +123,23 @@ describe("upload helpers", () => {
     expect(suffix).toContain("brief.md");
     expect(suffix).toContain("# Brief");
     rmSync(cwd, { recursive: true, force: true });
+  });
+
+  it("encodes images for the SDK and labels them when attached", () => {
+    const rec = saveUpload({
+      roomId: "room_1",
+      name: "shot.png",
+      mime: "image/png",
+      data: Buffer.from("png-bytes"),
+    });
+    const images = toPromptImages([rec]);
+    expect(images).toHaveLength(1);
+    expect(images[0].mimeType).toBe("image/png");
+    expect(images[0].data).toBe(Buffer.from("png-bytes").toString("base64"));
+    const suffix = buildAttachmentPromptSuffix([rec], [], {
+      imagesAttachedToMessage: true,
+    });
+    expect(suffix).toContain("attached as an image on this message");
+    expect(suffix).not.toContain("no workspace path");
   });
 });
