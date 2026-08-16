@@ -274,6 +274,8 @@ function LiveRoom({
     releaseDrive,
     grantDrive,
     decideApproval,
+    approvePlan,
+    dismissPlan,
     flagReview,
     ackReview,
     dismissReview,
@@ -997,6 +999,12 @@ function LiveRoom({
             filterAgentId={
               agents.length > 1 ? chatFilterAgentId : null
             }
+            roomId={roomId}
+            canApprovePlan={canSteerSelected}
+            onApprovePlan={(messageId, agentId) =>
+              approvePlan(messageId, agentId)
+            }
+            onDismissPlan={(messageId) => dismissPlan(messageId)}
           />
         </div>
 
@@ -1176,7 +1184,11 @@ function LiveRoom({
           </p>
         )}
         <SteerInput
-          onSend={(text) => sendSteer(text, selectedAgentId || undefined)}
+          onSend={(text, attachmentIds) =>
+            sendSteer(text, selectedAgentId || undefined, attachmentIds)
+          }
+          roomId={roomId}
+          planMode={Boolean(selectedAgent?.planMode)}
           agentBusy={selectedStatus === "running"}
           connected={connected}
           canSteer={canSteerSelected}

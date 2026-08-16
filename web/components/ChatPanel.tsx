@@ -5,13 +5,20 @@ import {
   AlertTriangle,
   Bot,
   CheckCircle2,
+  FileText,
   GitCompare,
+  ListChecks,
   LoaderCircle,
   Sparkles,
   User,
   Wrench,
 } from "lucide-react";
-import type { AgentRunStatus, ChatMessage } from "../../shared/events";
+import type {
+  AgentRunStatus,
+  ChatAttachment,
+  ChatMessage,
+} from "../../shared/events";
+import { fetchRoomUploadBlob } from "../lib/api";
 import Markdown from "./Markdown";
 import InlineDiff from "./InlineDiff";
 import TodoCard, { coalesceTodoMessages, messageHasTodos } from "./TodoCard";
@@ -22,6 +29,10 @@ interface ChatPanelProps {
   agents?: Array<{ id: string; label: string }>;
   /** When set with multiple agents, only show this agent's messages. */
   filterAgentId?: string | null;
+  roomId?: string;
+  canApprovePlan?: boolean;
+  onApprovePlan?: (messageId: string, agentId?: string) => void;
+  onDismissPlan?: (messageId: string) => void;
 }
 
 type ChatItem =
@@ -70,6 +81,10 @@ export default function ChatPanel({
   agentStatus,
   agents = [],
   filterAgentId = null,
+  roomId,
+  canApprovePlan = false,
+  onApprovePlan,
+  onDismissPlan,
 }: ChatPanelProps) {
   const scrollerRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
@@ -216,6 +231,11 @@ export default function ChatPanel({
                 key={item.message.id}
                 message={item.message}
                 agentLabel={agentLabel(item.message.agentId)}
+                roomId={roomId}
+                agentBusy={agentStatus === "running"}
+                canApprovePlan={canApprovePlan}
+                onApprovePlan={onApprovePlan}
+                onDismissPlan={onDismissPlan}
               />
             );
           })}
@@ -390,9 +410,19 @@ function Chevron({
 function MessageBubble({
   message,
   agentLabel,
+  roomId,
+  agentBusy,
+  canApprovePlan,
+  onApprovePlan,
+  onDismissPlan,
 }: {
   message: ChatMessage;
   agentLabel?: string;
+  roomId?: string;
+  agentBusy?: boolean;
+  canApprovePlan?: boolean;
+  onApprovePlan?: (messageId: string, agentId?: string) => void;
+  onDismissPlan?: (messageId: string) => void;
 }) {
   if (message.role === "user") {
     return (
@@ -415,25 +445,46 @@ function MessageBubble({
               {formatTime(message.ts)}
             </span>
           </div>
-          <p className="text-[13px] text-[#f0f0f0] leading-relaxed whitespace-pre-wrap break-words">
-            {message.content}
-          </p>
+          {message.attachments && message.attachments.length > 0 && (
+            <MessageAttachments
+              roomId={roomId}
+              attachments={message.attachments}
+            />
+          )}
+          {message.content && message.content !== "(attached files)" && (
+            <p className="text-[13px] text-[#f0f0f0] leading-relaxed whitespace-pre-wrap break-words">
+              {message.content}
+            </p>
+          )}
         </div>
       </div>
     );
   }
 
+  const isPlan = Boolean(message.planStatus);
+
   return (
     <div className="flex justify-start gap-3">
       <div className="mt-0.5 hidden sm:flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-[#2b2b2b] bg-[#1f1f1f] text-[#a0a0a0]">
-        <Bot className="h-4 w-4" strokeWidth={1.75} />
+        {isPlan ? (
+          <ListChecks className="h-4 w-4" strokeWidth={1.75} />
+        ) : (
+          <Bot className="h-4 w-4" strokeWidth={1.75} />
+        )}
       </div>
-      <div className="max-w-[95%] sm:max-w-[86%] rounded-2xl rounded-bl-md bg-[#191919] border border-[#2b2b2b] px-3.5 sm:px-4 py-2.5 shadow-[0_14px_35px_rgba(0,0,0,0.14)]">
-        <div className="flex items-center gap-2 mb-1.5">
+      <div
+        className={`max-w-[95%] sm:max-w-[86%] rounded-2xl rounded-bl-md px-3.5 sm:px-4 py-2.5 shadow-[0_14px_35px_rgba(0,0,0,0.14)] ${
+          isPlan
+            ? "bg-[#161c24] border border-[#26405d]"
+            : "bg-[#191919] border border-[#2b2b2b]"
+        }`}
+      >
+        <div className="flex items-center gap-2 mb-1.5 flex-wrap">
           <span className="text-[11px] font-medium text-[#a0a0a0] inline-flex items-center gap-1.5">
             <Bot className="h-3 w-3 sm:hidden" strokeWidth={1.8} />
             {agentLabel || "Agent"}
           </span>
+          {isPlan && <PlanStatusBadge status={message.planStatus} />}
           <span className="text-[10px] text-[#4a4a4a] font-mono">
             {formatTime(message.ts)}
           </span>
@@ -455,8 +506,173 @@ function MessageBubble({
         ) : (
           <span className="text-[13px] text-[#6e6e6e]">Thinking…</span>
         )}
+        {message.planStatus && (
+          <PlanActions
+            message={message}
+            agentBusy={agentBusy}
+            canApprove={canApprovePlan}
+            onApprove={onApprovePlan}
+            onDismiss={onDismissPlan}
+          />
+        )}
       </div>
     </div>
+  );
+}
+
+function PlanStatusBadge({
+  status,
+}: {
+  status: ChatMessage["planStatus"];
+}) {
+  if (status === "approved") {
+    return (
+      <span className="inline-flex items-center gap-1 text-[10px] rounded-full border border-[#234337] bg-[#17251f] px-2 py-0.5 text-[#3ecf8e]">
+        <CheckCircle2 className="h-3 w-3" strokeWidth={1.8} />
+        Plan approved
+      </span>
+    );
+  }
+  if (status === "dismissed") {
+    return (
+      <span className="text-[10px] rounded-full border border-[#2b2b2b] bg-[#1a1a1a] px-2 py-0.5 text-[#8a8a8a]">
+        Plan dismissed
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1 text-[10px] rounded-full border border-[#26405d] bg-[#17202a] px-2 py-0.5 text-[#8ec5ff]">
+      <ListChecks className="h-3 w-3" strokeWidth={1.8} />
+      Plan ready
+    </span>
+  );
+}
+
+function PlanActions({
+  message,
+  agentBusy,
+  canApprove,
+  onApprove,
+  onDismiss,
+}: {
+  message: ChatMessage;
+  agentBusy?: boolean;
+  canApprove?: boolean;
+  onApprove?: (messageId: string, agentId?: string) => void;
+  onDismiss?: (messageId: string) => void;
+}) {
+  if (message.planStatus !== "pending") return null;
+
+  return (
+    <div className="mt-3 pt-3 border-t border-[#26405d]/70">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-[12px] text-[#8ec5ff]">
+          Review the plan above, then approve to start implementing.
+        </p>
+        {canApprove ? (
+          <div className="flex shrink-0 gap-2">
+            <button
+              type="button"
+              disabled={agentBusy}
+              onClick={() => onDismiss?.(message.id)}
+              className="h-8 px-3 rounded-md border border-[#343434] bg-[#1a1a1a] text-[12px] text-[#c8c8c8] hover:bg-[#242424] disabled:opacity-50"
+            >
+              Dismiss
+            </button>
+            <button
+              type="button"
+              disabled={agentBusy}
+              onClick={() => onApprove?.(message.id, message.agentId)}
+              className="h-8 px-3 rounded-md border border-[#2a4a35] bg-[#1c2a22] text-[12px] text-[#7ddea8] hover:bg-[#243830] disabled:opacity-50"
+            >
+              Approve plan
+            </button>
+          </div>
+        ) : (
+          <p className="text-[11px] text-[#6e6e6e]">
+            You need steer permission to approve this plan.
+          </p>
+        )}
+      </div>
+      {agentBusy && canApprove && (
+        <p className="mt-2 text-[11px] text-[#6e6e6e]">
+          Wait for the agent to finish before approving.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function MessageAttachments({
+  roomId,
+  attachments,
+}: {
+  roomId?: string;
+  attachments: ChatAttachment[];
+}) {
+  return (
+    <div className="flex flex-wrap gap-2 mb-2">
+      {attachments.map((att) => (
+        <AttachmentChip key={att.id} roomId={roomId} attachment={att} />
+      ))}
+    </div>
+  );
+}
+
+function AttachmentChip({
+  roomId,
+  attachment,
+}: {
+  roomId?: string;
+  attachment: ChatAttachment;
+}) {
+  const [src, setSrc] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!roomId || !attachment.mime.startsWith("image/")) return;
+    let revoked = false;
+    let objectUrl: string | null = null;
+    void fetchRoomUploadBlob(roomId, attachment.id)
+      .then((blob) => {
+        if (revoked) return;
+        objectUrl = URL.createObjectURL(blob);
+        setSrc(objectUrl);
+      })
+      .catch(() => {
+        /* keep file chip */
+      });
+    return () => {
+      revoked = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [roomId, attachment.id, attachment.mime]);
+
+  if (src) {
+    return (
+      <a
+        href={src}
+        target="_blank"
+        rel="noreferrer"
+        className="block overflow-hidden rounded-lg border border-[#343434]"
+      >
+        <img
+          src={src}
+          alt={attachment.name}
+          className="max-h-40 max-w-[220px] object-cover"
+        />
+      </a>
+    );
+  }
+
+  return (
+    <span className="inline-flex items-center gap-1.5 rounded-lg border border-[#343434] bg-[#1a1a1a] px-2 py-1 text-[11px] text-[#c8c8c8] max-w-[200px]">
+      {attachment.mime.startsWith("image/") ? (
+        <Sparkles className="h-3.5 w-3.5 text-[#8ec5ff]" strokeWidth={1.75} />
+      ) : (
+        <FileText className="h-3.5 w-3.5 text-[#a0a0a0]" strokeWidth={1.75} />
+      )}
+      <span className="truncate">{attachment.name}</span>
+    </span>
   );
 }
 

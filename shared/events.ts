@@ -101,6 +101,17 @@ export interface AgentTodoItem {
   status: "pending" | "in_progress" | "completed" | "cancelled";
 }
 
+export type PlanStatus = "pending" | "approved" | "dismissed";
+
+/** Temporary file/image attached to a user message. */
+export interface ChatAttachment {
+  id: string;
+  name: string;
+  mime: string;
+  size: number;
+  url: string;
+}
+
 export interface ChatMessage {
   id: string;
   roomId: string;
@@ -121,6 +132,10 @@ export interface ChatMessage {
   agentId?: string;
   /** Pending/decided approval gate attached to this tool row (if any). */
   approval?: ApprovalRequestInfo;
+  /** Plan-mode document attached to an assistant reply. */
+  planStatus?: PlanStatus;
+  /** Images / files the user attached to this message. */
+  attachments?: ChatAttachment[];
 }
 
 export interface CloudMeta {
@@ -295,7 +310,15 @@ export interface ServerToClientEvents {
 }
 
 export interface ClientToServerEvents {
-  "steer-message": (textOrAgentId: string, text?: string) => void;
+  "steer-message": (
+    textOrAgentId: string,
+    text?: string,
+    extras?: { attachmentIds?: string[] },
+  ) => void;
+  /** Approve a finished plan and switch the agent to implement it. */
+  "approve-plan": (payload: { messageId: string; agentId?: string }) => void;
+  /** Hide the approve card without implementing. */
+  "dismiss-plan": (payload: { messageId: string }) => void;
   /** Announce that this user is typing to an agent (clients should throttle). */
   typing: (agentId: string) => void;
   /** Stop typing indicator for one agent, or all agents when omitted. */

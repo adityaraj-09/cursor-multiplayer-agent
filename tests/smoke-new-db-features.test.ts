@@ -70,6 +70,31 @@ describe("new db features smoke test", () => {
     const msg = messages.find((m) => m.id === msgId);
     expect(msg?.senderUserId).toBe("user_123");
 
+    const planId = randomUUID();
+    db.insertMessage({
+      id: planId,
+      roomId,
+      role: "assistant",
+      content: "# Plan\n1. Attach files\n2. Approve in chat",
+      status: "done",
+      ts: Date.now(),
+      planStatus: "pending",
+      attachments: [
+        {
+          id: "upl_test",
+          name: "shot.png",
+          mime: "image/png",
+          size: 12,
+          url: `/api/rooms/${roomId}/uploads/upl_test`,
+        },
+      ],
+    });
+    const pendingPlan = db.getMessage(planId);
+    expect(pendingPlan?.planStatus).toBe("pending");
+    expect(pendingPlan?.attachments?.[0]?.name).toBe("shot.png");
+    const approved = db.updateMessagePlanStatus(planId, "approved");
+    expect(approved?.planStatus).toBe("approved");
+
     const ar = db.createApprovalRequest({
       roomId,
       agentId: agent.id,

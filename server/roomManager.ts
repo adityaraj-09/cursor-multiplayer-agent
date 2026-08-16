@@ -35,6 +35,13 @@ import {
   type ApprovalRequestInfo,
 } from "../shared/approvals.js";
 import { attributionPromptSuffix, type SteerAuthor } from "../shared/attribution.js";
+import { looksLikePlan, planImplementPrompt } from "../shared/plans.js";
+import {
+  buildAttachmentPromptSuffix,
+  materializeUploadsForAgent,
+  resolveUploads,
+  toAttachment,
+} from "./uploads.js";
 import {
   APP_ORIGIN,
   DEFAULT_AGENT_COMMAND,
@@ -1649,6 +1656,7 @@ export class RoomManager {
     socket: Socket,
     textOrAgentId: string,
     text?: string,
+    extras?: { attachmentIds?: string[] },
   ): void {
     const room = this.getRoomForSocket(socket.id);
     if (!room) return;
@@ -1714,6 +1722,14 @@ export class RoomManager {
       agent.backend.setSteeredBy(steeredBy);
     }
 
+    const uploads = resolveUploads(
+      room.id,
+      Array.isArray(extras?.attachmentIds) ? extras.attachmentIds : [],
+    );
+    const attachments = uploads.map(toAttachment);
+    const materialized = materializeUploadsForAgent(agent.cwd, uploads);
+    const attachSuffix = buildAttachmentPromptSuffix(uploads, materialized);
+
     const userMsg: ChatMessage = {
       id: nanoid(12),
       roomId: room.id,
@@ -1725,13 +1741,135 @@ export class RoomManager {
       status: "done",
       ts: Date.now(),
       agentId,
+      attachments: attachments.length ? attachments : undefined,
     };
 
     db.insertMessage(userMsg);
     this.io.to(room.id).emit("chat-message", userMsg);
     db.updateRoomActivity(room.id);
-    const promptWithAttr = sanitized + attributionPromptSuffix(steeredBy);
+    const promptWithAttr =
+      sanitized + attachSuffix + attributionPromptSuffix(steeredBy);
     void this.runAgent(room, agent, promptWithAttr);
+  }
+
+  handleApprovePlan(
+    socket: Socket,
+    payload: { messageId: string; agentId?: string },
+  ): void {
+    const room = this.getRoomForSocket(socket.id);
+    if (!room) return;
+    const p = room.participants.get(socket.id);
+    if (!p?.userId) {
+      socket.emit("error", "Sign in required to approve a plan");
+      return;
+    }
+
+    const messageId = String(payload?.messageId || "").trim();
+    const msg = db.getMessage(messageId);
+    if (!msg || msg.roomId !== room.id || msg.role !== "assistant") {
+      socket.emit("error", "Plan not found");
+      return;
+    }
+    if (msg.planStatus && msg.planStatus !== "pending") {
+      socket.emit("error", "This plan has already been decided");
+      return;
+    }
+
+    const agentId = payload?.agentId || msg.agentId || this.getDefaultAgent(room).row.id;
+    const agent = this.getAgentState(room, agentId);
+    if (!agent) {
+      socket.emit("error", "Agent not found");
+      return;
+    }
+
+    const role = this.resolveUserRoomRole(room.id, p.userId);
+    const isDriving =
+      agent.driverSocketId === socket.id ||
+      (room.agents.size <= 1 && room.driverSocketId === socket.id);
+    const denied = steerDeniedReason({
+      role,
+      controlMode: this.getControlMode(room.row),
+      isDrivingAgent: isDriving,
+    });
+    if (denied) {
+      socket.emit("error", denied);
+      return;
+    }
+
+    if (agent.workerRunActive || agent.backend.isBusy()) {
+      socket.emit("error", "Wait for the agent to finish before approving");
+      return;
+    }
+
+    const updated = db.updateMessagePlanStatus(messageId, "approved");
+    if (updated) this.io.to(room.id).emit("chat-message", updated);
+
+    db.setAgentPlanMode(agent.row.id, false);
+    agent.row.plan_mode = 0;
+    this.applyBackendMode(agent);
+    this.broadcastAgents(room);
+
+    const sysMsg: ChatMessage = {
+      id: nanoid(12),
+      roomId: room.id,
+      role: "system",
+      content: `${p.name} approved the plan. Switching to agent mode to implement it.`,
+      status: "done",
+      ts: Date.now(),
+      agentId: agent.row.id,
+    };
+    db.insertMessage(sysMsg);
+    this.io.to(room.id).emit("chat-message", sysMsg);
+
+    const steeredBy: SteerAuthor | null = {
+      userId: p.userId,
+      name: p.name,
+      email: db.getUserById(p.userId)?.email,
+    };
+    agent.lastSteeredBy = steeredBy;
+    agent.workerRunActive = true;
+    void this.runAgent(
+      room,
+      agent,
+      planImplementPrompt(msg.content) + attributionPromptSuffix(steeredBy),
+    );
+  }
+
+  handleDismissPlan(socket: Socket, payload: { messageId: string }): void {
+    const room = this.getRoomForSocket(socket.id);
+    if (!room) return;
+    const p = room.participants.get(socket.id);
+    if (!p?.userId) {
+      socket.emit("error", "Sign in required");
+      return;
+    }
+    const messageId = String(payload?.messageId || "").trim();
+    const msg = db.getMessage(messageId);
+    if (!msg || msg.roomId !== room.id) {
+      socket.emit("error", "Plan not found");
+      return;
+    }
+    const role = this.resolveUserRoomRole(room.id, p.userId);
+    if (role !== "owner" && role !== "editor") {
+      socket.emit("error", "Only editors or the host can dismiss a plan");
+      return;
+    }
+    const updated = db.updateMessagePlanStatus(messageId, "dismissed");
+    if (updated) this.io.to(room.id).emit("chat-message", updated);
+  }
+
+  private markAssistantPlan(
+    room: RoomState,
+    agent: AgentState,
+    messageId: string | null,
+    content: string,
+    status: ChatMessage["status"],
+  ): void {
+    if (!messageId || status !== "done") return;
+    if (!agent.row.plan_mode) return;
+    if (!looksLikePlan(content)) return;
+    const updated = db.updateMessagePlanStatus(messageId, "pending");
+    if (updated) this.io.to(room.id).emit("chat-message", updated);
   }
 
   // -----------------------------------------------------------------------
@@ -1818,6 +1956,7 @@ export class RoomManager {
       this.io
         .to(room.id)
         .emit("chat-delta", assistantId, assistantContent, status);
+      this.markAssistantPlan(room, agent, assistantId, assistantContent, status);
       assistantId = null;
       assistantContent = "";
     };
@@ -2211,6 +2350,7 @@ export class RoomManager {
       this.io
         .to(room.id)
         .emit("chat-delta", assistantId, assistantContent, status);
+      this.markAssistantPlan(room, agent, assistantId, assistantContent, status);
       assistantId = null;
       assistantContent = "";
     };

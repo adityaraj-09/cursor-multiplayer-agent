@@ -10,14 +10,22 @@ import {
 import {
   Bot,
   ChevronDown,
+  FileText,
+  ImagePlus,
   Lock,
+  Paperclip,
   SendHorizontal,
   Sparkles,
+  X,
 } from "lucide-react";
-import type { ModelInfo } from "../../shared/events";
+import type { ChatAttachment, ModelInfo } from "../../shared/events";
+import { uploadRoomFile } from "../lib/api";
 
 interface SteerInputProps {
-  onSend: (text: string) => void;
+  onSend: (text: string, attachmentIds?: string[]) => void;
+  roomId?: string;
+  /** Selected agent is in read-only plan mode. */
+  planMode?: boolean;
   /** Agent is mid-run — drafting allowed, send blocked */
   agentBusy?: boolean;
   /** Socket disconnected — drafting allowed, send blocked */
@@ -49,6 +57,8 @@ const TYPING_IDLE_STOP_MS = 2000;
 
 export default function SteerInput({
   onSend,
+  roomId,
+  planMode = false,
   agentBusy = false,
   connected = true,
   canSteer = true,
@@ -66,6 +76,11 @@ export default function SteerInput({
   typingIndicator,
 }: SteerInputProps) {
   const [text, setText] = useState("");
+  const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
+  const [previews, setPreviews] = useState<Record<string, string>>({});
+  const [uploading, setUploading] = useState(false);
+  const [attachError, setAttachError] = useState("");
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const lastTypingEmitRef = useRef(0);
   const idleStopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const typingActiveRef = useRef(false);
@@ -121,7 +136,11 @@ export default function SteerInput({
   }, [connected]);
 
   const canSend =
-    connected && canSteer && !agentBusy && text.trim().length > 0;
+    connected &&
+    canSteer &&
+    !agentBusy &&
+    !uploading &&
+    (text.trim().length > 0 || attachments.length > 0);
 
   const statusHint = !connected
     ? "Reconnecting…"
@@ -132,14 +151,55 @@ export default function SteerInput({
         : null;
 
   const submit = () => {
-    if (!connected || !canSteer || agentBusy) return;
+    if (!connected || !canSteer || agentBusy || uploading) return;
     // Trim leading/trailing whitespace and newlines so Shift+Enter drafts
     // don't leave sticky empty lines after send.
     const trimmed = text.replace(/^\s+|\s+$/g, "");
-    if (!trimmed) return;
+    if (!trimmed && attachments.length === 0) return;
     stopTyping();
-    onSend(trimmed);
+    onSend(
+      trimmed || (attachments.length ? "(attached files)" : ""),
+      attachments.map((a) => a.id),
+    );
     setText("");
+    setAttachments([]);
+    setPreviews({});
+    setAttachError("");
+  };
+
+  const handleFiles = async (files: FileList | null) => {
+    if (!files?.length || !roomId) return;
+    setUploading(true);
+    setAttachError("");
+    try {
+      for (const file of Array.from(files).slice(0, 6)) {
+        const att = await uploadRoomFile(roomId, file);
+        setAttachments((prev) => {
+          if (prev.some((p) => p.id === att.id) || prev.length >= 6) return prev;
+          return [...prev, att];
+        });
+        if (file.type.startsWith("image/")) {
+          const url = URL.createObjectURL(file);
+          setPreviews((prev) => ({ ...prev, [att.id]: url }));
+        }
+      }
+    } catch (err) {
+      setAttachError(err instanceof Error ? err.message : "Upload failed");
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
+
+  const removeAttachment = (id: string) => {
+    setAttachments((prev) => prev.filter((a) => a.id !== id));
+    setPreviews((prev) => {
+      const url = prev[id];
+      if (url) URL.revokeObjectURL(url);
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
   };
 
   const handleSubmit = (e: FormEvent) => {
@@ -177,7 +237,9 @@ export default function SteerInput({
     ? "Reconnecting…"
     : agentBusy
       ? "Draft a follow-up… (send when idle)"
-      : placeholder;
+      : planMode
+        ? "Ask for a plan… (approve it in chat when ready)"
+        : placeholder;
 
   return (
     <form
@@ -196,6 +258,11 @@ export default function SteerInput({
             <Bot className="h-3.5 w-3.5" strokeWidth={1.75} />
             {agentName || "Agent"}
           </span>
+          {planMode && (
+            <span className="inline-flex items-center h-5 px-1.5 rounded-md border border-[#4d9fff]/50 bg-[#1a2430] text-[10px] font-medium text-[#8ec5ff] shrink-0">
+              Plan mode
+            </span>
+          )}
           <div className="relative min-w-0 flex-1 sm:flex-none sm:w-[min(100%,320px)]">
             <select
               value={modelId}
@@ -224,7 +291,59 @@ export default function SteerInput({
           )}
         </div>
 
+        {attachments.length > 0 && (
+          <div className="flex flex-wrap gap-2 px-3 pt-2.5">
+            {attachments.map((att) => (
+              <div
+                key={att.id}
+                className="relative flex items-center gap-1.5 rounded-lg border border-[#2b2b2b] bg-[#141414] pl-1.5 pr-6 py-1 max-w-[180px]"
+              >
+                {previews[att.id] ? (
+                  <img
+                    src={previews[att.id]}
+                    alt=""
+                    className="h-8 w-8 rounded object-cover"
+                  />
+                ) : att.mime.startsWith("image/") ? (
+                  <ImagePlus className="h-4 w-4 text-[#8ec5ff]" strokeWidth={1.75} />
+                ) : (
+                  <FileText className="h-4 w-4 text-[#a0a0a0]" strokeWidth={1.75} />
+                )}
+                <span className="text-[11px] text-[#c8c8c8] truncate">
+                  {att.name}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => removeAttachment(att.id)}
+                  className="absolute right-1 top-1 h-4 w-4 rounded text-[#6e6e6e] hover:text-[#e4e4e4]"
+                  aria-label={`Remove ${att.name}`}
+                >
+                  <X className="h-3.5 w-3.5" strokeWidth={2} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
         <div className="flex items-end gap-2 px-3 py-2.5">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/png,image/jpeg,image/gif,image/webp,application/pdf,text/plain,text/markdown,text/csv,application/json"
+            multiple
+            className="hidden"
+            onChange={(e) => void handleFiles(e.target.files)}
+          />
+          <button
+            type="button"
+            disabled={!roomId || !canSteer || uploading}
+            onClick={() => fileInputRef.current?.click()}
+            className="mb-1 inline-flex h-8 w-8 items-center justify-center rounded-lg text-[#8a8a8a] hover:text-[#e4e4e4] hover:bg-[#222] disabled:opacity-30"
+            aria-label="Attach files"
+            title="Attach images or files"
+          >
+            <Paperclip className="h-4 w-4" strokeWidth={1.75} />
+          </button>
           <Sparkles className="mt-1 h-4 w-4 shrink-0 text-[#6e6e6e]" strokeWidth={1.75} />
           {/* Fixed height — long text / paste scrolls inside, never grows the footer */}
           <textarea
@@ -257,9 +376,15 @@ export default function SteerInput({
             <span className={!connected ? "text-[#f07070]" : "text-[#4d9fff]"}>
               {statusHint}
             </span>
+          ) : attachError ? (
+            <span className="text-[#f07070]">{attachError}</span>
+          ) : uploading ? (
+            <span className="text-[#4d9fff]">Uploading…</span>
+          ) : planMode ? (
+            <span>Plan mode — the agent explores and proposes, then you approve</span>
           ) : (
             <span className="hidden sm:inline">
-              Enter to send · Shift+Enter for newline · anyone can message
+              Enter to send · Shift+Enter for newline · attach images or files
             </span>
           )}
         </p>

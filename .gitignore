@@ -5,3 +5,4 @@ dist/
 demo-repo/
 *.db
 .next/
+data/uploads/

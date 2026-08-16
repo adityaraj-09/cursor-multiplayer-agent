@@ -275,6 +275,8 @@ async function initSchema() {
     `ALTER TABLE messages ADD COLUMN IF NOT EXISTS sender_user_id TEXT`,
     `ALTER TABLE rooms ADD COLUMN IF NOT EXISTS slack_webhook_ciphertext TEXT`,
     `ALTER TABLE rooms ADD COLUMN IF NOT EXISTS slack_webhook_hint TEXT`,
+    `ALTER TABLE messages ADD COLUMN IF NOT EXISTS plan_status TEXT`,
+    `ALTER TABLE messages ADD COLUMN IF NOT EXISTS attachments_json TEXT`,
   ];
 
   for (const sql of migrations) {
@@ -435,7 +437,25 @@ function parseTodosJson(
   }
 }
 
+function parseAttachmentsJson(
+  raw: unknown,
+): ChatMessage["attachments"] {
+  if (typeof raw !== "string" || !raw) return undefined;
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed) || parsed.length === 0) return undefined;
+    return parsed as NonNullable<ChatMessage["attachments"]>;
+  } catch {
+    return undefined;
+  }
+}
+
 function rowToMessage(r: Record<string, unknown>): ChatMessage {
+  const planRaw = r.plan_status as string | null | undefined;
+  const planStatus =
+    planRaw === "pending" || planRaw === "approved" || planRaw === "dismissed"
+      ? planRaw
+      : undefined;
   return {
     id: r.id as string,
     roomId: r.room_id as string,
@@ -450,6 +470,8 @@ function rowToMessage(r: Record<string, unknown>): ChatMessage {
     ts: num(r.ts as string)!,
     agentId: (r.agent_id as string) || undefined,
     senderUserId: (r.sender_user_id as string) || undefined,
+    planStatus,
+    attachments: parseAttachmentsJson(r.attachments_json),
   };
 }
 
@@ -701,8 +723,8 @@ export function getSteerHistory(
 
 export function insertMessage(msg: ChatMessage): void {
   syncQuery(
-    `INSERT INTO messages (id, room_id, role, content, sender_name, sender_color, tool_name, diff_patch, todos_json, status, ts, agent_id, sender_user_id)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+    `INSERT INTO messages (id, room_id, role, content, sender_name, sender_color, tool_name, diff_patch, todos_json, status, ts, agent_id, sender_user_id, plan_status, attachments_json)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
     [
       msg.id,
       msg.roomId,
@@ -717,8 +739,29 @@ export function insertMessage(msg: ChatMessage): void {
       msg.ts,
       msg.agentId ?? null,
       msg.senderUserId ?? null,
+      msg.planStatus ?? null,
+      msg.attachments?.length ? JSON.stringify(msg.attachments) : null,
     ],
   );
+}
+
+export function updateMessagePlanStatus(
+  id: string,
+  planStatus: NonNullable<ChatMessage["planStatus"]> | null,
+): ChatMessage | undefined {
+  syncQuery(`UPDATE messages SET plan_status = $1 WHERE id = $2`, [
+    planStatus,
+    id,
+  ]);
+  return getMessage(id);
+}
+
+export function getMessage(id: string): ChatMessage | undefined {
+  const rows = syncQuery<Record<string, unknown>>(
+    `SELECT * FROM messages WHERE id = $1`,
+    [id],
+  );
+  return rows.length ? rowToMessage(rows[0]) : undefined;
 }
 
 export function updateMessageContent(
