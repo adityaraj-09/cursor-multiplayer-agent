@@ -20,7 +20,7 @@ import type {
 } from "../../shared/events";
 import { fetchRoomUploadBlob } from "../lib/api";
 import Markdown from "./Markdown";
-import InlineDiff from "./InlineDiff";
+import InlineDiff, { countDiffLines } from "./InlineDiff";
 import TodoCard, { coalesceTodoMessages, messageHasTodos } from "./TodoCard";
 
 interface ChatPanelProps {
@@ -90,6 +90,15 @@ export default function ChatPanel({
   const stickToBottom = useRef(true);
   const lastMessageCount = useRef(0);
   const touchYRef = useRef<number | null>(null);
+  const pinnedOnce = useRef(false);
+  const pinKey = `${roomId ?? ""}:${filterAgentId ?? ""}`;
+  const lastPinKey = useRef(pinKey);
+  if (lastPinKey.current !== pinKey) {
+    lastPinKey.current = pinKey;
+    pinnedOnce.current = false;
+    stickToBottom.current = true;
+    lastMessageCount.current = 0;
+  }
 
   const agentLabel = (id?: string) =>
     agents.find((a) => a.id === id)?.label || (id ? id.slice(0, 6) : undefined);
@@ -113,11 +122,16 @@ export default function ChatPanel({
   useEffect(() => {
     const el = scrollerRef.current;
     if (!el) return;
-    updateStickFromScroll();
-    const onScroll = () => updateStickFromScroll();
+    // Don't treat the first layout (scrollTop = 0) as the user scrolling up.
+    if (pinnedOnce.current) updateStickFromScroll();
+    const onScroll = () => {
+      if (!pinnedOnce.current) return;
+      updateStickFromScroll();
+    };
     // Unpin immediately on intentional upward gestures — don't wait for the
     // next scroll event after a streaming re-pin race.
     const onWheel = (e: WheelEvent) => {
+      if (!pinnedOnce.current) return;
       if (e.deltaY < 0) stickToBottom.current = false;
     };
     const onTouchStart = (e: TouchEvent) => {
@@ -139,28 +153,53 @@ export default function ChatPanel({
       el.removeEventListener("touchstart", onTouchStart);
       el.removeEventListener("touchmove", onTouchMove);
     };
-  }, [filtered.length > 0]);
+  }, [filtered.length > 0, pinKey]);
 
   useEffect(() => {
     const scroller = scrollerRef.current;
-    if (!scroller) return;
+    if (!scroller || filtered.length === 0) return;
 
     const grew = filtered.length >= lastMessageCount.current;
     lastMessageCount.current = filtered.length;
+    const initial = !pinnedOnce.current;
 
-    // Only auto-follow when the user is already near the bottom. Streaming
-    // deltas and new posts must not yank the viewport while reading history.
-    if (!stickToBottom.current) return;
-    if (!grew && agentStatus !== "running") return;
+    // Only auto-follow when the user is already near the bottom — except the
+    // first paint of a session, which always starts at the latest message.
+    if (!initial && !stickToBottom.current) return;
+    if (!initial && !grew && agentStatus !== "running") return;
 
-    // Keep movement inside the chat scroller. scrollIntoView() may scroll all
-    // ancestors, including the document, which shifts the header and composer.
-    const frame = requestAnimationFrame(() => {
-      if (!stickToBottom.current || !scrollerRef.current) return;
+    const pin = () => {
+      if (!scrollerRef.current) return;
+      if (!initial && !stickToBottom.current) return;
       scrollerRef.current.scrollTop = scrollerRef.current.scrollHeight;
+      stickToBottom.current = true;
+      pinnedOnce.current = true;
+    };
+
+    // Keep movement inside the chat scroller. Double rAF waits for the first
+    // layout of markdown / diffs so opening a room lands on the last bubble.
+    let inner = 0;
+    const frame = requestAnimationFrame(() => {
+      pin();
+      inner = requestAnimationFrame(pin);
     });
-    return () => cancelAnimationFrame(frame);
-  }, [filtered, agentStatus]);
+    return () => {
+      cancelAnimationFrame(frame);
+      cancelAnimationFrame(inner);
+    };
+  }, [filtered, agentStatus, pinKey]);
+
+  useEffect(() => {
+    const el = scrollerRef.current;
+    const child = el?.firstElementChild;
+    if (!el || !child || filtered.length === 0) return;
+    const ro = new ResizeObserver(() => {
+      if (!stickToBottom.current) return;
+      el.scrollTop = el.scrollHeight;
+    });
+    ro.observe(child);
+    return () => ro.disconnect();
+  }, [filtered.length > 0, pinKey]);
 
   if (filtered.length === 0) {
     return (
@@ -218,6 +257,17 @@ export default function ChatPanel({
               );
             }
             if (item.type === "tools") {
+              const onlyEdit =
+                item.messages.length === 1 && Boolean(item.messages[0].diffPatch);
+              if (onlyEdit) {
+                return (
+                  <EditToolCard
+                    key={item.key}
+                    message={item.messages[0]}
+                    agentLabel={agentLabel(item.messages[0]?.agentId)}
+                  />
+                );
+              }
               return (
                 <ToolCallGroup
                   key={item.key}
@@ -323,68 +373,149 @@ function ToolCallGroup({
   );
 }
 
+function fileLabelFromMessage(message: ChatMessage): string {
+  const fromContent = message.content?.trim();
+  if (fromContent && !fromContent.includes("\n")) {
+    const parts = fromContent.split(/[/\\]/);
+    return parts[parts.length - 1] || fromContent;
+  }
+  const patch = message.diffPatch || "";
+  return (
+    patch.match(/^diff --git a\/(.+?) b\//m)?.[1]?.split(/[/\\]/).pop() ||
+    patch.match(/^\+\+\+ b\/(.+)$/m)?.[1]?.split(/[/\\]/).pop() ||
+    fromContent ||
+    "file"
+  );
+}
+
+function DiffStats({ patch }: { patch: string }) {
+  const stats = countDiffLines(patch);
+  if (stats.added === 0 && stats.removed === 0) return null;
+  return (
+    <span className="inline-flex items-center gap-1.5 text-[10px] font-medium shrink-0">
+      {stats.added > 0 && (
+        <span className="text-[#3ecf8e]">+{stats.added}</span>
+      )}
+      {stats.removed > 0 && (
+        <span className="text-[#f07070]">−{stats.removed}</span>
+      )}
+    </span>
+  );
+}
+
+function EditToolCard({
+  message,
+  agentLabel,
+}: {
+  message: ChatMessage;
+  agentLabel?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const file = fileLabelFromMessage(message);
+
+  return (
+    <div className="rounded-xl border border-[#2b2b2b] bg-[#181818] overflow-hidden shadow-[0_14px_34px_rgba(0,0,0,0.16)]">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="w-full flex items-center gap-2.5 px-3.5 h-10 text-left hover:bg-[#1f1f1f] transition-colors"
+      >
+        <Chevron open={open} />
+        <span className="flex h-6 w-6 items-center justify-center rounded-md bg-[#17202a] text-[#4d9fff]">
+          <GitCompare className="h-3.5 w-3.5" strokeWidth={1.75} />
+        </span>
+        <span className="text-[12px] text-[#d0d0d0] font-medium shrink-0">
+          {message.toolName || "edit"}
+        </span>
+        <span className="text-[12px] text-[#a0a0a0] font-mono truncate min-w-0 flex-1">
+          {file}
+        </span>
+        {agentLabel && (
+          <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-[#252525] text-[#a0a0a0]">
+            {agentLabel}
+          </span>
+        )}
+        {message.diffPatch && <DiffStats patch={message.diffPatch} />}
+        <ToolStatusText status={message.status} />
+      </button>
+      {open && message.diffPatch && (
+        <div className="border-t border-[#2b2b2b]">
+          <InlineDiff patch={message.diffPatch} alwaysOpen hideHeader />
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ToolCallRow({ message }: { message: ChatMessage }) {
   const hasDiff = Boolean(message.diffPatch);
-  // Edit rows stay collapsed until the user opens them.
   const [open, setOpen] = useState(false);
+  const file = hasDiff ? fileLabelFromMessage(message) : "";
 
   return (
     <div className="bg-[#151515]">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="w-full flex items-start gap-2.5 px-3.5 py-2.5 text-left hover:bg-[#1a1a1a] transition-colors"
+        className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-left hover:bg-[#1a1a1a] transition-colors"
       >
-        <Chevron open={open} className="mt-0.5" />
+        <Chevron open={open} />
         {hasDiff ? (
-          <span className="mt-0.5 flex h-6 w-6 items-center justify-center rounded-md bg-[#17202a] text-[#4d9fff]">
+          <span className="flex h-6 w-6 items-center justify-center rounded-md bg-[#17202a] text-[#4d9fff]">
             <GitCompare className="h-3.5 w-3.5" strokeWidth={1.75} />
           </span>
         ) : (
           <ToolStatusIcon status={message.status} />
         )}
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-[12px] text-[#d0d0d0] font-medium">
-              {message.toolName || "tool"}
+        <div className="min-w-0 flex-1 flex items-center gap-2">
+          <span className="text-[12px] text-[#d0d0d0] font-medium shrink-0">
+            {message.toolName || "tool"}
+          </span>
+          {hasDiff ? (
+            <span className="text-[11px] text-[#8a8a8a] font-mono truncate">
+              {file}
             </span>
-            <span
-              className={`text-[10px] ${
-                message.status === "streaming"
-                  ? "text-[#4d9fff]"
-                  : message.status === "error"
-                    ? "text-[#f07070]"
-                    : "text-[#3ecf8e]"
-              }`}
-            >
-              {message.status === "streaming"
-                ? "running"
-                : message.status === "error"
-                  ? "error"
-                  : "done"}
-            </span>
-            {hasDiff && (
-              <span className="text-[10px] text-[#4d9fff]">diff</span>
-            )}
-          </div>
-          {!open && message.content && (
-            <p className="text-[11px] text-[#6e6e6e] font-mono truncate mt-0.5">
-              {message.content}
-            </p>
+          ) : (
+            message.content && (
+              <span className="text-[11px] text-[#6e6e6e] font-mono truncate">
+                {message.content}
+              </span>
+            )
           )}
         </div>
+        {hasDiff && message.diffPatch && <DiffStats patch={message.diffPatch} />}
+        <ToolStatusText status={message.status} />
       </button>
       {open && (
-        <div className="px-3.5 pb-3 pl-12 space-y-2">
-          {message.content && (
-            <p className="text-[12px] text-[#8a8a8a] font-mono break-all whitespace-pre-wrap">
-              {message.content}
-            </p>
+        <div className="px-3.5 pb-3">
+          {hasDiff && message.diffPatch ? (
+            <InlineDiff patch={message.diffPatch} alwaysOpen hideHeader />
+          ) : (
+            message.content && (
+              <p className="text-[12px] text-[#8a8a8a] font-mono break-all whitespace-pre-wrap">
+                {message.content}
+              </p>
+            )
           )}
-          {message.diffPatch && <InlineDiff patch={message.diffPatch} />}
         </div>
       )}
     </div>
+  );
+}
+
+function ToolStatusText({ status }: { status: ChatMessage["status"] }) {
+  return (
+    <span
+      className={`text-[10px] shrink-0 ${
+        status === "streaming"
+          ? "text-[#4d9fff]"
+          : status === "error"
+            ? "text-[#f07070]"
+            : "text-[#3ecf8e]"
+      }`}
+    >
+      {status === "streaming" ? "running" : status === "error" ? "error" : "done"}
+    </span>
   );
 }
 
