@@ -489,8 +489,7 @@ body {
 }
 
 .inline-diff .d2h-file-header {
-  padding: 6px 10px;
-  font-size: 11px;
+  display: none;
 }
 
 ::-webkit-scrollbar {

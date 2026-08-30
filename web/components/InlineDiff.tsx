@@ -7,9 +7,11 @@ interface InlineDiffProps {
   defaultOpen?: boolean;
   /** When true, skip the nested "Show/Hide diff" chrome and always show the patch. */
   alwaysOpen?: boolean;
+  /** Hide the filename/+N/−M bar — parent already shows that. */
+  hideHeader?: boolean;
 }
 
-function countDiffLines(patch: string): { added: number; removed: number } {
+export function countDiffLines(patch: string): { added: number; removed: number } {
   let added = 0;
   let removed = 0;
   for (const line of patch.split("\n")) {
@@ -26,8 +28,11 @@ export default function InlineDiff({
   patch,
   defaultOpen = false,
   alwaysOpen = false,
+  hideHeader = false,
 }: InlineDiffProps) {
   const [open, setOpen] = useState(alwaysOpen || defaultOpen);
+  const showChrome = !alwaysOpen && !hideHeader;
+  const showStaticHeader = alwaysOpen && !hideHeader;
   const containerRef = useRef<HTMLDivElement>(null);
   const stats = useMemo(() => countDiffLines(patch), [patch]);
 
@@ -59,8 +64,14 @@ export default function InlineDiff({
   }, [patch, open]);
 
   return (
-    <div className="rounded-md border border-[#2b2b2b] overflow-hidden bg-[#121212]">
-      {!alwaysOpen && (
+    <div
+      className={
+        hideHeader
+          ? "overflow-hidden bg-[#121212]"
+          : "rounded-md border border-[#2b2b2b] overflow-hidden bg-[#121212]"
+      }
+    >
+      {showChrome && (
         <button
           type="button"
           onClick={() => setOpen((v) => !v)}
@@ -87,7 +98,7 @@ export default function InlineDiff({
           </span>
         </button>
       )}
-      {alwaysOpen && (
+      {showStaticHeader && (
         <div className="flex items-center justify-between gap-2 px-2.5 h-8 border-b border-[#2b2b2b]">
           <span className="min-w-0 truncate text-[11px] font-mono text-[#a0a0a0]">
             {fileLabel}
