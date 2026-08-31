@@ -1,10 +1,19 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Cloud, GitBranch, GitCompare, X } from "lucide-react";
 import DiffViewer from "./DiffViewer";
 import type { AppSocket } from "../lib/socket";
 import type { AgentRuntime, CloudMeta } from "../../shared/events";
+
+const COLLAPSED_KEY = "steer-side-panel-collapsed";
+
+function readStoredCollapsed(): boolean {
+  if (typeof window === "undefined") return true;
+  const v = window.localStorage.getItem(COLLAPSED_KEY);
+  if (v === null) return true;
+  return v === "1";
+}
 
 interface SidePanelProps {
   socket: AppSocket | null;
@@ -28,7 +37,20 @@ export default function SidePanel({
   onClose,
   agentId = null,
 }: SidePanelProps) {
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(true);
+
+  useEffect(() => {
+    const stored = readStoredCollapsed();
+    queueMicrotask(() => setCollapsed(stored));
+  }, []);
+
+  const toggleCollapsed = () => {
+    setCollapsed((prev) => {
+      const next = !prev;
+      window.localStorage.setItem(COLLAPSED_KEY, next ? "1" : "0");
+      return next;
+    });
+  };
 
   const fileCount = lastDiff
     ? (lastDiff.match(/^diff --git /gm) || []).length
@@ -70,7 +92,7 @@ export default function SidePanel({
       ) : (
         <button
           type="button"
-          onClick={() => setCollapsed((v) => !v)}
+          onClick={toggleCollapsed}
           className={`flex items-center gap-2 min-w-0 flex-1 text-left hover:opacity-90 transition-opacity ${
             rail ? "flex-col flex-none w-full justify-center gap-1.5" : ""
           }`}
