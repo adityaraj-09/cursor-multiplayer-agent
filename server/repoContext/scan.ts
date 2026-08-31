@@ -366,6 +366,7 @@ export function scanRepository(
   const files = walkFiles(root);
   const nodes: RepoMapNode[] = [];
   const edges: RepoMapEdge[] = [];
+  const seenNodeIds = new Set<string>();
 
   for (const full of files) {
     let content: string;
@@ -375,6 +376,8 @@ export function scanRepository(
       continue;
     }
     const relPath = posixRel(root, full);
+    if (seenNodeIds.has(relPath)) continue;
+    seenNodeIds.add(relPath);
     const ext = extname(full).toLowerCase();
     nodes.push({
       id: relPath,
@@ -388,6 +391,8 @@ export function scanRepository(
     if (adapter && SYMBOL_EXTS.has(ext)) {
       for (const s of adapter.extractSymbols(content, relPath)) {
         const id = `${relPath}::${s.name}`;
+        if (seenNodeIds.has(id)) continue;
+        seenNodeIds.add(id);
         nodes.push({
           id,
           kind: "symbol",

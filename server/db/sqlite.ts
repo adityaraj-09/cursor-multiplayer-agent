@@ -2,6 +2,7 @@ import Database from "better-sqlite3";
 import { mkdirSync } from "fs";
 import { dirname, resolve } from "path";
 import { randomBytes } from "crypto";
+import { repoMapNodePk } from "./repoMapIds.js";
 import type {
   AgentBackendKind,
   AgentRuntime,
@@ -2232,27 +2233,30 @@ export function saveRepoMap(input: {
   const id = input.id || existing?.id || newId("map_");
   const now = Date.now();
   const graphJson = JSON.stringify(input.graph);
-  if (existing) {
-    stmts.deleteRepoMapNodes.run(existing.id);
-    stmts.deleteRepoMapEdges.run(existing.id);
-  }
-  stmts.upsertRepoMap.run(
-    id,
-    input.roomId,
-    input.repoKey,
-    input.gitSha,
-    input.status,
-    input.error ?? null,
-    input.fileCount,
-    input.symbolCount,
-    input.edgeCount,
-    graphJson,
-    now,
-  );
-  const insertNodes = db.transaction(() => {
+  const write = db.transaction(() => {
+    if (existing) {
+      stmts.deleteRepoMapNodes.run(existing.id);
+      stmts.deleteRepoMapEdges.run(existing.id);
+    }
+    stmts.upsertRepoMap.run(
+      id,
+      input.roomId,
+      input.repoKey,
+      input.gitSha,
+      input.status,
+      input.error ?? null,
+      input.fileCount,
+      input.symbolCount,
+      input.edgeCount,
+      graphJson,
+      now,
+    );
+    const seen = new Set<string>();
     for (const n of input.graph.nodes.slice(0, 8000)) {
+      if (!n.id || seen.has(n.id)) continue;
+      seen.add(n.id);
       stmts.insertRepoMapNode.run(
-        n.id.slice(0, 400),
+        repoMapNodePk(id, n.id),
         id,
         n.kind,
         n.path,
@@ -2268,7 +2272,7 @@ export function saveRepoMap(input: {
       stmts.insertRepoMapEdge.run(id, e.from, e.to, e.rel);
     }
   });
-  insertNodes();
+  write();
   return getRepoMap(input.roomId)!;
 }
 

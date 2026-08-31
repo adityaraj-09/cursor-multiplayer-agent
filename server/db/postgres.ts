@@ -1,5 +1,6 @@
 import pg from "pg";
 import { randomBytes } from "crypto";
+import { repoMapNodePk } from "./repoMapIds.js";
 import type {
   AgentBackendKind,
   AgentRuntime,
@@ -2230,14 +2231,17 @@ export function saveRepoMap(input: {
       now,
     ],
   );
+  const seen = new Set<string>();
   for (const n of input.graph.nodes.slice(0, 8000)) {
+    if (!n.id || seen.has(n.id)) continue;
+    seen.add(n.id);
     syncQuery(
       `INSERT INTO repo_map_nodes (
         id, map_id, kind, path, name, symbol_type, line_start, line_end, keywords, exported
       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
       ON CONFLICT (id) DO NOTHING`,
       [
-        n.id.slice(0, 400),
+        repoMapNodePk(id, n.id),
         id,
         n.kind,
         n.path,

@@ -360,4 +360,102 @@ describe("memory persistence and agent briefing", () => {
     expect(receipts[0]?.memory_version).toBe(2);
     void agentB;
   });
+
+  it("lets two rooms scan overlapping file paths without unique-id collisions", () => {
+    const stamp = Date.now();
+    const ownerId = `user_map_${stamp}`;
+    db.createUser(ownerId, `${ownerId}@example.com`, "Owner", "x");
+    const graph = {
+      nodes: [
+        {
+          id: "README.md",
+          kind: "file" as const,
+          path: "README.md",
+          ext: ".md",
+          keywords: ["readme"],
+        },
+        {
+          id: "src/app.ts",
+          kind: "file" as const,
+          path: "src/app.ts",
+          ext: ".ts",
+          keywords: ["app"],
+        },
+        {
+          id: "src/app.ts::main",
+          kind: "symbol" as const,
+          path: "src/app.ts",
+          name: "main",
+          symbolType: "use_case",
+          keywords: ["main"],
+          exported: true,
+        },
+        {
+          id: "README.md",
+          kind: "file" as const,
+          path: "README.md",
+          ext: ".md",
+          keywords: ["dup"],
+        },
+      ],
+      edges: [
+        { from: "src/app.ts", to: "src/app.ts::main", rel: "contains" as const },
+      ],
+    };
+    const roomA = db.createRoom({
+      id: `room_map_a_${stamp}`,
+      name: "Map A",
+      repoPath: "/tmp/a",
+      agentCommand: "agent",
+      runtime: "local",
+      authMode: "cli",
+      modelId: "auto",
+      ownerId,
+    });
+    const roomB = db.createRoom({
+      id: `room_map_b_${stamp}`,
+      name: "Map B",
+      repoPath: "/tmp/b",
+      agentCommand: "agent",
+      runtime: "local",
+      authMode: "cli",
+      modelId: "auto",
+      ownerId,
+    });
+    const savedA = db.saveRepoMap({
+      roomId: roomA.id,
+      repoKey: "https://github.com/adityaraj-09/flowTape",
+      gitSha: "aaa",
+      status: "ready",
+      fileCount: 2,
+      symbolCount: 1,
+      edgeCount: 1,
+      graph,
+    });
+    const savedB = db.saveRepoMap({
+      roomId: roomB.id,
+      repoKey: "https://github.com/adityaraj-09/other",
+      gitSha: "bbb",
+      status: "ready",
+      fileCount: 2,
+      symbolCount: 1,
+      edgeCount: 1,
+      graph,
+    });
+    expect(savedA.status).toBe("ready");
+    expect(savedB.status).toBe("ready");
+    expect(savedA.id).not.toBe(savedB.id);
+    const again = db.saveRepoMap({
+      roomId: roomA.id,
+      repoKey: "https://github.com/adityaraj-09/flowTape",
+      gitSha: "aaa2",
+      status: "ready",
+      fileCount: 2,
+      symbolCount: 1,
+      edgeCount: 1,
+      graph,
+    });
+    expect(again.status).toBe("ready");
+    expect(again.git_sha).toBe("aaa2");
+  });
 });
