@@ -1,6 +1,7 @@
 import { describe, expect, it, beforeAll } from "vitest";
 import {
   canAbortWithRole,
+  canEditMemory,
   canRequestDrive,
   canSteerWithRole,
   defaultControlModeForRuntime,
@@ -98,6 +99,13 @@ describe("room permission helpers", () => {
     expect(canRequestDrive("viewer")).toBe(false);
     expect(canRequestDrive("editor")).toBe(true);
     expect(canRequestDrive("owner")).toBe(true);
+  });
+
+  it("lets editors and owners mutate memory, not viewers", () => {
+    expect(canEditMemory("viewer")).toBe(false);
+    expect(canEditMemory("editor")).toBe(true);
+    expect(canEditMemory("owner")).toBe(true);
+    expect(canEditMemory(null)).toBe(false);
   });
 });
 

@@ -1,6 +1,12 @@
 import type { AgentBackendKind } from "./backends/types.js";
 import type { ApprovalMode, AgentMode, ApprovalRequestInfo } from "./approvals.js";
 import type { ControlMode, RoomRole } from "./roomPermissions.js";
+import type {
+  AgentContextReceiptInfo,
+  MemoryEntryInfo,
+  RepoMapInfo,
+  RoomContextSnapshot,
+} from "./roomContext.js";
 
 export type { ControlMode, RoomInviteRole, RoomRole } from "./roomPermissions.js";
 export type {
@@ -306,6 +312,15 @@ export interface ServerToClientEvents {
   "review-acked": (ping: PingInfo) => void;
   /** A review ping was dismissed. */
   "review-dismissed": (ping: PingInfo) => void;
+  "room-context": (snapshot: RoomContextSnapshot) => void;
+  "memory-updated": (entry: MemoryEntryInfo, memoryVersion: number) => void;
+  "repo-map-updated": (map: RepoMapInfo) => void;
+  "context-receipt": (receipt: AgentContextReceiptInfo) => void;
+  "context-stale": (payload: {
+    agentId: string;
+    usedVersion: number;
+    currentVersion: number;
+  }) => void;
   error: (message: string) => void;
 }
 

@@ -1,6 +1,6 @@
 # RFC: Shared memory for multiplayer agents
 
-Status: Proposed
+Status: Implemented (Phases 1–3)
 
 ## Summary
 

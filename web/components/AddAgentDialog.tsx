@@ -27,6 +27,7 @@ interface AddAgentDialogProps {
     anthropicApiKey?: string;
     apiKey?: string;
     planMode?: boolean;
+    seedContext?: boolean;
   }) => Promise<void>;
   /** Fallback Cursor models from the room page (may be Claude models if a Claude agent is selected). */
   models: ModelInfo[];
@@ -65,6 +66,7 @@ export default function AddAgentDialog({
   const [e2bConfigured, setE2bConfigured] = useState(false);
   const [byokAvailable, setByokAvailable] = useState(false);
   const [planMode, setPlanMode] = useState(false);
+  const [seedContext, setSeedContext] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -266,6 +268,7 @@ export default function AddAgentDialog({
         scopePath: scopePath.trim() || undefined,
         modelId,
         planMode,
+        seedContext,
         anthropicApiKey:
           backend === "claude-code" && anthropicApiKey.trim()
             ? anthropicApiKey.trim()
@@ -277,6 +280,7 @@ export default function AddAgentDialog({
       setScopePath("");
       setBackend("cursor");
       setPlanMode(false);
+      setSeedContext(true);
       setAnthropicApiKey("");
       setApiKey("");
       onClose();
@@ -514,6 +518,22 @@ export default function AddAgentDialog({
             Plan
           </button>
         </div>
+
+        <label className="flex items-start gap-2 mb-3 text-[12px] text-[#c8c8c8]">
+          <input
+            type="checkbox"
+            checked={seedContext}
+            onChange={(e) => setSeedContext(e.target.checked)}
+            className="mt-0.5"
+          />
+          <span>
+            Start with repo map + room memory
+            <span className="block text-[11px] text-[#6e6e6e] mt-0.5">
+              The first run gets a bounded briefing so the agent doesn’t re-explore
+              the repo from scratch.
+            </span>
+          </span>
+        </label>
 
         {error && (
           <p className="text-[12px] text-[#f07070] mb-3">{error}</p>

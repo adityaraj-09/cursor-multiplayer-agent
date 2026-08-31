@@ -50,6 +50,9 @@ interface SteerInputProps {
   onTypingStop?: (agentId?: string) => void;
   /** e.g. "Jae is typing to Agent A…" */
   typingIndicator?: string;
+  /** Compact status for shared room memory used on the next send. */
+  contextHint?: string;
+  onOpenContext?: () => void;
 }
 
 const TYPING_THROTTLE_MS = 1500;
@@ -74,6 +77,8 @@ export default function SteerInput({
   onTyping,
   onTypingStop,
   typingIndicator,
+  contextHint,
+  onOpenContext,
 }: SteerInputProps) {
   const [text, setText] = useState("");
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
@@ -288,6 +293,15 @@ export default function SteerInput({
               <Lock className="h-3 w-3" strokeWidth={1.75} />
               {modelReason}
             </span>
+          )}
+          {contextHint && (
+            <button
+              type="button"
+              onClick={onOpenContext}
+              className="hidden sm:inline-flex ml-auto items-center gap-1 text-[11px] text-[#8ec5ff] hover:text-[#b8dcff] truncate"
+            >
+              {contextHint}
+            </button>
           )}
         </div>
 

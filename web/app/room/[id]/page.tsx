@@ -6,6 +6,7 @@ import Link from "next/link";
 import {
   Activity,
   Bell,
+  BookOpen,
   Bot,
   Cloud,
   Home,
@@ -50,6 +51,7 @@ import InvitePanel from "../../../components/InvitePanel";
 import MemberRoster from "../../../components/MemberRoster";
 import AgentTabs from "../../../components/AgentTabs";
 import AddAgentDialog from "../../../components/AddAgentDialog";
+import ContextPanel from "../../../components/ContextPanel";
 import LockPanel from "../../../components/LockPanel";
 import FlagForReviewDialog from "../../../components/FlagForReviewDialog";
 import ReviewPingBanner from "../../../components/ReviewPingBanner";
@@ -283,6 +285,8 @@ function LiveRoom({
     removeMember,
     dismissDriveRequest,
     drivingAgentIds,
+    roomContext,
+    contextStale,
   } = useSocket(roomId, userName);
 
   const { user } = useAuth();
@@ -298,6 +302,7 @@ function LiveRoom({
   const amHost = myRole === "owner";
   const canManage = Boolean(roomInfo?.myCanManage || amHost);
   const canFlag = myRole === "owner" || myRole === "editor";
+  const canEditMemory = myRole === "owner" || myRole === "editor";
   const [models, setModels] = useState<ModelInfo[]>(FALLBACK_MODELS);
   const [modelError, setModelError] = useState("");
   const [savingModel, setSavingModel] = useState(false);
@@ -317,6 +322,7 @@ function LiveRoom({
   const [exporting, setExporting] = useState(false);
   const [agentsOpen, setAgentsOpen] = useState(false);
   const [changesOpen, setChangesOpen] = useState(false);
+  const [memoryOpen, setMemoryOpen] = useState(false);
   const [addAgentOpen, setAddAgentOpen] = useState(false);
   const [cursorSessionError, setCursorSessionError] = useState("");
   const [savingCursorSession, setSavingCursorSession] = useState(false);
@@ -582,6 +588,7 @@ function LiveRoom({
       anthropicApiKey?: string;
       apiKey?: string;
       planMode?: boolean;
+      seedContext?: boolean;
     }) => {
       const agent = await addRoomAgent(roomId, data);
       setSelectedAgentId(agent.id);
@@ -718,6 +725,12 @@ function LiveRoom({
       ? messages.filter((m) => !m.agentId || m.agentId === chatFilterAgentId)
           .length
       : messages.length;
+  const activeMemoryCount = (roomContext?.entries || []).filter(
+    (e) => e.status === "active",
+  ).length;
+  const proposedMemoryCount = (roomContext?.entries || []).filter(
+    (e) => e.status === "proposed",
+  ).length;
 
   return (
     <div className="room-shell fixed inset-0 h-[100dvh] max-h-[100dvh] w-full flex flex-col bg-[#111111] text-[#e4e4e4] overflow-hidden overscroll-none">
@@ -798,6 +811,15 @@ function LiveRoom({
               {runtime === "cloud"
                 ? "Cloud"
                 : `Changes${fileCount > 0 ? ` · ${fileCount}` : ""}`}
+            </button>
+            <button
+              type="button"
+              onClick={() => setMemoryOpen(true)}
+              className="lg:hidden inline-flex h-8 items-center gap-1.5 px-2.5 rounded-lg text-[11px] text-[#a0a0a0] hover:text-[#e4e4e4] border border-[#2b2b2b] hover:border-[#3c3c3c] bg-[#1f1f1f] transition-colors"
+            >
+              <BookOpen className="h-3.5 w-3.5" strokeWidth={1.75} />
+              Memory
+              {activeMemoryCount ? ` · ${activeMemoryCount}` : ""}
             </button>
             <button
               type="button"
@@ -1016,6 +1038,15 @@ function LiveRoom({
           prUrl={selectedAgent?.prUrl || roomInfo?.prUrl}
           agentId={selectedAgentId}
         />
+        <ContextPanel
+          roomId={roomId}
+          snapshot={roomContext}
+          canEdit={canEditMemory}
+          selectedAgentId={selectedAgentId}
+          selectedAgentLabel={selectedAgent?.label}
+          agentIdle={selectedStatus !== "running"}
+          stale={contextStale}
+        />
       </main>
 
       {agentsOpen && (
@@ -1056,6 +1087,20 @@ function LiveRoom({
           agentId={selectedAgentId}
           mobile
           onClose={() => setChangesOpen(false)}
+        />
+      )}
+
+      {memoryOpen && (
+        <ContextPanel
+          roomId={roomId}
+          snapshot={roomContext}
+          canEdit={canEditMemory}
+          selectedAgentId={selectedAgentId}
+          selectedAgentLabel={selectedAgent?.label}
+          agentIdle={selectedStatus !== "running"}
+          stale={contextStale}
+          mobile
+          onClose={() => setMemoryOpen(false)}
         />
       )}
 
@@ -1225,6 +1270,20 @@ function LiveRoom({
                   )
                 : ""
           }
+          contextHint={
+            contextStale &&
+            selectedAgentId &&
+            contextStale.agentId === selectedAgentId
+              ? `Memory stale (v${contextStale.usedVersion} → v${contextStale.currentVersion})`
+              : proposedMemoryCount
+                ? `${proposedMemoryCount} memory proposal${proposedMemoryCount === 1 ? "" : "s"} to review`
+                : activeMemoryCount
+                  ? `Using ${activeMemoryCount} shared memor${activeMemoryCount === 1 ? "y" : "ies"}`
+                  : roomContext?.map?.status === "ready"
+                    ? "Repo map ready"
+                    : "Room memory"
+          }
+          onOpenContext={() => setMemoryOpen(true)}
         />
       </footer>
     </div>

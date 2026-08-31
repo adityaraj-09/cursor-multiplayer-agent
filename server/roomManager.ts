@@ -38,6 +38,29 @@ import {
 import { attributionPromptSuffix, type SteerAuthor } from "../shared/attribution.js";
 import { looksLikePlan, planImplementPrompt } from "../shared/plans.js";
 import {
+  buildAgentBriefing,
+  buildHandoffDraft,
+  buildRoomContextSnapshot,
+  createSanitizedMemory,
+  toMemoryInfo,
+  toReceiptInfo,
+} from "./repoContext/briefing.js";
+import { ensureRoomRepoMap, toRepoMapInfo } from "./repoContext/store.js";
+import { prependPackedContext } from "./repoContext/pack.js";
+import type {
+  HandoffDraft,
+  MemoryEntryInfo,
+  MemoryKind,
+  MemoryStatus,
+  RepoMapInfo,
+  RoomContextSnapshot,
+} from "../shared/roomContext.js";
+import {
+  MEMORY_CONTENT_MAX,
+  MEMORY_TITLE_MAX,
+  sanitizeMemoryText,
+} from "../shared/roomContext.js";
+import {
   buildAttachmentPromptSuffix,
   materializeUploadsForAgent,
   resolveUploads,
@@ -62,6 +85,7 @@ import { getUserByokKey, setUserByokKey } from "./userByok.js";
 import { getOrgCursorKey } from "./orgKeys.js";
 import {
   canAbortWithRole,
+  canEditMemory,
   canRequestDrive,
   canSteerWithRole,
   defaultControlModeForRuntime,
@@ -181,6 +205,11 @@ interface AgentState {
   preApprovedActions: Set<string>;
   /** Human who most recently steered this agent (for git attribution). */
   lastSteeredBy: SteerAuthor | null;
+  /**
+   * When false, the agent's first run skips the repo-map + memory briefing.
+   * Flipped to true after that first run (or when the Add Agent checkbox is on).
+   */
+  seedContext: boolean;
 }
 
 interface RoomState {
@@ -726,6 +755,7 @@ export class RoomManager {
         runGeneration: 0,
         preApprovedActions: new Set(),
         lastSteeredBy: null,
+        seedContext: true,
       });
 
       this.applyBackendMode(agents.get(agentRow.id)!);
@@ -1007,6 +1037,265 @@ export class RoomManager {
       infos.push(this.toAgentInfo(a.row));
     }
     this.io.to(room.id).emit("agents", infos);
+  }
+
+  getRoomContextSnapshot(roomId: string): RoomContextSnapshot {
+    try {
+      return buildRoomContextSnapshot(roomId);
+    } catch (err) {
+      console.warn(
+        "[RoomManager] room context snapshot failed:",
+        err instanceof Error ? err.message : err,
+      );
+      return {
+        memoryVersion: 0,
+        map: null,
+        entries: [],
+        lastReceiptByAgent: {},
+      };
+    }
+  }
+
+  broadcastRoomContext(roomId: string): void {
+    this.io.to(roomId).emit("room-context", this.getRoomContextSnapshot(roomId));
+  }
+
+  private broadcastMemoryUpdated(roomId: string, entry: MemoryEntryInfo): void {
+    this.io
+      .to(roomId)
+      .emit("memory-updated", entry, db.getRoomMemoryVersion(roomId));
+  }
+
+  userCanEditMemory(roomId: string, userId: string): boolean {
+    return canEditMemory(this.resolveUserRoomRole(roomId, userId));
+  }
+
+  private assertCanEditMemory(roomId: string, userId: string): void {
+    if (!this.userCanAccessRoom(roomId, userId)) {
+      throw new Error("Room not found");
+    }
+    if (!this.userCanEditMemory(roomId, userId)) {
+      throw new Error("Not allowed");
+    }
+  }
+
+  listRoomMemory(roomId: string, actorUserId: string): MemoryEntryInfo[] {
+    if (!this.userCanAccessRoom(roomId, actorUserId)) {
+      throw new Error("Room not found");
+    }
+    return db
+      .listMemoryEntries(roomId, { includeProposed: true })
+      .map(toMemoryInfo);
+  }
+
+  createRoomMemory(
+    roomId: string,
+    actorUserId: string,
+    input: {
+      kind: unknown;
+      title: unknown;
+      content: unknown;
+      pinned?: boolean;
+      agentId?: string;
+      sourceMessageId?: string | null;
+      sourcePath?: string | null;
+    },
+  ): MemoryEntryInfo {
+    this.assertCanEditMemory(roomId, actorUserId);
+    const fromAgent = Boolean(input.agentId);
+    if (fromAgent) {
+      const agent = db.getAgent(String(input.agentId));
+      if (!agent || agent.room_id !== roomId) {
+        throw new Error("Agent not found");
+      }
+    }
+    const entry = createSanitizedMemory({
+      roomId,
+      kind: input.kind,
+      title: input.title,
+      content: input.content,
+      status: fromAgent ? "proposed" : "active",
+      pinned: Boolean(input.pinned) && !fromAgent,
+      createdByUserId: actorUserId,
+      createdByAgentId: fromAgent ? String(input.agentId) : null,
+      sourceMessageId: input.sourceMessageId,
+      sourcePath: input.sourcePath,
+    });
+    this.broadcastMemoryUpdated(roomId, entry);
+    this.broadcastRoomContext(roomId);
+    return entry;
+  }
+
+  updateRoomMemory(
+    roomId: string,
+    entryId: string,
+    actorUserId: string,
+    input: {
+      expectedRevision: number;
+      title?: unknown;
+      content?: unknown;
+      pinned?: boolean;
+    },
+  ): MemoryEntryInfo {
+    this.assertCanEditMemory(roomId, actorUserId);
+    const current = db.getMemoryEntry(entryId);
+    if (!current || current.room_id !== roomId) {
+      throw new Error("Memory entry not found");
+    }
+    const title =
+      input.title === undefined
+        ? undefined
+        : sanitizeMemoryText(input.title, MEMORY_TITLE_MAX);
+    const content =
+      input.content === undefined
+        ? undefined
+        : sanitizeMemoryText(input.content, MEMORY_CONTENT_MAX);
+    if (input.title !== undefined && !title) {
+      throw new Error("Title is required");
+    }
+    if (input.content !== undefined && !content) {
+      throw new Error("Content is required");
+    }
+    const updated = db.updateMemoryEntry({
+      id: entryId,
+      expectedRevision: input.expectedRevision,
+      title,
+      content,
+      pinned: input.pinned,
+      actorUserId,
+    });
+    if (!updated) throw new Error("Memory entry not found");
+    const info = toMemoryInfo(updated);
+    this.broadcastMemoryUpdated(roomId, info);
+    this.broadcastRoomContext(roomId);
+    return info;
+  }
+
+  acceptRoomMemory(
+    roomId: string,
+    entryId: string,
+    actorUserId: string,
+    expectedRevision?: number,
+  ): MemoryEntryInfo {
+    this.assertCanEditMemory(roomId, actorUserId);
+    const current = db.getMemoryEntry(entryId);
+    if (!current || current.room_id !== roomId) {
+      throw new Error("Memory entry not found");
+    }
+    if (current.status !== "proposed") {
+      throw new Error("Only proposed memories can be accepted");
+    }
+    const updated = db.updateMemoryEntry({
+      id: entryId,
+      expectedRevision: expectedRevision ?? current.current_revision,
+      status: "active" as MemoryStatus,
+      actorUserId,
+    });
+    if (!updated) throw new Error("Memory entry not found");
+    const info = toMemoryInfo(updated);
+    this.broadcastMemoryUpdated(roomId, info);
+    this.broadcastRoomContext(roomId);
+    return info;
+  }
+
+  archiveRoomMemory(
+    roomId: string,
+    entryId: string,
+    actorUserId: string,
+    expectedRevision?: number,
+  ): MemoryEntryInfo {
+    this.assertCanEditMemory(roomId, actorUserId);
+    const current = db.getMemoryEntry(entryId);
+    if (!current || current.room_id !== roomId) {
+      throw new Error("Memory entry not found");
+    }
+    const updated = db.updateMemoryEntry({
+      id: entryId,
+      expectedRevision: expectedRevision ?? current.current_revision,
+      status: "archived" as MemoryStatus,
+      actorUserId,
+    });
+    if (!updated) throw new Error("Memory entry not found");
+    const info = toMemoryInfo(updated);
+    this.broadcastMemoryUpdated(roomId, info);
+    this.broadcastRoomContext(roomId);
+    return info;
+  }
+
+  refreshRepoMap(roomId: string, actorUserId: string): RepoMapInfo {
+    this.assertCanEditMemory(roomId, actorUserId);
+    const row = db.getRoom(roomId);
+    if (!row) throw new Error("Room not found");
+    const info = ensureRoomRepoMap(row, { force: true });
+    this.io.to(roomId).emit("repo-map-updated", info);
+    this.broadcastRoomContext(roomId);
+    return info;
+  }
+
+  getRepoMapInfo(roomId: string, actorUserId: string): RepoMapInfo | null {
+    if (!this.userCanAccessRoom(roomId, actorUserId)) {
+      throw new Error("Room not found");
+    }
+    const row = db.getRepoMap(roomId);
+    return row ? toRepoMapInfo(row) : null;
+  }
+
+  getHandoffDraft(
+    roomId: string,
+    agentId: string,
+    actorUserId: string,
+  ): HandoffDraft {
+    if (!this.userCanAccessRoom(roomId, actorUserId)) {
+      throw new Error("Room not found");
+    }
+    const room = this.rooms.get(roomId);
+    const row = db.getRoom(roomId);
+    const agentRow = db.getAgent(agentId);
+    if (!row || !agentRow || agentRow.room_id !== roomId) {
+      throw new Error("Agent not found");
+    }
+    const live = room?.agents.get(agentId);
+    const lastAssistant = [...db.getMessages(roomId, 200)]
+      .reverse()
+      .find((m) => m.agentId === agentId && m.role === "assistant");
+    const todos = lastAssistant?.todos
+      ? lastAssistant.todos
+          .filter((t) => t.status === "pending" || t.status === "in_progress")
+          .map((t) => `- [${t.status}] ${t.content}`)
+      : [];
+    const extraNote = todos.length
+      ? `\nRemaining todos:\n${todos.join("\n")}`
+      : "";
+    const draft = buildHandoffDraft(row, agentRow, {
+      touchedPaths: live ? [...live.touchedPaths] : [],
+      lastAssistant: lastAssistant
+        ? `${lastAssistant.content}${extraNote}`
+        : extraNote || null,
+    });
+    return draft;
+  }
+
+  captureHandoffDraft(
+    roomId: string,
+    agentId: string,
+    actorUserId: string,
+    opts?: { title?: string; content?: string; asProposal?: boolean },
+  ): MemoryEntryInfo {
+    this.assertCanEditMemory(roomId, actorUserId);
+    const draft = this.getHandoffDraft(roomId, agentId, actorUserId);
+    const entry = createSanitizedMemory({
+      roomId,
+      kind: "handoff" as MemoryKind,
+      title: opts?.title || draft.title,
+      content: opts?.content || draft.content,
+      status: opts?.asProposal ? "proposed" : "active",
+      createdByUserId: actorUserId,
+      createdByAgentId: agentId,
+      sourcePath: draft.sourcePath ?? null,
+    });
+    this.broadcastMemoryUpdated(roomId, entry);
+    this.broadcastRoomContext(roomId);
+    return entry;
   }
 
   private broadcastConflicts(room: RoomState): void {
@@ -1406,6 +1695,7 @@ export class RoomManager {
       "room-pings",
       db.listOpenRoomPings(roomId).map((r) => this.pingRowToInfo(r)),
     );
+    socket.emit("room-context", this.getRoomContextSnapshot(roomId));
 
     if (room.row.runtime === "cloud") {
       socket.emit("cloud-meta", room.cloudMeta);
@@ -2276,7 +2566,36 @@ export class RoomManager {
     agent: AgentState,
     prompt: AgentPrompt,
   ): Promise<void> {
-    if (this.tryDispatchToWorker(room, agent, prompt)) return;
+    let nextPrompt: AgentPrompt = prompt;
+    try {
+      const priorReceipts = db.listAgentContextReceipts(agent.row.id, 1);
+      const skipBriefing =
+        agent.seedContext === false && priorReceipts.length === 0;
+      agent.seedContext = true;
+      if (!skipBriefing) {
+        const packed = buildAgentBriefing({
+          room: room.row,
+          agent: agent.row,
+          prompt: promptText(prompt),
+          touchedPaths: [...agent.touchedPaths],
+          checkoutRoot: agent.cwd || room.row.repo_path,
+        });
+        const text = prependPackedContext(promptText(prompt), packed);
+        nextPrompt =
+          typeof prompt === "string" ? text : { ...prompt, text };
+        const receipts = db.listAgentContextReceipts(agent.row.id, 1);
+        if (receipts[0]) {
+          this.io.to(room.id).emit("context-receipt", toReceiptInfo(receipts[0]));
+        }
+      }
+    } catch (err) {
+      console.warn(
+        "[RoomManager] context briefing failed:",
+        err instanceof Error ? err.message : err,
+      );
+    }
+
+    if (this.tryDispatchToWorker(room, agent, nextPrompt)) return;
 
     // CLI rooms whose repo isn't on this host must use the worker
     if (
@@ -2667,6 +2986,17 @@ export class RoomManager {
       roomId: room.id,
       meta: { agentId: agent.row.id, outcome },
     });
+    if (outcome === "completed" || outcome === "error") {
+      const receipts = db.listAgentContextReceipts(agent.row.id, 1);
+      const current = db.getRoomMemoryVersion(room.id);
+      if (receipts[0] && receipts[0].memory_version < current) {
+        this.io.to(room.id).emit("context-stale", {
+          agentId: agent.row.id,
+          usedVersion: receipts[0].memory_version,
+          currentVersion: current,
+        });
+      }
+    }
   }
 
   // -----------------------------------------------------------------------
@@ -3213,6 +3543,8 @@ export class RoomManager {
       apiKey?: string;
       /** Start this agent in read-only plan mode. */
       planMode?: boolean;
+      /** First run receives the repo map + accepted room memory (default true). */
+      seedContext?: boolean;
     },
     actorUserId: string,
   ): AgentInfo {
@@ -3390,6 +3722,7 @@ export class RoomManager {
       runGeneration: 0,
       preApprovedActions: new Set(),
       lastSteeredBy: null,
+      seedContext: opts.seedContext !== false,
     };
 
     room.agents.set(agentRow.id, agentState);
@@ -4057,9 +4390,21 @@ export class RoomManager {
       `- Messages: ${messages.length}`,
       `- Status: ${info.status}`,
       ``,
-      `## Transcript`,
+      `## Shared memory`,
       ``,
     ];
+
+    const memory = db.listMemoryEntries(roomId, { includeProposed: true });
+    if (memory.length) {
+      for (const e of memory) {
+        lines.push(
+          `- [${e.kind} ${e.status} r${e.current_revision}${e.pinned ? " pinned" : ""}] ${e.title}: ${e.content}`,
+        );
+      }
+    } else {
+      lines.push(`_No room memory recorded._`);
+    }
+    lines.push(``, `## Transcript`, ``);
 
     for (const m of messages) {
       const when = new Date(m.ts).toISOString();
