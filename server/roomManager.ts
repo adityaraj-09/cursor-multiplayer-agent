@@ -37,6 +37,7 @@ import {
 } from "../shared/approvals.js";
 import { attributionPromptSuffix, type SteerAuthor } from "../shared/attribution.js";
 import { looksLikePlan, planImplementPrompt } from "../shared/plans.js";
+import { extractAutoMemories } from "./repoContext/extract.js";
 import {
   buildAgentBriefing,
   buildHandoffDraft,
@@ -58,6 +59,7 @@ import type {
 import {
   MEMORY_CONTENT_MAX,
   MEMORY_TITLE_MAX,
+  parseAutoMemoryMode,
   sanitizeMemoryText,
 } from "../shared/roomContext.js";
 import {
@@ -210,6 +212,8 @@ interface AgentState {
    * Flipped to true after that first run (or when the Add Agent checkbox is on).
    */
   seedContext: boolean;
+  /** Wall clock when the current run started — bounds auto-memory extraction. */
+  runStartedAt: number | null;
 }
 
 interface RoomState {
@@ -756,6 +760,7 @@ export class RoomManager {
         preApprovedActions: new Set(),
         lastSteeredBy: null,
         seedContext: true,
+        runStartedAt: null,
       });
 
       this.applyBackendMode(agents.get(agentRow.id)!);
@@ -1120,6 +1125,7 @@ export class RoomManager {
       createdByAgentId: fromAgent ? String(input.agentId) : null,
       sourceMessageId: input.sourceMessageId,
       sourcePath: input.sourcePath,
+      source: fromAgent ? "agent_proposed" : "human",
     });
     this.broadcastMemoryUpdated(roomId, entry);
     this.broadcastRoomContext(roomId);
@@ -1292,6 +1298,7 @@ export class RoomManager {
       createdByUserId: actorUserId,
       createdByAgentId: agentId,
       sourcePath: draft.sourcePath ?? null,
+      source: "human",
     });
     this.broadcastMemoryUpdated(roomId, entry);
     this.broadcastRoomContext(roomId);
@@ -2567,6 +2574,7 @@ export class RoomManager {
     prompt: AgentPrompt,
   ): Promise<void> {
     let nextPrompt: AgentPrompt = prompt;
+    agent.runStartedAt = Date.now();
     try {
       const priorReceipts = db.listAgentContextReceipts(agent.row.id, 1);
       const skipBriefing =
@@ -2996,6 +3004,105 @@ export class RoomManager {
           currentVersion: current,
         });
       }
+    }
+    this.ingestAutoMemory(room, agent, outcome);
+  }
+
+  private ingestAutoMemory(
+    room: RoomState,
+    agent: AgentState,
+    outcome: "completed" | "error" | "aborted",
+  ): void {
+    const now = Date.now();
+    const advanceCursor = () => {
+      try {
+        db.setAgentAutoMemCursor(agent.row.id, now);
+        agent.row.auto_mem_cursor_ts = now;
+      } catch (err) {
+        console.warn(
+          "[RoomManager] auto-memory cursor failed:",
+          err instanceof Error ? err.message : err,
+        );
+      }
+    };
+
+    if (outcome !== "completed") {
+      advanceCursor();
+      return;
+    }
+
+    const mode = parseAutoMemoryMode(room.row.auto_memory);
+    if (mode === "off") {
+      advanceCursor();
+      return;
+    }
+
+    try {
+      const cursor = Number(agent.row.auto_mem_cursor_ts ?? 0);
+      // Inclusive of the user turn that started this run (it is stored before
+      // runStartedAt). First extract uses a short lookback instead of all history.
+      const since =
+        cursor > 0
+          ? cursor
+          : Math.max(0, (agent.runStartedAt ?? now) - 5 * 60 * 1000);
+      const messages = db
+        .getMessages(room.id, 400)
+        .filter((m) => m.agentId === agent.row.id && m.ts > since);
+      const existing = db.listMemoryEntries(room.id, { includeProposed: true });
+      const candidates = extractAutoMemories({
+        agentLabel: agent.row.label,
+        messages,
+        touchedPaths: [...agent.touchedPaths],
+        branch: agent.row.branch,
+        prUrl: agent.row.pr_url,
+        existing: existing.map((e) => ({
+          kind: e.kind,
+          title: e.title,
+          content: e.content,
+          status: e.status,
+          source: e.source,
+        })),
+      });
+      const saved: MemoryEntryInfo[] = [];
+      for (const candidate of candidates) {
+        try {
+          saved.push(
+            createSanitizedMemory({
+              roomId: room.id,
+              kind: candidate.kind,
+              title: candidate.title,
+              content: candidate.content,
+              status: "active",
+              createdByAgentId: agent.row.id,
+              sourceMessageId: candidate.sourceMessageId,
+              sourcePath: candidate.sourcePath,
+              source: "auto",
+            }),
+          );
+        } catch (err) {
+          console.warn(
+            "[RoomManager] auto-memory persist skipped:",
+            err instanceof Error ? err.message : err,
+          );
+        }
+      }
+      if (saved.length) {
+        for (const entry of saved) this.broadcastMemoryUpdated(room.id, entry);
+        this.io.to(room.id).emit("auto-memory-saved", {
+          agentId: agent.row.id,
+          count: saved.length,
+          entries: saved,
+        });
+        this.broadcastRoomContext(room.id);
+      }
+    } catch (err) {
+      console.warn(
+        "[RoomManager] auto-memory extract failed:",
+        err instanceof Error ? err.message : err,
+      );
+    } finally {
+      advanceCursor();
+      agent.runStartedAt = null;
     }
   }
 
@@ -3723,6 +3830,7 @@ export class RoomManager {
       preApprovedActions: new Set(),
       lastSteeredBy: null,
       seedContext: opts.seedContext !== false,
+      runStartedAt: null,
     };
 
     room.agents.set(agentRow.id, agentState);
@@ -4214,7 +4322,34 @@ export class RoomManager {
     );
   }
 
-  /** Host / org admin can manage room-level settings. */
+  setAutoMemoryMode(
+    roomId: string,
+    autoMemoryRaw: string,
+    actorUserId: string,
+  ): RoomInfo {
+    const row = db.getRoom(roomId);
+    if (!row || row.status !== "active") {
+      throw new Error("Room not found");
+    }
+    this.assertCanManage(roomId, actorUserId);
+    const mode = parseAutoMemoryMode(autoMemoryRaw, "extract");
+    const normalized = String(autoMemoryRaw || "").trim().toLowerCase();
+    if (normalized !== "off" && normalized !== "extract") {
+      throw new Error("autoMemory must be off or extract");
+    }
+    db.setRoomAutoMemory(roomId, mode);
+    row.auto_memory = mode;
+    const room = this.rooms.get(roomId);
+    if (room) {
+      room.row.auto_memory = mode;
+    }
+    return this.toRoomInfo(
+      row,
+      room?.participants.size || 0,
+      actorUserId,
+    );
+  }
+
   userCanManageRoom(roomId: string, userId: string): boolean {
     return userCanManageRoomAccess(roomId, userId);
   }
@@ -4628,6 +4763,7 @@ export class RoomManager {
       modelId: row.model_id || DEFAULT_MODEL,
       controlMode: this.getControlMode(row),
       approvalMode: parseApprovalMode(row.approval_mode),
+      autoMemory: parseAutoMemoryMode(row.auto_memory),
       repoUrl: row.repo_url || undefined,
       startingRef: row.starting_ref || undefined,
       prUrl: row.pr_url || undefined,

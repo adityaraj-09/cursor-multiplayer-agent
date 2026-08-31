@@ -9,6 +9,7 @@ import {
   StopCircle,
 } from "lucide-react";
 import type { AgentInfo, ApprovalMode, ControlMode } from "../../shared/events";
+import type { AutoMemoryMode } from "../../shared/roomContext";
 import {
   approvalModeDescription,
   approvalModeLabel,
@@ -28,6 +29,7 @@ export default function RoomSettingsDialog({
   myRole,
   controlMode,
   approvalMode,
+  autoMemory,
   canManage,
   amHost,
   selectedAgent,
@@ -36,10 +38,12 @@ export default function RoomSettingsDialog({
   planModeBusy,
   savingControlMode,
   savingApprovalMode,
+  savingAutoMemory,
   exporting,
   stopping,
   onControlModeChange,
   onApprovalModeChange,
+  onAutoMemoryChange,
   onTogglePlanMode,
   onOpenSlack,
   onOpenInvites,
@@ -54,6 +58,7 @@ export default function RoomSettingsDialog({
   myRole: RoomRole;
   controlMode: ControlMode;
   approvalMode: ApprovalMode;
+  autoMemory: AutoMemoryMode;
   canManage: boolean;
   amHost: boolean;
   selectedAgent: AgentInfo | null;
@@ -62,10 +67,12 @@ export default function RoomSettingsDialog({
   planModeBusy: boolean;
   savingControlMode: boolean;
   savingApprovalMode: boolean;
+  savingAutoMemory: boolean;
   exporting: boolean;
   stopping: boolean;
   onControlModeChange: (mode: ControlMode) => void;
   onApprovalModeChange: (mode: ApprovalMode) => void;
+  onAutoMemoryChange: (mode: AutoMemoryMode) => void;
   onTogglePlanMode: () => void;
   onOpenSlack: () => void;
   onOpenInvites: () => void;
@@ -196,6 +203,30 @@ export default function RoomSettingsDialog({
                   <option value="all">Approve all tools</option>
                 </select>
               </label>
+              <div className="flex items-center justify-between gap-3 rounded-md border border-[#2b2b2b] bg-[#141414] px-3 py-2.5">
+                <div className="min-w-0">
+                  <p className="text-[12px] text-[#e4e4e4]">Auto memory</p>
+                  <p className="text-[11px] text-[#6e6e6e]">
+                    After a successful run, save corrections and handoffs silently
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  disabled={savingAutoMemory}
+                  onClick={() =>
+                    onAutoMemoryChange(
+                      autoMemory === "extract" ? "off" : "extract",
+                    )
+                  }
+                  className={`h-8 px-2.5 rounded-md text-[11px] border shrink-0 disabled:opacity-40 ${
+                    autoMemory === "extract"
+                      ? "border-[#4d9fff] bg-[#1a2430] text-[#8ec5ff]"
+                      : "border-[#2b2b2b] bg-[#1f1f1f] text-[#a0a0a0]"
+                  }`}
+                >
+                  {autoMemory === "extract" ? "On" : "Off"}
+                </button>
+              </div>
               {selectedAgent && (
                 <div className="flex items-center justify-between gap-3 rounded-md border border-[#2b2b2b] bg-[#141414] px-3 py-2.5">
                   <div className="min-w-0">

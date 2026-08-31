@@ -6,6 +6,7 @@ export const MEMORY_KINDS = [
   "constraint",
   "discovery",
   "handoff",
+  "feedback",
 ] as const;
 
 export type MemoryKind = (typeof MEMORY_KINDS)[number];
@@ -18,6 +19,26 @@ export const MEMORY_STATUSES = [
 ] as const;
 
 export type MemoryStatus = (typeof MEMORY_STATUSES)[number];
+
+export const MEMORY_SOURCES = ["human", "auto", "agent_proposed"] as const;
+export type MemorySource = (typeof MEMORY_SOURCES)[number];
+
+export const AUTO_MEMORY_MODES = ["off", "extract"] as const;
+export type AutoMemoryMode = (typeof AUTO_MEMORY_MODES)[number];
+
+export function isMemorySource(v: unknown): v is MemorySource {
+  return typeof v === "string" && (MEMORY_SOURCES as readonly string[]).includes(v);
+}
+
+export function parseAutoMemoryMode(
+  raw: unknown,
+  fallback: AutoMemoryMode = "extract",
+): AutoMemoryMode {
+  if (typeof raw !== "string") return fallback;
+  const n = raw.trim().toLowerCase();
+  if (n === "off" || n === "extract") return n;
+  return fallback;
+}
 
 export type RepoMapStatus = "idle" | "scanning" | "ready" | "error";
 
@@ -77,6 +98,8 @@ export interface MemoryEntryInfo {
   sourceMessageId?: string | null;
   sourcePath?: string | null;
   supersedesId?: string | null;
+  /** Who wrote this row. Auto entries are extractor-created, no click. */
+  source?: MemorySource;
 }
 
 export interface AgentContextReceiptInfo {
@@ -137,6 +160,17 @@ const SECRET_PATTERNS: RegExp[] = [
 
 export function isMemoryKind(v: unknown): v is MemoryKind {
   return typeof v === "string" && (MEMORY_KINDS as readonly string[]).includes(v);
+}
+
+/** Standing instructions / jailbreak-shaped text must never auto-accept. */
+export function looksLikeMemoryInjection(input: string): boolean {
+  const q = input.toLowerCase();
+  return (
+    /\b(ignore|disregard)\s+(all\s+)?(previous|prior|system)\b/.test(q) ||
+    /\b(you are now|jailbreak|system prompt)\b/.test(q) ||
+    /\b(always obey|must follow these instructions|from now on you)\b/.test(q) ||
+    /\b(do not follow|override)\s+(the\s+)?(safety|platform|user request)\b/.test(q)
+  );
 }
 
 export function isMemoryStatus(v: unknown): v is MemoryStatus {

@@ -3,6 +3,7 @@ import type { ApprovalMode, AgentMode, ApprovalRequestInfo } from "./approvals.j
 import type { ControlMode, RoomRole } from "./roomPermissions.js";
 import type {
   AgentContextReceiptInfo,
+  AutoMemoryMode,
   MemoryEntryInfo,
   RepoMapInfo,
   RoomContextSnapshot,
@@ -170,6 +171,8 @@ export interface RoomInfo {
    * Separate from file locks and driver control.
    */
   approvalMode: ApprovalMode;
+  /** Silent auto-memory after each successful run. Default extract (on). */
+  autoMemory?: AutoMemoryMode;
   repoUrl?: string;
   startingRef?: string;
   prUrl?: string;
@@ -320,6 +323,11 @@ export interface ServerToClientEvents {
     agentId: string;
     usedVersion: number;
     currentVersion: number;
+  }) => void;
+  "auto-memory-saved": (payload: {
+    agentId: string;
+    count: number;
+    entries: MemoryEntryInfo[];
   }) => void;
   error: (message: string) => void;
 }
