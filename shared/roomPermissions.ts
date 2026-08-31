@@ -102,6 +102,11 @@ export function canRequestDrive(role: RoomRole | null | undefined): boolean {
   return role === "owner" || role === "editor";
 }
 
+/** Viewers can read room memory; only editors and the host can mutate it. */
+export function canEditMemory(role: RoomRole | null | undefined): boolean {
+  return role === "owner" || role === "editor";
+}
+
 export function canSteerWithRole(opts: {
   role: RoomRole | null | undefined;
   controlMode: ControlMode;

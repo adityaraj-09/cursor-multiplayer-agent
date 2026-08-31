@@ -9,6 +9,12 @@ import type {
   SteerLogEntry,
 } from "../../shared/events.js";
 import type { ApprovalStatus } from "../../shared/approvals.js";
+import type {
+  MemoryKind,
+  MemoryStatus,
+  RepoMapGraph,
+  RepoMapStatus,
+} from "../../shared/roomContext.js";
 
 function newId(prefix = ""): string {
   return `${prefix}${randomBytes(8).toString("hex")}`;
@@ -42,7 +48,8 @@ async function initSchema() {
       control_mode TEXT NOT NULL DEFAULT 'open',
       approval_mode TEXT NOT NULL DEFAULT 'off',
       slack_webhook_ciphertext TEXT,
-      slack_webhook_hint TEXT
+      slack_webhook_hint TEXT,
+      memory_version BIGINT NOT NULL DEFAULT 0
     );
 
     CREATE TABLE IF NOT EXISTS steer_messages (
@@ -250,6 +257,82 @@ async function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_room_pings_room_status ON room_pings(room_id, status);
   `);
 
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS repo_maps (
+      id TEXT PRIMARY KEY,
+      room_id TEXT NOT NULL UNIQUE REFERENCES rooms(id) ON DELETE CASCADE,
+      repo_key TEXT NOT NULL,
+      git_sha TEXT,
+      status TEXT NOT NULL DEFAULT 'ready',
+      error TEXT,
+      file_count INTEGER NOT NULL DEFAULT 0,
+      symbol_count INTEGER NOT NULL DEFAULT 0,
+      edge_count INTEGER NOT NULL DEFAULT 0,
+      graph_json TEXT NOT NULL DEFAULT '{"nodes":[],"edges":[]}',
+      generated_at BIGINT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS repo_map_nodes (
+      id TEXT PRIMARY KEY,
+      map_id TEXT NOT NULL REFERENCES repo_maps(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL,
+      path TEXT NOT NULL,
+      name TEXT,
+      symbol_type TEXT,
+      line_start INTEGER,
+      line_end INTEGER,
+      keywords TEXT NOT NULL DEFAULT '',
+      exported INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE TABLE IF NOT EXISTS repo_map_edges (
+      id BIGSERIAL PRIMARY KEY,
+      map_id TEXT NOT NULL REFERENCES repo_maps(id) ON DELETE CASCADE,
+      src TEXT NOT NULL,
+      dst TEXT NOT NULL,
+      rel TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS memory_entries (
+      id TEXT PRIMARY KEY,
+      room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL,
+      title TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active',
+      pinned INTEGER NOT NULL DEFAULT 0,
+      created_by_user_id TEXT,
+      created_by_agent_id TEXT,
+      created_at BIGINT NOT NULL,
+      updated_at BIGINT NOT NULL,
+      current_revision INTEGER NOT NULL DEFAULT 1,
+      supersedes_id TEXT
+    );
+    CREATE TABLE IF NOT EXISTS memory_revisions (
+      entry_id TEXT NOT NULL REFERENCES memory_entries(id) ON DELETE CASCADE,
+      revision INTEGER NOT NULL,
+      content TEXT NOT NULL,
+      source_message_id TEXT,
+      source_path TEXT,
+      created_by_user_id TEXT,
+      created_by_agent_id TEXT,
+      created_at BIGINT NOT NULL,
+      PRIMARY KEY (entry_id, revision)
+    );
+    CREATE TABLE IF NOT EXISTS agent_context_receipts (
+      id TEXT PRIMARY KEY,
+      room_id TEXT NOT NULL,
+      agent_id TEXT NOT NULL,
+      run_id TEXT NOT NULL,
+      map_id TEXT,
+      git_sha TEXT,
+      memory_version BIGINT NOT NULL DEFAULT 0,
+      entry_ids_json TEXT NOT NULL DEFAULT '[]',
+      file_ids_json TEXT NOT NULL DEFAULT '[]',
+      is_baseline INTEGER NOT NULL DEFAULT 0,
+      created_at BIGINT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_memory_entries_room ON memory_entries(room_id, status, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_context_receipts_agent ON agent_context_receipts(agent_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_repo_map_nodes_map ON repo_map_nodes(map_id);
+  `);
+
   const migrations = [
     `ALTER TABLE rooms ADD COLUMN IF NOT EXISTS cursor_session_id TEXT`,
     `ALTER TABLE rooms ADD COLUMN IF NOT EXISTS runtime TEXT NOT NULL DEFAULT 'local'`,
@@ -277,6 +360,7 @@ async function initSchema() {
     `ALTER TABLE rooms ADD COLUMN IF NOT EXISTS slack_webhook_hint TEXT`,
     `ALTER TABLE messages ADD COLUMN IF NOT EXISTS plan_status TEXT`,
     `ALTER TABLE messages ADD COLUMN IF NOT EXISTS attachments_json TEXT`,
+    `ALTER TABLE rooms ADD COLUMN IF NOT EXISTS memory_version BIGINT NOT NULL DEFAULT 0`,
   ];
 
   for (const sql of migrations) {
@@ -342,6 +426,7 @@ export interface RoomRow {
   approval_mode: string;
   slack_webhook_ciphertext: string | null;
   slack_webhook_hint: string | null;
+  memory_version?: number;
 }
 
 export interface CreateRoomInput {
@@ -1949,6 +2034,441 @@ export function listRoomPingAcks(pingId: string): RoomPingAckRow[] {
     `SELECT * FROM room_ping_acks WHERE ping_id = $1 ORDER BY acked_at ASC`,
     [pingId],
   ).map(rowToRoomPingAck);
+}
+
+export interface RepoMapRow {
+  id: string;
+  room_id: string;
+  repo_key: string;
+  git_sha: string | null;
+  status: RepoMapStatus;
+  error: string | null;
+  file_count: number;
+  symbol_count: number;
+  edge_count: number;
+  graph_json: string;
+  generated_at: number;
+}
+
+export interface MemoryEntryRow {
+  id: string;
+  room_id: string;
+  kind: MemoryKind;
+  title: string;
+  status: MemoryStatus;
+  pinned: number;
+  created_by_user_id: string | null;
+  created_by_agent_id: string | null;
+  created_at: number;
+  updated_at: number;
+  current_revision: number;
+  supersedes_id: string | null;
+  content: string;
+  source_message_id: string | null;
+  source_path: string | null;
+}
+
+export interface AgentContextReceiptRow {
+  id: string;
+  room_id: string;
+  agent_id: string;
+  run_id: string;
+  map_id: string | null;
+  git_sha: string | null;
+  memory_version: number;
+  entry_ids_json: string;
+  file_ids_json: string;
+  is_baseline: number;
+  created_at: number;
+}
+
+function rowToRepoMap(r: Record<string, unknown>): RepoMapRow {
+  return {
+    id: String(r.id),
+    room_id: String(r.room_id),
+    repo_key: String(r.repo_key),
+    git_sha: r.git_sha == null ? null : String(r.git_sha),
+    status: String(r.status) as RepoMapStatus,
+    error: r.error == null ? null : String(r.error),
+    file_count: Number(r.file_count || 0),
+    symbol_count: Number(r.symbol_count || 0),
+    edge_count: Number(r.edge_count || 0),
+    graph_json: String(r.graph_json || '{"nodes":[],"edges":[]}'),
+    generated_at: Number(r.generated_at || 0),
+  };
+}
+
+function rowToMemoryEntry(r: Record<string, unknown>): MemoryEntryRow {
+  return {
+    id: String(r.id),
+    room_id: String(r.room_id),
+    kind: String(r.kind) as MemoryKind,
+    title: String(r.title),
+    status: String(r.status) as MemoryStatus,
+    pinned: Number(r.pinned || 0),
+    created_by_user_id: r.created_by_user_id == null ? null : String(r.created_by_user_id),
+    created_by_agent_id: r.created_by_agent_id == null ? null : String(r.created_by_agent_id),
+    created_at: Number(r.created_at || 0),
+    updated_at: Number(r.updated_at || 0),
+    current_revision: Number(r.current_revision || 1),
+    supersedes_id: r.supersedes_id == null ? null : String(r.supersedes_id),
+    content: String(r.content || ""),
+    source_message_id: r.source_message_id == null ? null : String(r.source_message_id),
+    source_path: r.source_path == null ? null : String(r.source_path),
+  };
+}
+
+function rowToReceipt(r: Record<string, unknown>): AgentContextReceiptRow {
+  return {
+    id: String(r.id),
+    room_id: String(r.room_id),
+    agent_id: String(r.agent_id),
+    run_id: String(r.run_id),
+    map_id: r.map_id == null ? null : String(r.map_id),
+    git_sha: r.git_sha == null ? null : String(r.git_sha),
+    memory_version: Number(r.memory_version || 0),
+    entry_ids_json: String(r.entry_ids_json || "[]"),
+    file_ids_json: String(r.file_ids_json || "[]"),
+    is_baseline: Number(r.is_baseline || 0),
+    created_at: Number(r.created_at || 0),
+  };
+}
+
+export function getRoomMemoryVersion(roomId: string): number {
+  const rows = syncQuery<{ memory_version: number }>(
+    `SELECT memory_version FROM rooms WHERE id = $1`,
+    [roomId],
+  );
+  return Number(rows[0]?.memory_version || 0);
+}
+
+export function bumpRoomMemoryVersion(roomId: string): number {
+  syncQuery(`UPDATE rooms SET memory_version = memory_version + 1 WHERE id = $1`, [
+    roomId,
+  ]);
+  return getRoomMemoryVersion(roomId);
+}
+
+export function getRepoMap(roomId: string): RepoMapRow | undefined {
+  const rows = syncQuery<Record<string, unknown>>(
+    `SELECT * FROM repo_maps WHERE room_id = $1`,
+    [roomId],
+  );
+  return rows[0] ? rowToRepoMap(rows[0]) : undefined;
+}
+
+export function saveRepoMap(input: {
+  id?: string;
+  roomId: string;
+  repoKey: string;
+  gitSha: string | null;
+  status: RepoMapStatus;
+  error?: string | null;
+  fileCount: number;
+  symbolCount: number;
+  edgeCount: number;
+  graph: RepoMapGraph;
+}): RepoMapRow {
+  const existing = getRepoMap(input.roomId);
+  const id = input.id || existing?.id || newId("map_");
+  const now = Date.now();
+  const graphJson = JSON.stringify(input.graph);
+  if (existing) {
+    syncQuery(`DELETE FROM repo_map_nodes WHERE map_id = $1`, [existing.id]);
+    syncQuery(`DELETE FROM repo_map_edges WHERE map_id = $1`, [existing.id]);
+  }
+  syncQuery(
+    `INSERT INTO repo_maps (
+      id, room_id, repo_key, git_sha, status, error, file_count, symbol_count,
+      edge_count, graph_json, generated_at
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+    ON CONFLICT (room_id) DO UPDATE SET
+      repo_key = excluded.repo_key,
+      git_sha = excluded.git_sha,
+      status = excluded.status,
+      error = excluded.error,
+      file_count = excluded.file_count,
+      symbol_count = excluded.symbol_count,
+      edge_count = excluded.edge_count,
+      graph_json = excluded.graph_json,
+      generated_at = excluded.generated_at,
+      id = excluded.id`,
+    [
+      id,
+      input.roomId,
+      input.repoKey,
+      input.gitSha,
+      input.status,
+      input.error ?? null,
+      input.fileCount,
+      input.symbolCount,
+      input.edgeCount,
+      graphJson,
+      now,
+    ],
+  );
+  for (const n of input.graph.nodes.slice(0, 8000)) {
+    syncQuery(
+      `INSERT INTO repo_map_nodes (
+        id, map_id, kind, path, name, symbol_type, line_start, line_end, keywords, exported
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+      ON CONFLICT (id) DO NOTHING`,
+      [
+        n.id.slice(0, 400),
+        id,
+        n.kind,
+        n.path,
+        n.name ?? null,
+        n.symbolType ?? null,
+        n.lineStart ?? null,
+        n.lineEnd ?? null,
+        (n.keywords || []).join(","),
+        n.exported ? 1 : 0,
+      ],
+    );
+  }
+  for (const e of input.graph.edges.slice(0, 12000)) {
+    syncQuery(
+      `INSERT INTO repo_map_edges (map_id, src, dst, rel) VALUES ($1,$2,$3,$4)`,
+      [id, e.from, e.to, e.rel],
+    );
+  }
+  return getRepoMap(input.roomId)!;
+}
+
+export function parseRepoMapGraph(row: RepoMapRow | undefined): RepoMapGraph {
+  if (!row?.graph_json) return { nodes: [], edges: [] };
+  try {
+    const parsed = JSON.parse(row.graph_json) as RepoMapGraph;
+    return {
+      nodes: Array.isArray(parsed.nodes) ? parsed.nodes : [],
+      edges: Array.isArray(parsed.edges) ? parsed.edges : [],
+    };
+  } catch {
+    return { nodes: [], edges: [] };
+  }
+}
+
+const MEMORY_SELECT = `
+  SELECT e.*, r.content, r.source_message_id, r.source_path
+  FROM memory_entries e
+  JOIN memory_revisions r ON r.entry_id = e.id AND r.revision = e.current_revision
+`;
+
+export function listMemoryEntries(
+  roomId: string,
+  opts?: { includeProposed?: boolean },
+): MemoryEntryRow[] {
+  const rows = syncQuery<Record<string, unknown>>(
+    `${MEMORY_SELECT} WHERE e.room_id = $1 ORDER BY e.pinned DESC, e.updated_at DESC`,
+    [roomId],
+  ).map(rowToMemoryEntry);
+  if (opts?.includeProposed) return rows;
+  return rows.filter((r) => r.status !== "proposed");
+}
+
+export function getMemoryEntry(id: string): MemoryEntryRow | undefined {
+  const rows = syncQuery<Record<string, unknown>>(
+    `${MEMORY_SELECT} WHERE e.id = $1`,
+    [id],
+  );
+  return rows[0] ? rowToMemoryEntry(rows[0]) : undefined;
+}
+
+export function createMemoryEntry(input: {
+  id?: string;
+  roomId: string;
+  kind: MemoryKind;
+  title: string;
+  content: string;
+  status?: MemoryStatus;
+  pinned?: boolean;
+  createdByUserId?: string | null;
+  createdByAgentId?: string | null;
+  sourceMessageId?: string | null;
+  sourcePath?: string | null;
+  supersedesId?: string | null;
+}): MemoryEntryRow {
+  const id = input.id || newId("mem_");
+  const now = Date.now();
+  const status: MemoryStatus = input.status || "active";
+  syncQuery(
+    `INSERT INTO memory_entries (
+      id, room_id, kind, title, status, pinned, created_by_user_id, created_by_agent_id,
+      created_at, updated_at, current_revision, supersedes_id
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+    [
+      id,
+      input.roomId,
+      input.kind,
+      input.title,
+      status,
+      input.pinned ? 1 : 0,
+      input.createdByUserId ?? null,
+      input.createdByAgentId ?? null,
+      now,
+      now,
+      1,
+      input.supersedesId ?? null,
+    ],
+  );
+  syncQuery(
+    `INSERT INTO memory_revisions (
+      entry_id, revision, content, source_message_id, source_path,
+      created_by_user_id, created_by_agent_id, created_at
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+    [
+      id,
+      1,
+      input.content,
+      input.sourceMessageId ?? null,
+      input.sourcePath ?? null,
+      input.createdByUserId ?? null,
+      input.createdByAgentId ?? null,
+      now,
+    ],
+  );
+  if (status === "active") bumpRoomMemoryVersion(input.roomId);
+  return getMemoryEntry(id)!;
+}
+
+export function updateMemoryEntry(input: {
+  id: string;
+  expectedRevision: number;
+  title?: string;
+  content?: string;
+  status?: MemoryStatus;
+  pinned?: boolean;
+  sourceMessageId?: string | null;
+  sourcePath?: string | null;
+  actorUserId?: string | null;
+  actorAgentId?: string | null;
+}): MemoryEntryRow | null {
+  const current = getMemoryEntry(input.id);
+  if (!current) return null;
+  if (current.current_revision !== input.expectedRevision) {
+    const err = new Error("Memory revision conflict");
+    (err as Error & { code?: string }).code = "revision_conflict";
+    throw err;
+  }
+  const nextRev = current.current_revision + 1;
+  const now = Date.now();
+  const rows = syncQuery<Record<string, unknown>>(
+    `UPDATE memory_entries
+     SET title = $1, status = $2, pinned = $3, updated_at = $4, current_revision = $5
+     WHERE id = $6 AND current_revision = $7
+     RETURNING id`,
+    [
+      input.title ?? current.title,
+      input.status ?? current.status,
+      input.pinned === undefined ? current.pinned : input.pinned ? 1 : 0,
+      now,
+      nextRev,
+      current.id,
+      current.current_revision,
+    ],
+  );
+  if (!rows.length) {
+    const err = new Error("Memory revision conflict");
+    (err as Error & { code?: string }).code = "revision_conflict";
+    throw err;
+  }
+  syncQuery(
+    `INSERT INTO memory_revisions (
+      entry_id, revision, content, source_message_id, source_path,
+      created_by_user_id, created_by_agent_id, created_at
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+    [
+      current.id,
+      nextRev,
+      input.content ?? current.content,
+      input.sourceMessageId ?? current.source_message_id,
+      input.sourcePath ?? current.source_path,
+      input.actorUserId ?? null,
+      input.actorAgentId ?? null,
+      now,
+    ],
+  );
+  const status = input.status ?? current.status;
+  if (status === "active" || current.status === "active") {
+    bumpRoomMemoryVersion(current.room_id);
+  }
+  return getMemoryEntry(current.id)!;
+}
+
+export function insertAgentContextReceipt(input: {
+  id?: string;
+  roomId: string;
+  agentId: string;
+  runId: string;
+  mapId?: string | null;
+  gitSha?: string | null;
+  memoryVersion: number;
+  entryIds: string[];
+  fileIds: string[];
+  isBaseline: boolean;
+}): AgentContextReceiptRow {
+  const id = input.id || newId("ctx_");
+  const now = Date.now();
+  syncQuery(
+    `INSERT INTO agent_context_receipts (
+      id, room_id, agent_id, run_id, map_id, git_sha, memory_version,
+      entry_ids_json, file_ids_json, is_baseline, created_at
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+    [
+      id,
+      input.roomId,
+      input.agentId,
+      input.runId,
+      input.mapId ?? null,
+      input.gitSha ?? null,
+      input.memoryVersion,
+      JSON.stringify(input.entryIds),
+      JSON.stringify(input.fileIds),
+      input.isBaseline ? 1 : 0,
+      now,
+    ],
+  );
+  return {
+    id,
+    room_id: input.roomId,
+    agent_id: input.agentId,
+    run_id: input.runId,
+    map_id: input.mapId ?? null,
+    git_sha: input.gitSha ?? null,
+    memory_version: input.memoryVersion,
+    entry_ids_json: JSON.stringify(input.entryIds),
+    file_ids_json: JSON.stringify(input.fileIds),
+    is_baseline: input.isBaseline ? 1 : 0,
+    created_at: now,
+  };
+}
+
+export function listAgentContextReceipts(
+  agentId: string,
+  limit = 20,
+): AgentContextReceiptRow[] {
+  return syncQuery<Record<string, unknown>>(
+    `SELECT * FROM agent_context_receipts WHERE agent_id = $1 ORDER BY created_at DESC LIMIT $2`,
+    [agentId, limit],
+  ).map(rowToReceipt);
+}
+
+export function latestContextReceiptsByAgent(
+  roomId: string,
+): AgentContextReceiptRow[] {
+  const rows = syncQuery<Record<string, unknown>>(
+    `SELECT * FROM agent_context_receipts WHERE room_id = $1 ORDER BY created_at DESC`,
+    [roomId],
+  ).map(rowToReceipt);
+  const seen = new Set<string>();
+  const out: AgentContextReceiptRow[] = [];
+  for (const row of rows) {
+    if (seen.has(row.agent_id)) continue;
+    seen.add(row.agent_id);
+    out.push(row);
+  }
+  return out;
 }
 
 export function migrateAgentsV1(): void {

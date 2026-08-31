@@ -71,6 +71,11 @@ Copy `.env.example` to `.env`:
 - **Live diffs** — File changes stream into the room (sandbox `git diff` for cloud Claude)
 - **Invites** — Host-managed invite links with max uses + expiry
 - **BYOK** — Per-user saved Cursor and Anthropic API keys
+- **Shared memory** — Room-scoped goals, decisions, constraints, discoveries, and handoffs, plus a budgeted repo map injected into every agent runtime
+
+## Design proposals
+
+- [Shared memory for multiplayer agents](docs/shared-memory-rfc.md) — design notes for the provider-neutral context and handoff layer (Phases 1–3 implemented)
 
 ## Scripts
 

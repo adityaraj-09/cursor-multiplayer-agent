@@ -17,6 +17,12 @@ import type {
   RoomMemberInfo,
   TypingUser,
 } from "../../shared/events";
+import type {
+  AgentContextReceiptInfo,
+  MemoryEntryInfo,
+  RepoMapInfo,
+  RoomContextSnapshot,
+} from "../../shared/roomContext";
 
 interface UseSocketReturn {
   socket: AppSocket | null;
@@ -69,6 +75,12 @@ interface UseSocketReturn {
   removeMember: (userId: string) => void;
   dismissDriveRequest: () => void;
   drivingAgentIds: string[];
+  roomContext: RoomContextSnapshot | null;
+  contextStale: {
+    agentId: string;
+    usedVersion: number;
+    currentVersion: number;
+  } | null;
 }
 
 function parseAgentStatus(
@@ -134,6 +146,14 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
   const [typingByAgent, setTypingByAgent] = useState<
     Record<string, TypingUser[]>
   >({});
+  const [roomContext, setRoomContext] = useState<RoomContextSnapshot | null>(
+    null,
+  );
+  const [contextStale, setContextStale] = useState<{
+    agentId: string;
+    usedVersion: number;
+    currentVersion: number;
+  } | null>(null);
   const socketRef = useRef<AppSocket | null>(null);
 
   const drivingAgentIds = useMemo(() => {
@@ -398,6 +418,54 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
         return changed ? next : prev;
       });
     };
+    const onRoomContext = (snapshot: RoomContextSnapshot) => {
+      if (!snapshot) return;
+      setRoomContext(snapshot);
+    };
+    const onMemoryUpdated = (entry: MemoryEntryInfo, memoryVersion: number) => {
+      if (!entry?.id) return;
+      setRoomContext((prev) => {
+        const entries = prev?.entries ? [...prev.entries] : [];
+        const idx = entries.findIndex((e) => e.id === entry.id);
+        if (idx >= 0) entries[idx] = entry;
+        else entries.unshift(entry);
+        return {
+          memoryVersion,
+          map: prev?.map ?? null,
+          entries,
+          lastReceiptByAgent: prev?.lastReceiptByAgent ?? {},
+        };
+      });
+    };
+    const onRepoMapUpdated = (map: RepoMapInfo) => {
+      if (!map) return;
+      setRoomContext((prev) => ({
+        memoryVersion: prev?.memoryVersion ?? 0,
+        map,
+        entries: prev?.entries ?? [],
+        lastReceiptByAgent: prev?.lastReceiptByAgent ?? {},
+      }));
+    };
+    const onContextReceipt = (receipt: AgentContextReceiptInfo) => {
+      if (!receipt?.agentId) return;
+      setRoomContext((prev) => ({
+        memoryVersion: prev?.memoryVersion ?? receipt.memoryVersion,
+        map: prev?.map ?? null,
+        entries: prev?.entries ?? [],
+        lastReceiptByAgent: {
+          ...(prev?.lastReceiptByAgent ?? {}),
+          [receipt.agentId]: receipt,
+        },
+      }));
+    };
+    const onContextStale = (payload: {
+      agentId: string;
+      usedVersion: number;
+      currentVersion: number;
+    }) => {
+      if (!payload?.agentId) return;
+      setContextStale(payload);
+    };
 
     void (async () => {
       let token: string | null = null;
@@ -449,6 +517,11 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
       s.on("kicked", onKicked);
       s.on("typing", onTyping);
       s.on("typing-stop", onTypingStop);
+      s.on("room-context", onRoomContext);
+      s.on("memory-updated", onMemoryUpdated);
+      s.on("repo-map-updated", onRepoMapUpdated);
+      s.on("context-receipt", onContextReceipt);
+      s.on("context-stale", onContextStale);
     })();
 
     return () => {
@@ -484,6 +557,11 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
         attached.off("kicked", onKicked);
         attached.off("typing", onTyping);
         attached.off("typing-stop", onTypingStop);
+        attached.off("room-context", onRoomContext);
+        attached.off("memory-updated", onMemoryUpdated);
+        attached.off("repo-map-updated", onRepoMapUpdated);
+        attached.off("context-receipt", onContextReceipt);
+        attached.off("context-stale", onContextStale);
       }
       disconnectSocket();
       socketRef.current = null;
@@ -505,6 +583,8 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
       setOpenPings([]);
       setLastBlocked(null);
       setTypingByAgent({});
+      setRoomContext(null);
+      setContextStale(null);
     };
   }, [roomId, name, isSignedIn]);
 
@@ -642,5 +722,7 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
     leaveRoom,
     removeMember,
     drivingAgentIds,
+    roomContext,
+    contextStale,
   };
 }

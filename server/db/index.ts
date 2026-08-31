@@ -13,6 +13,9 @@ export type {
   RoomPingAckRow,
   CreateRoomPingInput,
   RoomPingStatus,
+  RepoMapRow,
+  MemoryEntryRow,
+  AgentContextReceiptRow,
 } from "./sqlite.js";
 
 const url = process.env.DATABASE_URL ?? "";
@@ -148,3 +151,16 @@ export const listOpenRoomPings = backend.listOpenRoomPings;
 export const dismissRoomPing = backend.dismissRoomPing;
 export const ackRoomPing = backend.ackRoomPing;
 export const listRoomPingAcks = backend.listRoomPingAcks;
+
+export const getRoomMemoryVersion = backend.getRoomMemoryVersion;
+export const bumpRoomMemoryVersion = backend.bumpRoomMemoryVersion;
+export const getRepoMap = backend.getRepoMap;
+export const saveRepoMap = backend.saveRepoMap;
+export const parseRepoMapGraph = backend.parseRepoMapGraph;
+export const listMemoryEntries = backend.listMemoryEntries;
+export const getMemoryEntry = backend.getMemoryEntry;
+export const createMemoryEntry = backend.createMemoryEntry;
+export const updateMemoryEntry = backend.updateMemoryEntry;
+export const insertAgentContextReceipt = backend.insertAgentContextReceipt;
+export const listAgentContextReceipts = backend.listAgentContextReceipts;
+export const latestContextReceiptsByAgent = backend.latestContextReceiptsByAgent;
