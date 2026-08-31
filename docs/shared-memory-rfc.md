@@ -166,8 +166,10 @@ edits so two teammates cannot silently overwrite one another.
 
 ## Context assembly
 
-Introduce a provider-neutral `MemoryContextBuilder` between
-`handleSteerMessage` and `runAgent`.
+Introduce a provider-neutral `MemoryContextBuilder` at the start of
+`RoomManager.runAgent`, before `tryDispatchToWorker`. This is intentionally
+later than `handleSteerMessage`: approved-plan and approval-resume prompts
+bypass the normal steer handler and must receive the same memory.
 
 ```ts
 type MemoryContext = {
@@ -198,15 +200,17 @@ and platform safety rules take precedence.
 </steer_shared_memory>
 ```
 
-Append the block immediately before the existing attribution and attachment
-suffixes. The same assembled text then reaches:
+Prepend the block once to the prompt text in `runAgent`, preserving the
+existing attribution and attachment suffixes and any Cursor image payload.
+The same assembled text then reaches:
 
 - `SdkAgentSession.run` for Cursor local/cloud SDK;
 - `ClaudeSandboxSession.run` for hosted Claude;
 - `workerRelay.dispatchToWorker` for local Cursor/Claude CLI.
 
-For image-capable Cursor prompts, update only the `text` field and preserve
-the image payload.
+This single hook covers ordinary steering, plan implementation, approval
+resumption, hosted backends, and local workers without changing worker
+protocol. For image-capable Cursor prompts, update only the `text` field.
 
 Start with deterministic selection:
 
