@@ -72,6 +72,12 @@ Copy `.env.example` to `.env`:
 - **Invites** — Host-managed invite links with max uses + expiry
 - **BYOK** — Per-user saved Cursor and Anthropic API keys
 
+## Design proposals
+
+- [Shared memory for multiplayer agents](docs/shared-memory-rfc.md) — a
+  provider-neutral, permissioned context and handoff layer for Cursor and
+  Claude agents
+
 ## Scripts
 
 | Script | Description |
