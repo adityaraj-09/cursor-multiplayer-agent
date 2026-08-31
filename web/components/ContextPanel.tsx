@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Archive,
   BookOpen,
@@ -26,6 +26,15 @@ import {
   refreshRoomRepoMap,
   updateRoomMemory,
 } from "../lib/api";
+
+const COLLAPSED_KEY = "steer-memory-panel-collapsed";
+
+function readStoredCollapsed(): boolean {
+  if (typeof window === "undefined") return true;
+  const v = window.localStorage.getItem(COLLAPSED_KEY);
+  if (v === null) return true;
+  return v === "1";
+}
 
 const KINDS: { id: MemoryKind; label: string }[] = [
   { id: "goal", label: "Goal" },
@@ -59,7 +68,7 @@ export default function ContextPanel({
   mobile = false,
   onClose,
 }: ContextPanelProps) {
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(true);
   const [kind, setKind] = useState<MemoryKind>("goal");
   const [title, setTitle] = useState("");
   const [content, setContent] = useState("");
@@ -68,6 +77,19 @@ export default function ContextPanel({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState("");
   const [editContent, setEditContent] = useState("");
+
+  useEffect(() => {
+    const stored = readStoredCollapsed();
+    queueMicrotask(() => setCollapsed(stored));
+  }, []);
+
+  const toggleCollapsed = () => {
+    setCollapsed((prev) => {
+      const next = !prev;
+      window.localStorage.setItem(COLLAPSED_KEY, next ? "1" : "0");
+      return next;
+    });
+  };
 
   const entries = snapshot?.entries ?? [];
   const proposed = entries.filter((e) => e.status === "proposed");
@@ -136,7 +158,7 @@ export default function ContextPanel({
       ) : (
         <button
           type="button"
-          onClick={() => setCollapsed((v) => !v)}
+          onClick={toggleCollapsed}
           className={`flex items-center gap-2 min-w-0 flex-1 text-left hover:opacity-90 transition-opacity ${
             rail ? "flex-col flex-none w-full justify-center gap-1.5" : ""
           }`}
