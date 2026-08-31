@@ -663,7 +663,7 @@ app.post("/api/rooms/:id/pings/:pingId/ack", requireAuth, (req, res) => {
 
 /**
  * PATCH /api/rooms/:id/settings — host updates collaboration settings.
- * Body: { controlMode?: "open" | "driver" | "host", approvalMode?: "off" | "dangerous" | "all" }
+ * Body: { controlMode?, approvalMode?, autoMemory?: "off" | "extract" }
  */
 app.patch("/api/rooms/:id/settings", requireAuth, (req, res) => {
   const id = routeParam(req.params.id);
@@ -680,6 +680,13 @@ app.patch("/api/rooms/:id/settings", requireAuth, (req, res) => {
       room = roomManager.setApprovalMode(
         id,
         String(req.body.approvalMode || ""),
+        req.user!.id,
+      );
+    }
+    if (req.body?.autoMemory !== undefined) {
+      room = roomManager.setAutoMemoryMode(
+        id,
+        String(req.body.autoMemory || ""),
         req.user!.id,
       );
     }

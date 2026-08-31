@@ -33,6 +33,7 @@ const KINDS: { id: MemoryKind; label: string }[] = [
   { id: "constraint", label: "Constraint" },
   { id: "discovery", label: "Discovery" },
   { id: "handoff", label: "Handoff" },
+  { id: "feedback", label: "Feedback" },
 ];
 
 interface ContextPanelProps {
@@ -83,6 +84,7 @@ export default function ContextPanel({
       constraint: [],
       discovery: [],
       handoff: [],
+      feedback: [],
     };
     for (const e of active) byKind[e.kind]?.push(e);
     return byKind;
@@ -361,6 +363,11 @@ export default function ContextPanel({
                         <p className="text-[12px] text-[#e4e4e4] font-medium">
                           {e.pinned ? "Pinned · " : ""}
                           {e.title}
+                          {e.source === "auto" && (
+                            <span className="ml-1.5 inline-flex items-center rounded px-1 py-px text-[9px] uppercase tracking-wide bg-[#252525] text-[#8ec5ff] border border-[#2a3a4a] align-middle">
+                              Auto
+                            </span>
+                          )}
                         </p>
                         {canEdit && (
                           <div className="flex gap-1 shrink-0">
@@ -407,6 +414,7 @@ export default function ContextPanel({
                       </div>
                       <p className="text-[10px] text-[#6e6e6e] mt-0.5">
                         r{e.revision}
+                        {e.source === "auto" ? " · archive to undo" : ""}
                       </p>
                       <p className="mt-1.5 text-[12px] text-[#c8c8c8] whitespace-pre-wrap">
                         {e.content}

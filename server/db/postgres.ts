@@ -49,7 +49,8 @@ async function initSchema() {
       approval_mode TEXT NOT NULL DEFAULT 'off',
       slack_webhook_ciphertext TEXT,
       slack_webhook_hint TEXT,
-      memory_version BIGINT NOT NULL DEFAULT 0
+      memory_version BIGINT NOT NULL DEFAULT 0,
+      auto_memory TEXT NOT NULL DEFAULT 'extract'
     );
 
     CREATE TABLE IF NOT EXISTS steer_messages (
@@ -151,7 +152,8 @@ async function initSchema() {
       created_by TEXT,
       created_at BIGINT NOT NULL,
       sort_order INTEGER NOT NULL DEFAULT 0,
-      plan_mode INTEGER NOT NULL DEFAULT 0
+      plan_mode INTEGER NOT NULL DEFAULT 0,
+      auto_mem_cursor_ts BIGINT NOT NULL DEFAULT 0
     );
 
     CREATE TABLE IF NOT EXISTS agent_drivers (
@@ -302,7 +304,8 @@ async function initSchema() {
       created_at BIGINT NOT NULL,
       updated_at BIGINT NOT NULL,
       current_revision INTEGER NOT NULL DEFAULT 1,
-      supersedes_id TEXT
+      supersedes_id TEXT,
+      source TEXT NOT NULL DEFAULT 'human'
     );
     CREATE TABLE IF NOT EXISTS memory_revisions (
       entry_id TEXT NOT NULL REFERENCES memory_entries(id) ON DELETE CASCADE,
@@ -361,6 +364,9 @@ async function initSchema() {
     `ALTER TABLE messages ADD COLUMN IF NOT EXISTS plan_status TEXT`,
     `ALTER TABLE messages ADD COLUMN IF NOT EXISTS attachments_json TEXT`,
     `ALTER TABLE rooms ADD COLUMN IF NOT EXISTS memory_version BIGINT NOT NULL DEFAULT 0`,
+    `ALTER TABLE rooms ADD COLUMN IF NOT EXISTS auto_memory TEXT NOT NULL DEFAULT 'extract'`,
+    `ALTER TABLE memory_entries ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'human'`,
+    `ALTER TABLE agents ADD COLUMN IF NOT EXISTS auto_mem_cursor_ts BIGINT NOT NULL DEFAULT 0`,
   ];
 
   for (const sql of migrations) {
@@ -427,6 +433,7 @@ export interface RoomRow {
   slack_webhook_ciphertext: string | null;
   slack_webhook_hint: string | null;
   memory_version?: number;
+  auto_memory?: string;
 }
 
 export interface CreateRoomInput {
@@ -506,6 +513,7 @@ function pgRowToRoom(r: Record<string, unknown>): RoomRow {
     approval_mode: ((r.approval_mode as string) || "off"),
     slack_webhook_ciphertext: (r.slack_webhook_ciphertext as string) ?? null,
     slack_webhook_hint: (r.slack_webhook_hint as string) ?? null,
+    auto_memory: String(r.auto_memory || "extract"),
   };
 }
 
@@ -613,6 +621,7 @@ export interface AgentRow {
   created_at: number;
   sort_order: number;
   plan_mode: number;
+  auto_mem_cursor_ts?: number;
 }
 
 export interface CreateAgentInput {
@@ -690,6 +699,17 @@ export function setRoomApprovalMode(roomId: string, approvalMode: string): void 
   syncQuery(`UPDATE rooms SET approval_mode = $1 WHERE id = $2`, [
     approvalMode,
     roomId,
+  ]);
+}
+
+export function setRoomAutoMemory(roomId: string, mode: string): void {
+  syncQuery(`UPDATE rooms SET auto_memory = $1 WHERE id = $2`, [mode, roomId]);
+}
+
+export function setAgentAutoMemCursor(agentId: string, ts: number): void {
+  syncQuery(`UPDATE agents SET auto_mem_cursor_ts = $1 WHERE id = $2`, [
+    ts,
+    agentId,
   ]);
 }
 
@@ -1554,6 +1574,7 @@ function rowToAgent(r: Record<string, unknown>): AgentRow {
     created_at: num(r.created_at as string)!,
     sort_order: num(r.sort_order as string) ?? 0,
     plan_mode: num(r.plan_mode as string) ?? 0,
+    auto_mem_cursor_ts: num(r.auto_mem_cursor_ts as string | number) ?? 0,
   };
 }
 
@@ -2066,6 +2087,7 @@ export interface MemoryEntryRow {
   content: string;
   source_message_id: string | null;
   source_path: string | null;
+  source?: string;
 }
 
 export interface AgentContextReceiptRow {
@@ -2115,6 +2137,7 @@ function rowToMemoryEntry(r: Record<string, unknown>): MemoryEntryRow {
     content: String(r.content || ""),
     source_message_id: r.source_message_id == null ? null : String(r.source_message_id),
     source_path: r.source_path == null ? null : String(r.source_path),
+    source: r.source == null ? "human" : String(r.source),
   };
 }
 
@@ -2288,6 +2311,7 @@ export function createMemoryEntry(input: {
   sourceMessageId?: string | null;
   sourcePath?: string | null;
   supersedesId?: string | null;
+  source?: string;
 }): MemoryEntryRow {
   const id = input.id || newId("mem_");
   const now = Date.now();
@@ -2295,8 +2319,8 @@ export function createMemoryEntry(input: {
   syncQuery(
     `INSERT INTO memory_entries (
       id, room_id, kind, title, status, pinned, created_by_user_id, created_by_agent_id,
-      created_at, updated_at, current_revision, supersedes_id
-    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+      created_at, updated_at, current_revision, supersedes_id, source
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
     [
       id,
       input.roomId,
@@ -2310,6 +2334,7 @@ export function createMemoryEntry(input: {
       now,
       1,
       input.supersedesId ?? null,
+      input.source ?? "human",
     ],
   );
   syncQuery(

@@ -81,6 +81,7 @@ interface UseSocketReturn {
     usedVersion: number;
     currentVersion: number;
   } | null;
+  autoMemoryNotice: { agentId: string; count: number } | null;
 }
 
 function parseAgentStatus(
@@ -153,6 +154,10 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
     agentId: string;
     usedVersion: number;
     currentVersion: number;
+  } | null>(null);
+  const [autoMemoryNotice, setAutoMemoryNotice] = useState<{
+    agentId: string;
+    count: number;
   } | null>(null);
   const socketRef = useRef<AppSocket | null>(null);
 
@@ -466,6 +471,30 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
       if (!payload?.agentId) return;
       setContextStale(payload);
     };
+    const onAutoMemorySaved = (payload: {
+      agentId: string;
+      count: number;
+      entries: MemoryEntryInfo[];
+    }) => {
+      if (!payload?.count) return;
+      setAutoMemoryNotice({ agentId: payload.agentId, count: payload.count });
+      if (payload.entries?.length) {
+        setRoomContext((prev) => {
+          const entries = prev?.entries ? [...prev.entries] : [];
+          for (const entry of payload.entries) {
+            const idx = entries.findIndex((e) => e.id === entry.id);
+            if (idx >= 0) entries[idx] = entry;
+            else entries.unshift(entry);
+          }
+          return {
+            memoryVersion: prev?.memoryVersion ?? 0,
+            map: prev?.map ?? null,
+            entries,
+            lastReceiptByAgent: prev?.lastReceiptByAgent ?? {},
+          };
+        });
+      }
+    };
 
     void (async () => {
       let token: string | null = null;
@@ -522,6 +551,7 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
       s.on("repo-map-updated", onRepoMapUpdated);
       s.on("context-receipt", onContextReceipt);
       s.on("context-stale", onContextStale);
+      s.on("auto-memory-saved", onAutoMemorySaved);
     })();
 
     return () => {
@@ -562,6 +592,7 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
         attached.off("repo-map-updated", onRepoMapUpdated);
         attached.off("context-receipt", onContextReceipt);
         attached.off("context-stale", onContextStale);
+        attached.off("auto-memory-saved", onAutoMemorySaved);
       }
       disconnectSocket();
       socketRef.current = null;
@@ -585,8 +616,15 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
       setTypingByAgent({});
       setRoomContext(null);
       setContextStale(null);
+      setAutoMemoryNotice(null);
     };
   }, [roomId, name, isSignedIn]);
+
+  useEffect(() => {
+    if (!autoMemoryNotice) return;
+    const t = setTimeout(() => setAutoMemoryNotice(null), 8000);
+    return () => clearTimeout(t);
+  }, [autoMemoryNotice]);
 
   useEffect(() => {
     setMessages([]);
@@ -724,5 +762,6 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
     drivingAgentIds,
     roomContext,
     contextStale,
+    autoMemoryNotice,
   };
 }

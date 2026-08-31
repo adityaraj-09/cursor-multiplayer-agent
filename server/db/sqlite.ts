@@ -76,7 +76,8 @@ db.exec(`
     approval_mode TEXT NOT NULL DEFAULT 'off',
     slack_webhook_ciphertext TEXT,
     slack_webhook_hint TEXT,
-    memory_version INTEGER NOT NULL DEFAULT 0
+    memory_version INTEGER NOT NULL DEFAULT 0,
+    auto_memory TEXT NOT NULL DEFAULT 'extract'
   );
 
   CREATE TABLE IF NOT EXISTS steer_messages (
@@ -178,7 +179,8 @@ db.exec(`
     created_by TEXT,
     created_at INTEGER NOT NULL,
     sort_order INTEGER NOT NULL DEFAULT 0,
-    plan_mode INTEGER NOT NULL DEFAULT 0
+    plan_mode INTEGER NOT NULL DEFAULT 0,
+    auto_mem_cursor_ts INTEGER NOT NULL DEFAULT 0
   );
 
   CREATE TABLE IF NOT EXISTS agent_drivers (
@@ -296,6 +298,9 @@ const migrations = [
   `ALTER TABLE messages ADD COLUMN plan_status TEXT`,
   `ALTER TABLE messages ADD COLUMN attachments_json TEXT`,
   `ALTER TABLE rooms ADD COLUMN memory_version INTEGER NOT NULL DEFAULT 0`,
+  `ALTER TABLE rooms ADD COLUMN auto_memory TEXT NOT NULL DEFAULT 'extract'`,
+  `ALTER TABLE memory_entries ADD COLUMN source TEXT NOT NULL DEFAULT 'human'`,
+  `ALTER TABLE agents ADD COLUMN auto_mem_cursor_ts INTEGER NOT NULL DEFAULT 0`,
 ];
 
 for (const sql of migrations) {
@@ -480,7 +485,8 @@ try {
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL,
       current_revision INTEGER NOT NULL DEFAULT 1,
-      supersedes_id TEXT
+      supersedes_id TEXT,
+      source TEXT NOT NULL DEFAULT 'human'
     );
     CREATE TABLE IF NOT EXISTS memory_revisions (
       entry_id TEXT NOT NULL REFERENCES memory_entries(id) ON DELETE CASCADE,
@@ -529,6 +535,12 @@ const stmts = {
   ),
   updateApprovalMode: db.prepare(
     `UPDATE rooms SET approval_mode = ? WHERE id = ?`,
+  ),
+  updateAutoMemory: db.prepare(
+    `UPDATE rooms SET auto_memory = ? WHERE id = ?`,
+  ),
+  updateAgentAutoMemCursor: db.prepare(
+    `UPDATE agents SET auto_mem_cursor_ts = ? WHERE id = ?`,
   ),
   listRooms: db.prepare(`SELECT * FROM rooms ORDER BY last_active_at DESC`),
   getRoom: db.prepare(`SELECT * FROM rooms WHERE id = ?`),
@@ -901,8 +913,8 @@ const stmts = {
   insertMemoryEntry: db.prepare(`
     INSERT INTO memory_entries (
       id, room_id, kind, title, status, pinned, created_by_user_id, created_by_agent_id,
-      created_at, updated_at, current_revision, supersedes_id
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      created_at, updated_at, current_revision, supersedes_id, source
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `),
   insertMemoryRevision: db.prepare(`
     INSERT INTO memory_revisions (
@@ -974,6 +986,7 @@ export interface RoomRow {
   slack_webhook_ciphertext: string | null;
   slack_webhook_hint: string | null;
   memory_version?: number;
+  auto_memory?: string;
 }
 
 export interface CreateRoomInput {
@@ -1111,6 +1124,7 @@ export interface AgentRow {
   created_at: number;
   sort_order: number;
   plan_mode: number;
+  auto_mem_cursor_ts?: number;
 }
 
 export interface CreateAgentInput {
@@ -1173,6 +1187,14 @@ export function setRoomApprovalMode(roomId: string, approvalMode: string): void 
   stmts.updateApprovalMode.run(approvalMode, roomId);
 }
 
+export function setRoomAutoMemory(roomId: string, mode: string): void {
+  stmts.updateAutoMemory.run(mode, roomId);
+}
+
+export function setAgentAutoMemCursor(agentId: string, ts: number): void {
+  stmts.updateAgentAutoMemCursor.run(ts, agentId);
+}
+
 export function listRooms(): RoomRow[] {
   return stmts.listRooms.all() as RoomRow[];
 }
@@ -1182,6 +1204,7 @@ export function getRoom(id: string): RoomRow | undefined {
   if (!row) return undefined;
   if (!row.control_mode) row.control_mode = "open";
   if (!row.approval_mode) row.approval_mode = "off";
+  if (!row.auto_memory) row.auto_memory = "extract";
   if (row.slack_webhook_ciphertext === undefined) {
     row.slack_webhook_ciphertext = null;
   }
@@ -1795,6 +1818,7 @@ function rowToAgent(r: Record<string, unknown>): AgentRow {
     created_at: r.created_at as number,
     sort_order: (r.sort_order as number) ?? 0,
     plan_mode: (r.plan_mode as number) ?? 0,
+    auto_mem_cursor_ts: Number(r.auto_mem_cursor_ts ?? 0),
   };
 }
 
@@ -2159,6 +2183,7 @@ export interface MemoryEntryRow {
   content: string;
   source_message_id: string | null;
   source_path: string | null;
+  source?: string;
 }
 
 export interface AgentContextReceiptRow {
@@ -2286,6 +2311,7 @@ export function createMemoryEntry(input: {
   sourceMessageId?: string | null;
   sourcePath?: string | null;
   supersedesId?: string | null;
+  source?: string;
 }): MemoryEntryRow {
   const id = input.id || newId("mem_");
   const now = Date.now();
@@ -2303,6 +2329,7 @@ export function createMemoryEntry(input: {
     now,
     1,
     input.supersedesId ?? null,
+    input.source ?? "human",
   );
   stmts.insertMemoryRevision.run(
     id,

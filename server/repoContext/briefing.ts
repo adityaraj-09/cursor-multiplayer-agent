@@ -5,10 +5,12 @@ import {
   MEMORY_CONTENT_MAX,
   MEMORY_TITLE_MAX,
   isMemoryKind,
+  isMemorySource,
   sanitizeMemoryText,
   type HandoffDraft,
   type MemoryEntryInfo,
   type MemoryKind,
+  type MemorySource,
   type PackedContext,
   type AgentContextReceiptInfo,
   type RoomContextSnapshot,
@@ -33,6 +35,7 @@ export function toMemoryInfo(row: MemoryEntryRow): MemoryEntryInfo {
     sourceMessageId: row.source_message_id,
     sourcePath: row.source_path,
     supersedesId: row.supersedes_id,
+    source: isMemorySource(row.source) ? row.source : "human",
   };
 }
 
@@ -101,6 +104,7 @@ export function createSanitizedMemory(input: {
   createdByAgentId?: string | null;
   sourceMessageId?: string | null;
   sourcePath?: string | null;
+  source?: MemorySource;
 }): MemoryEntryInfo {
   if (!isMemoryKind(input.kind)) {
     throw new Error("Invalid memory kind");
@@ -119,6 +123,7 @@ export function createSanitizedMemory(input: {
     createdByAgentId: input.createdByAgentId,
     sourceMessageId: input.sourceMessageId,
     sourcePath: input.sourcePath,
+    source: input.source ?? "human",
   });
   return toMemoryInfo(row);
 }

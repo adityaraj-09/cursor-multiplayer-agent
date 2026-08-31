@@ -435,6 +435,7 @@ export async function updateRoomSettings(
   data: {
     controlMode?: "open" | "driver" | "host";
     approvalMode?: "off" | "dangerous" | "all";
+    autoMemory?: "off" | "extract";
   },
 ): Promise<RoomInfo> {
   const res = await fetch(`${API_BASE}/rooms/${id}/settings`, {

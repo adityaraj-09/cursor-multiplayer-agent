@@ -74,6 +74,7 @@ import {
   formatTypingIndicatorAll,
 } from "../../../../shared/typing";
 import { approvalModeLabel } from "../../../../shared/approvals";
+import { parseAutoMemoryMode, type AutoMemoryMode } from "../../../../shared/roomContext";
 import {
   canRequestDrive,
   canSteerWithRole,
@@ -287,6 +288,7 @@ function LiveRoom({
     drivingAgentIds,
     roomContext,
     contextStale,
+    autoMemoryNotice,
   } = useSocket(roomId, userName);
 
   const { user } = useAuth();
@@ -294,6 +296,7 @@ function LiveRoom({
   const modelId = liveModelId || roomInfo?.modelId || "auto";
   const controlMode: ControlMode = roomInfo?.controlMode || "open";
   const approvalMode: ApprovalMode = roomInfo?.approvalMode || "off";
+  const autoMemory: AutoMemoryMode = parseAutoMemoryMode(roomInfo?.autoMemory);
   const myRole: RoomRole =
     roomInfo?.myRole ||
     (user?.id && roomInfo?.ownerId && user.id === roomInfo.ownerId
@@ -308,6 +311,7 @@ function LiveRoom({
   const [savingModel, setSavingModel] = useState(false);
   const [savingControlMode, setSavingControlMode] = useState(false);
   const [savingApprovalMode, setSavingApprovalMode] = useState(false);
+  const [savingAutoMemory, setSavingAutoMemory] = useState(false);
   const [togglingPlanMode, setTogglingPlanMode] = useState(false);
   const [decidingApprovalId, setDecidingApprovalId] = useState<string | null>(
     null,
@@ -662,6 +666,25 @@ function LiveRoom({
       }
     },
     [canManage, approvalMode, roomId, onRoomInfo],
+  );
+
+  const handleAutoMemoryChange = useCallback(
+    async (mode: AutoMemoryMode) => {
+      if (!canManage || mode === autoMemory) return;
+      setSavingAutoMemory(true);
+      setActionError("");
+      try {
+        const updated = await updateRoomSettings(roomId, { autoMemory: mode });
+        onRoomInfo(updated);
+      } catch (err) {
+        setActionError(
+          err instanceof Error ? err.message : "Failed to update auto memory",
+        );
+      } finally {
+        setSavingAutoMemory(false);
+      }
+    },
+    [canManage, autoMemory, roomId, onRoomInfo],
   );
 
   const handleTogglePlanMode = useCallback(async () => {
@@ -1112,6 +1135,7 @@ function LiveRoom({
         myRole={myRole}
         controlMode={controlMode}
         approvalMode={approvalMode}
+        autoMemory={autoMemory}
         canManage={canManage}
         amHost={amHost}
         selectedAgent={selectedAgent}
@@ -1120,10 +1144,12 @@ function LiveRoom({
         planModeBusy={togglingPlanMode}
         savingControlMode={savingControlMode}
         savingApprovalMode={savingApprovalMode}
+        savingAutoMemory={savingAutoMemory}
         exporting={exporting}
         stopping={stopping}
         onControlModeChange={(mode) => void handleControlModeChange(mode)}
         onApprovalModeChange={(mode) => void handleApprovalModeChange(mode)}
+        onAutoMemoryChange={(mode) => void handleAutoMemoryChange(mode)}
         onTogglePlanMode={() => void handleTogglePlanMode()}
         onOpenSlack={() => {
           setSettingsOpen(false);
@@ -1271,9 +1297,13 @@ function LiveRoom({
                 : ""
           }
           contextHint={
-            contextStale &&
-            selectedAgentId &&
-            contextStale.agentId === selectedAgentId
+            autoMemoryNotice
+              ? `Saved ${autoMemoryNotice.count} auto memor${
+                  autoMemoryNotice.count === 1 ? "y" : "ies"
+                }`
+              : contextStale &&
+                selectedAgentId &&
+                contextStale.agentId === selectedAgentId
               ? `Memory stale (v${contextStale.usedVersion} → v${contextStale.currentVersion})`
               : proposedMemoryCount
                 ? `${proposedMemoryCount} memory proposal${proposedMemoryCount === 1 ? "" : "s"} to review`
