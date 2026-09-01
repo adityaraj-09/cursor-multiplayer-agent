@@ -52,6 +52,7 @@ import MemberRoster from "../../../components/MemberRoster";
 import AgentTabs from "../../../components/AgentTabs";
 import AddAgentDialog from "../../../components/AddAgentDialog";
 import ContextPanel from "../../../components/ContextPanel";
+import ToolDetailPanel from "../../../components/ToolDetailPanel";
 import LockPanel from "../../../components/LockPanel";
 import FlagForReviewDialog from "../../../components/FlagForReviewDialog";
 import ReviewPingBanner from "../../../components/ReviewPingBanner";
@@ -63,6 +64,7 @@ import type {
   ModelInfo,
   PingInfo,
   RoomInfo,
+  ChatMessage,
   RoomMemberInfo,
 } from "../../../../shared/events";
 import {
@@ -328,6 +330,9 @@ function LiveRoom({
   const [changesOpen, setChangesOpen] = useState(false);
   const [memoryOpen, setMemoryOpen] = useState(false);
   const [addAgentOpen, setAddAgentOpen] = useState(false);
+  const [selectedToolMessageId, setSelectedToolMessageId] = useState<
+    string | null
+  >(null);
   const [cursorSessionError, setCursorSessionError] = useState("");
   const [savingCursorSession, setSavingCursorSession] = useState(false);
   const [actionError, setActionError] = useState("");
@@ -368,6 +373,26 @@ function LiveRoom({
         : agentStatus);
   const selectedDiff =
     (selectedAgentId && diffByAgent[selectedAgentId]) || lastDiff;
+  const selectedToolMessage =
+    messages.find((m) => m.id === selectedToolMessageId && m.role === "tool") ||
+    null;
+  const selectedToolAgentLabel = selectedToolMessage?.agentId
+    ? agents.find((a) => a.id === selectedToolMessage.agentId)?.label
+    : selectedAgent?.label;
+  useEffect(() => {
+    if (!selectedToolMessageId) return;
+    if (!selectedToolMessage) {
+      setSelectedToolMessageId(null);
+      return;
+    }
+    if (
+      chatFilterAgentId &&
+      selectedToolMessage.agentId &&
+      selectedToolMessage.agentId !== chatFilterAgentId
+    ) {
+      setSelectedToolMessageId(null);
+    }
+  }, [chatFilterAgentId, selectedToolMessage, selectedToolMessageId]);
   const amDrivingSelected =
     Boolean(selectedAgentId && drivingAgentIds.includes(selectedAgentId)) ||
     (agents.length <= 1 && amDriver);
@@ -1050,9 +1075,18 @@ function LiveRoom({
               approvePlan(messageId, agentId)
             }
             onDismissPlan={(messageId) => dismissPlan(messageId)}
+            selectedToolMessageId={selectedToolMessageId}
+            onSelectToolMessage={(message: ChatMessage) =>
+              setSelectedToolMessageId(message.id)
+            }
           />
         </div>
 
+        <ToolDetailPanel
+          message={selectedToolMessage}
+          agentLabel={selectedToolAgentLabel}
+          onClose={() => setSelectedToolMessageId(null)}
+        />
         <SidePanel
           socket={socket}
           lastDiff={selectedDiff}
@@ -1110,6 +1144,15 @@ function LiveRoom({
           agentId={selectedAgentId}
           mobile
           onClose={() => setChangesOpen(false)}
+        />
+      )}
+
+      {selectedToolMessage && (
+        <ToolDetailPanel
+          message={selectedToolMessage}
+          agentLabel={selectedToolAgentLabel}
+          mobile
+          onClose={() => setSelectedToolMessageId(null)}
         />
       )}
 

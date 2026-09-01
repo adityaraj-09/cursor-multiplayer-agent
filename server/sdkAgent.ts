@@ -1,9 +1,13 @@
 import {
   Agent,
+  AgentBusyError,
   Cursor,
   CursorAgentError,
+  type GetRunOptions,
+  type ListRunsOptions,
   type ModelSelection,
   type Run,
+  type RunResult,
   type SDKAgent,
   type SDKMessage,
   type SDKUserMessage,
@@ -124,11 +128,50 @@ function toolPath(args: unknown): string | undefined {
   return undefined;
 }
 
+/** Stream dropped or the cloud agent is still on a previous run. */
+export function isTransientRunStreamError(err: unknown): boolean {
+  if (err instanceof AgentBusyError) return true;
+  const msg = err instanceof Error ? err.message : String(err);
+  const code =
+    err && typeof err === "object" && "code" in err
+      ? String((err as { code?: unknown }).code || "")
+      : "";
+  const blob = `${msg} ${code}`.toLowerCase();
+  return (
+    blob.includes("stream is no longer available") ||
+    blob.includes("no longer available") ||
+    blob.includes("agent_busy") ||
+    blob.includes("already has an active run") ||
+    blob.includes("rst_stream") ||
+    (blob.includes("unavailable") && blob.includes("stream"))
+  );
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function terminalResult(run: Run): RunResult | null {
+  if (run.status === "running") return null;
+  return {
+    id: run.id,
+    requestId: run.requestId,
+    status: run.status,
+    result: run.result,
+    error: run.error,
+    model: run.model,
+    durationMs: run.durationMs,
+    git: run.git,
+    usage: run.usage,
+  };
+}
+
 export class SdkAgentSession {
   private agent: SDKAgent | null = null;
   private processing = false;
   private queue: QueueItem[] = [];
   private activeRun: Run | null = null;
+  private lastRunId: string | null = null;
   /** Bumped on each abort so in-flight execute/start can detect cancellation. */
   private abortGeneration = 0;
 
@@ -271,7 +314,7 @@ export class SdkAgentSession {
   }
 
   private async execute(item: QueueItem): Promise<void> {
-    let assistantBuf = "";
+    const assistantBuf = { value: "" };
     const gen = this.abortGeneration;
 
     try {
@@ -279,11 +322,7 @@ export class SdkAgentSession {
       if (gen !== this.abortGeneration) return;
       if (!this.agent) throw new Error("Agent failed to start");
 
-      const run = await this.agent.send(item.prompt, {
-        model: this.config.model,
-        mode: this.config.mode === "plan" ? "plan" : "agent",
-      });
-
+      const run = await this.sendOrJoinActive(item, gen, assistantBuf);
       if (gen !== this.abortGeneration) {
         try {
           if (run.supports("cancel")) await run.cancel();
@@ -293,92 +332,17 @@ export class SdkAgentSession {
         return;
       }
 
+      this.lastRunId = run.id;
       this.activeRun = run;
-
-      for await (const event of run.stream()) {
-        if (gen !== this.abortGeneration) break;
-
-        if (event.type === "assistant") {
-          const chunk = extractAssistantText(event);
-          if (!chunk) continue;
-          if (!assistantBuf || chunk.startsWith(assistantBuf)) {
-            assistantBuf = chunk;
-          } else if (!assistantBuf.startsWith(chunk)) {
-            assistantBuf += chunk;
-          }
-          item.onEvent({ kind: "assistant_delta", text: assistantBuf });
-          continue;
-        }
-
-        if (event.type === "tool_call") {
-          const args =
-            event.args && typeof event.args === "object"
-              ? (event.args as Record<string, unknown>)
-              : undefined;
-          const result =
-            "result" in event ? (event as { result?: unknown }).result : undefined;
-          const startDetail = toolDetail(event.name, event.args);
-          const resultPayload = unwrapToolResultPayload(result);
-          const pathFromResult =
-            resultPayload && typeof resultPayload.path === "string"
-              ? resultPayload.path.trim()
-              : undefined;
-          const path = toolPath(event.args) || pathFromResult || undefined;
-          const todos = args ? todosFromToolArgs(args) : [];
-          const toolName =
-            todos.length > 0 && !isTodoTool(event.name) ? "todo" : event.name;
-          if (event.status === "running") {
-            item.onEvent({
-              kind: "tool_start",
-              callId: event.call_id,
-              name: toolName,
-              detail: startDetail,
-              path,
-              todos: todos.length ? todos : undefined,
-            });
-          } else {
-            const detail = formatToolResultDetail(
-              event.name,
-              args,
-              result,
-              startDetail ||
-                (event.status === "error" ? "error" : path || "done"),
-            );
-            const diffPatch = !todos.length
-              ? diffFromToolEvent(event.name, args, result)
-              : undefined;
-            item.onEvent({
-              kind: "tool_done",
-              callId: event.call_id,
-              name: toolName,
-              detail,
-              path,
-              diffPatch: diffPatch || undefined,
-              todos: todos.length ? todos : undefined,
-            });
-          }
-        }
-      }
-
+      await this.consumeStream(run, item, gen, assistantBuf);
       if (gen !== this.abortGeneration) return;
 
-      const result = await run.wait();
+      const result = await this.waitForRun(run);
       if (gen !== this.abortGeneration || result.status === "cancelled") {
         return;
       }
 
-      if (result.status === "error") {
-        const msg =
-          result.error?.message || result.result || "Agent run failed";
-        item.onEvent({ kind: "error", message: msg });
-        return;
-      }
-
-      item.onEvent({
-        kind: "done",
-        result: result.result || assistantBuf,
-        git: result.git,
-      });
+      this.emitRunOutcome(item, result, assistantBuf);
     } catch (err) {
       if (gen !== this.abortGeneration) return;
       const message =
@@ -388,16 +352,252 @@ export class SdkAgentSession {
             ? err.message
             : String(err);
       item.onEvent({ kind: "error", message });
+      // Dropped streams / leftover cloud runs are recoverable on the next
+      // send via getRun/listRuns. Don't reject the queue item or Steer will
+      // go idle while Cursor is still running, then the next prompt hits
+      // [agent_busy] with nothing in chat.
+      if (isTransientRunStreamError(err)) return;
       throw err instanceof Error ? err : new Error(message);
     } finally {
-      if (this.activeRun) this.activeRun = null;
+      this.activeRun = null;
     }
+  }
+
+  private sendOptions(): { model: ModelSelection; mode: "agent" | "plan" } {
+    return {
+      model: this.config.model,
+      mode: this.config.mode === "plan" ? "plan" : "agent",
+    };
+  }
+
+  /** Start a new run, or finish a leftover cloud run first if the agent is busy. */
+  private async sendOrJoinActive(
+    item: QueueItem,
+    gen: number,
+    assistantBuf: { value: string },
+  ): Promise<Run> {
+    let lastErr: unknown;
+    for (let attempt = 0; attempt < 4; attempt++) {
+      try {
+        return await this.agent!.send(item.prompt, this.sendOptions());
+      } catch (err) {
+        lastErr = err;
+        if (!isTransientRunStreamError(err)) throw err;
+        const active = await this.lookupActiveRun();
+        if (active) {
+          const recovered = await this.followRun(
+            active,
+            item,
+            gen,
+            assistantBuf,
+          );
+          if (gen !== this.abortGeneration) throw err;
+          this.emitRunOutcome(item, recovered, assistantBuf);
+          assistantBuf.value = "";
+          continue;
+        }
+        await sleep(250 * (attempt + 1));
+      }
+    }
+    throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+  }
+
+  private async followRun(
+    run: Run,
+    item: QueueItem,
+    gen: number,
+    assistantBuf: { value: string },
+  ): Promise<RunResult | null> {
+    this.lastRunId = run.id;
+    this.activeRun = run;
+    await this.consumeStream(run, item, gen, assistantBuf);
+    if (gen !== this.abortGeneration) return null;
+    return this.waitForRun(run);
+  }
+
+  private async consumeStream(
+    run: Run,
+    item: QueueItem,
+    gen: number,
+    assistantBuf: { value: string },
+  ): Promise<void> {
+    let current = run;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        for await (const event of current.stream()) {
+          if (gen !== this.abortGeneration) return;
+          this.dispatchStreamEvent(event, item, assistantBuf);
+        }
+        return;
+      } catch (err) {
+        if (gen !== this.abortGeneration) return;
+        if (!isTransientRunStreamError(err)) throw err;
+        // Live Send stream dropped — the run itself may still be in progress
+        // (or already finished). Reattach via getRun; wait() collects the
+        // terminal result even when stream() cannot.
+        if (attempt === 2) return;
+        const again = await this.refetchRun(current.id);
+        if (!again || again.status !== "running") return;
+        current = again;
+        this.activeRun = current;
+        this.lastRunId = current.id;
+      }
+    }
+  }
+
+  private dispatchStreamEvent(
+    event: SDKMessage,
+    item: QueueItem,
+    assistantBuf: { value: string },
+  ): void {
+    if (event.type === "assistant") {
+      const chunk = extractAssistantText(event);
+      if (!chunk) return;
+      if (!assistantBuf.value || chunk.startsWith(assistantBuf.value)) {
+        assistantBuf.value = chunk;
+      } else if (!assistantBuf.value.startsWith(chunk)) {
+        assistantBuf.value += chunk;
+      }
+      item.onEvent({ kind: "assistant_delta", text: assistantBuf.value });
+      return;
+    }
+
+    if (event.type !== "tool_call") return;
+    const args =
+      event.args && typeof event.args === "object"
+        ? (event.args as Record<string, unknown>)
+        : undefined;
+    const result =
+      "result" in event ? (event as { result?: unknown }).result : undefined;
+    const startDetail = toolDetail(event.name, event.args);
+    const resultPayload = unwrapToolResultPayload(result);
+    const pathFromResult =
+      resultPayload && typeof resultPayload.path === "string"
+        ? resultPayload.path.trim()
+        : undefined;
+    const path = toolPath(event.args) || pathFromResult || undefined;
+    const todos = args ? todosFromToolArgs(args) : [];
+    const toolName =
+      todos.length > 0 && !isTodoTool(event.name) ? "todo" : event.name;
+    if (event.status === "running") {
+      item.onEvent({
+        kind: "tool_start",
+        callId: event.call_id,
+        name: toolName,
+        detail: startDetail,
+        path,
+        todos: todos.length ? todos : undefined,
+      });
+    } else {
+      const detail = formatToolResultDetail(
+        event.name,
+        args,
+        result,
+        startDetail || (event.status === "error" ? "error" : path || "done"),
+      );
+      const diffPatch = !todos.length
+        ? diffFromToolEvent(event.name, args, result)
+        : undefined;
+      item.onEvent({
+        kind: "tool_done",
+        callId: event.call_id,
+        name: toolName,
+        detail,
+        path,
+        diffPatch: diffPatch || undefined,
+        todos: todos.length ? todos : undefined,
+      });
+    }
+  }
+
+  private emitRunOutcome(
+    item: QueueItem,
+    result: RunResult | null,
+    assistantBuf: { value: string },
+  ): void {
+    if (!result || result.status === "cancelled") return;
+    if (result.status === "error") {
+      item.onEvent({
+        kind: "error",
+        message: result.error?.message || result.result || "Agent run failed",
+      });
+      return;
+    }
+    item.onEvent({
+      kind: "done",
+      result: result.result || assistantBuf.value,
+      git: result.git,
+    });
+  }
+
+  private async waitForRun(run: Run): Promise<RunResult> {
+    let current = run;
+    let lastErr: unknown;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const done = terminalResult(current);
+      if (done) return done;
+      try {
+        return await current.wait();
+      } catch (err) {
+        lastErr = err;
+        if (!isTransientRunStreamError(err)) throw err;
+        const again = await this.refetchRun(current.id);
+        if (again) {
+          current = again;
+          this.activeRun = current;
+          this.lastRunId = current.id;
+          continue;
+        }
+        await sleep(300 * (attempt + 1));
+      }
+    }
+    throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+  }
+
+  private async refetchRun(runId: string): Promise<Run | null> {
+    const agentId = this.getAgentId();
+    if (!agentId || !runId) return null;
+    try {
+      return await Agent.getRun(runId, this.getRunOptions(agentId));
+    } catch {
+      return null;
+    }
+  }
+
+  private async lookupActiveRun(): Promise<Run | null> {
+    if (this.lastRunId) {
+      const cached = await this.refetchRun(this.lastRunId);
+      if (cached && cached.status === "running") return cached;
+    }
+    const agentId = this.getAgentId();
+    if (!agentId) return null;
+    try {
+      const listed = await Agent.listRuns(agentId, this.listRunsOptions());
+      return listed.items.find((r) => r.status === "running") ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  private getRunOptions(agentId: string): GetRunOptions {
+    if (this.config.runtime === "cloud") {
+      return { runtime: "cloud", agentId, apiKey: this.config.apiKey };
+    }
+    return { runtime: "local", cwd: this.config.localCwd };
+  }
+
+  private listRunsOptions(): ListRunsOptions {
+    if (this.config.runtime === "cloud") {
+      return { runtime: "cloud", apiKey: this.config.apiKey };
+    }
+    return { runtime: "local", cwd: this.config.localCwd };
   }
 
   async dispose(): Promise<void> {
     this.abortGeneration += 1;
     this.queue = [];
     this.activeRun = null;
+    this.lastRunId = null;
     if (!this.agent) return;
     try {
       await this.agent[Symbol.asyncDispose]();
