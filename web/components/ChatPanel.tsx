@@ -342,8 +342,7 @@ function ToolCallGroup({
           </span>
         )}
         <span className="text-[12px] text-[#a0a0a0] truncate min-w-0 flex-1">
-          {messages.length} tool call{messages.length === 1 ? "" : "s"} across{" "}
-          {groups.length} type{groups.length === 1 ? "" : "s"}
+          {messages.length} tool call{messages.length === 1 ? "" : "s"}
         </span>
         {editCount > 0 && (
           <span className="inline-flex items-center gap-1 text-[10px] shrink-0 rounded-full border border-[#26405d] bg-[#17202a] px-2 py-0.5 text-[#4d9fff]">
@@ -443,7 +442,6 @@ function ToolTypeSection({
             {description}
           </div>
         </div>
-        <StatusDots messages={messages} />
         <span
           className={`inline-flex items-center gap-1 text-[10px] shrink-0 rounded-full border px-2 py-0.5 ${
             anyStreaming
@@ -545,30 +543,6 @@ function ToolCategoryIcon({ category }: { category: ToolCategoryKey }) {
     default:
       return <Wrench className="h-3.5 w-3.5" strokeWidth={1.75} />;
   }
-}
-
-function StatusDots({ messages }: { messages: ChatMessage[] }) {
-  return (
-    <span className="hidden sm:flex items-center gap-1.5 shrink-0" aria-hidden>
-      {messages.slice(0, 8).map((msg) => (
-        <span
-          key={msg.id}
-          className={`h-2 w-2 rounded-full ${
-            msg.status === "streaming"
-              ? "bg-[#4d9fff]"
-              : msg.status === "error"
-                ? "bg-[#f07070]"
-                : "bg-[#3ecf8e]"
-          }`}
-        />
-      ))}
-      {messages.length > 8 && (
-        <span className="text-[10px] text-[#6e6e6e]">
-          +{messages.length - 8}
-        </span>
-      )}
-    </span>
-  );
 }
 
 function ToolStatusText({ status }: { status: ChatMessage["status"] }) {

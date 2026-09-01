@@ -32,17 +32,18 @@ export function normalizeToolName(name?: string): string {
 
 export function toolCategoryFor(message: ChatMessage): ToolCategoryKey {
   const name = normalizeToolName(message.toolName).toLowerCase();
+  const compact = name.replace(/[\s_-]/g, "");
   if (isTodoTool(name) || message.todos?.length) return "todo";
   if (isEditTool(name) || Boolean(message.diffPatch)) return "edit";
   if (
-    /^(grep|glob|search|semsearch|find|list|ls|rg|websearch|webfetch)$/i.test(
-      name,
+    /^(grep|grepsearch|glob|globsearch|search|semsearch|find|list|ls|rg|websearch|webfetch)$/.test(
+      compact,
     )
   ) {
     return "search";
   }
-  if (/^(read|readfile|cat|open|fetch|readlints)$/i.test(name)) return "read";
-  if (/^(shell|terminal|bash|command|exec|run)$/i.test(name)) {
+  if (/^(read|readfile|cat|open|fetch|readlints)$/.test(compact)) return "read";
+  if (/^(shell|terminal|bash|command|exec|run)$/.test(compact)) {
     return "terminal";
   }
   return "other";
