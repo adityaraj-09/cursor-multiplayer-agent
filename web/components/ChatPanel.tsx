@@ -9,7 +9,9 @@ import {
   GitCompare,
   ListChecks,
   LoaderCircle,
+  Search,
   Sparkles,
+  SquareTerminal,
   User,
   Wrench,
 } from "lucide-react";
@@ -20,8 +22,15 @@ import type {
 } from "../../shared/events";
 import { fetchRoomUploadBlob } from "../lib/api";
 import Markdown from "./Markdown";
-import InlineDiff, { countDiffLines } from "./InlineDiff";
+import { countDiffLines } from "./InlineDiff";
 import TodoCard, { coalesceTodoMessages, messageHasTodos } from "./TodoCard";
+import {
+  groupToolMessages,
+  normalizeToolName,
+  resolveToolPath,
+  toolCallTitle,
+  type ToolCategoryKey,
+} from "../lib/toolMessages";
 
 interface ChatPanelProps {
   messages: ChatMessage[];
@@ -33,6 +42,8 @@ interface ChatPanelProps {
   canApprovePlan?: boolean;
   onApprovePlan?: (messageId: string, agentId?: string) => void;
   onDismissPlan?: (messageId: string) => void;
+  selectedToolMessageId?: string | null;
+  onSelectToolMessage?: (message: ChatMessage) => void;
 }
 
 type ChatItem =
@@ -85,6 +96,8 @@ export default function ChatPanel({
   canApprovePlan = false,
   onApprovePlan,
   onDismissPlan,
+  selectedToolMessageId = null,
+  onSelectToolMessage,
 }: ChatPanelProps) {
   const scrollerRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
@@ -257,22 +270,13 @@ export default function ChatPanel({
               );
             }
             if (item.type === "tools") {
-              const onlyEdit =
-                item.messages.length === 1 && Boolean(item.messages[0].diffPatch);
-              if (onlyEdit) {
-                return (
-                  <EditToolCard
-                    key={item.key}
-                    message={item.messages[0]}
-                    agentLabel={agentLabel(item.messages[0]?.agentId)}
-                  />
-                );
-              }
               return (
                 <ToolCallGroup
                   key={item.key}
                   messages={item.messages}
                   agentLabel={agentLabel(item.messages[0]?.agentId)}
+                  selectedToolMessageId={selectedToolMessageId}
+                  onSelectToolMessage={onSelectToolMessage}
                 />
               );
             }
@@ -304,20 +308,19 @@ export default function ChatPanel({
 function ToolCallGroup({
   messages,
   agentLabel,
+  selectedToolMessageId,
+  onSelectToolMessage,
 }: {
   messages: ChatMessage[];
   agentLabel?: string;
+  selectedToolMessageId?: string | null;
+  onSelectToolMessage?: (message: ChatMessage) => void;
 }) {
   const anyStreaming = messages.some((m) => m.status === "streaming");
-  // Always collapsed by default — including groups that contain edits.
   const [open, setOpen] = useState(false);
-
+  const groups = groupToolMessages(messages);
   const doneCount = messages.filter((m) => m.status === "done").length;
-  const editCount = messages.filter((m) => Boolean(m.diffPatch)).length;
-  const label =
-    messages.length === 1
-      ? messages[0].toolName || "tool"
-      : `${messages.length} tool calls`;
+  const editCount = groups.find((g) => g.key === "edit")?.messages.length ?? 0;
 
   return (
     <div className="rounded-xl border border-[#2b2b2b] bg-[#181818] overflow-hidden shadow-[0_14px_34px_rgba(0,0,0,0.16)]">
@@ -339,7 +342,8 @@ function ToolCallGroup({
           </span>
         )}
         <span className="text-[12px] text-[#a0a0a0] truncate min-w-0 flex-1">
-          {label}
+          {messages.length} tool call{messages.length === 1 ? "" : "s"} across{" "}
+          {groups.length} type{groups.length === 1 ? "" : "s"}
         </span>
         {editCount > 0 && (
           <span className="inline-flex items-center gap-1 text-[10px] shrink-0 rounded-full border border-[#26405d] bg-[#17202a] px-2 py-0.5 text-[#4d9fff]">
@@ -364,27 +368,20 @@ function ToolCallGroup({
       </button>
       {open && (
         <div className="border-t border-[#2b2b2b] divide-y divide-[#2b2b2b]">
-          {messages.map((msg) => (
-            <ToolCallRow key={msg.id} message={msg} />
+          {groups.map((group) => (
+            <ToolTypeSection
+              key={group.key}
+              groupKey={group.key}
+              label={group.label}
+              description={group.description}
+              messages={group.messages}
+              selectedToolMessageId={selectedToolMessageId}
+              onSelectToolMessage={onSelectToolMessage}
+            />
           ))}
         </div>
       )}
     </div>
-  );
-}
-
-function fileLabelFromMessage(message: ChatMessage): string {
-  const fromContent = message.content?.trim();
-  if (fromContent && !fromContent.includes("\n")) {
-    const parts = fromContent.split(/[/\\]/);
-    return parts[parts.length - 1] || fromContent;
-  }
-  const patch = message.diffPatch || "";
-  return (
-    patch.match(/^diff --git a\/(.+?) b\//m)?.[1]?.split(/[/\\]/).pop() ||
-    patch.match(/^\+\+\+ b\/(.+)$/m)?.[1]?.split(/[/\\]/).pop() ||
-    fromContent ||
-    "file"
   );
 }
 
@@ -403,103 +400,174 @@ function DiffStats({ patch }: { patch: string }) {
   );
 }
 
-function EditToolCard({
-  message,
-  agentLabel,
+function ToolTypeSection({
+  groupKey,
+  label,
+  description,
+  messages,
+  selectedToolMessageId,
+  onSelectToolMessage,
 }: {
-  message: ChatMessage;
-  agentLabel?: string;
+  groupKey: ToolCategoryKey;
+  label: string;
+  description: string;
+  messages: ChatMessage[];
+  selectedToolMessageId?: string | null;
+  onSelectToolMessage?: (message: ChatMessage) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const file = fileLabelFromMessage(message);
-
-  return (
-    <div className="rounded-xl border border-[#2b2b2b] bg-[#181818] overflow-hidden shadow-[0_14px_34px_rgba(0,0,0,0.16)]">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="w-full flex items-center gap-2.5 px-3.5 h-10 text-left hover:bg-[#1f1f1f] transition-colors"
-      >
-        <Chevron open={open} />
-        <span className="flex h-6 w-6 items-center justify-center rounded-md bg-[#17202a] text-[#4d9fff]">
-          <GitCompare className="h-3.5 w-3.5" strokeWidth={1.75} />
-        </span>
-        <span className="text-[12px] text-[#d0d0d0] font-medium shrink-0">
-          {message.toolName || "edit"}
-        </span>
-        <span className="text-[12px] text-[#a0a0a0] font-mono truncate min-w-0 flex-1">
-          {file}
-        </span>
-        {agentLabel && (
-          <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-[#252525] text-[#a0a0a0]">
-            {agentLabel}
-          </span>
-        )}
-        {message.diffPatch && <DiffStats patch={message.diffPatch} />}
-        <ToolStatusText status={message.status} />
-      </button>
-      {open && message.diffPatch && (
-        <div className="border-t border-[#2b2b2b]">
-          <InlineDiff patch={message.diffPatch} alwaysOpen hideHeader />
-        </div>
-      )}
-    </div>
-  );
-}
-
-function ToolCallRow({ message }: { message: ChatMessage }) {
-  const hasDiff = Boolean(message.diffPatch);
-  const [open, setOpen] = useState(false);
-  const file = hasDiff ? fileLabelFromMessage(message) : "";
+  const anyStreaming = messages.some((m) => m.status === "streaming");
+  const doneCount = messages.filter((m) => m.status === "done").length;
 
   return (
     <div className="bg-[#151515]">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-left hover:bg-[#1a1a1a] transition-colors"
+        className="w-full flex items-center gap-2.5 px-3.5 py-3 text-left hover:bg-[#1a1a1a] transition-colors"
       >
         <Chevron open={open} />
+        <span className="flex h-7 w-7 items-center justify-center rounded-md bg-[#252525] text-[#a0a0a0]">
+          <ToolCategoryIcon category={groupKey} />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span className="text-[13px] text-[#e4e4e4] font-medium">
+              {label}
+            </span>
+            <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-[#252525] text-[#a0a0a0]">
+              {messages.length} call{messages.length === 1 ? "" : "s"}
+            </span>
+          </div>
+          <div className="mt-0.5 text-[11px] text-[#7d7d7d] truncate">
+            {description}
+          </div>
+        </div>
+        <StatusDots messages={messages} />
+        <span
+          className={`inline-flex items-center gap-1 text-[10px] shrink-0 rounded-full border px-2 py-0.5 ${
+            anyStreaming
+              ? "border-[#26405d] bg-[#17202a] text-[#4d9fff]"
+              : "border-[#234337] bg-[#17251f] text-[#3ecf8e]"
+          }`}
+        >
+          {anyStreaming ? (
+            <LoaderCircle className="h-3 w-3 animate-spin" strokeWidth={1.8} />
+          ) : (
+            <CheckCircle2 className="h-3 w-3" strokeWidth={1.8} />
+          )}
+          {anyStreaming ? "running" : `${doneCount}/${messages.length}`}
+        </span>
+      </button>
+      {open && (
+        <div className="border-t border-[#2b2b2b] bg-[#121212] p-2 space-y-1.5">
+          {messages.map((msg) => (
+            <ToolCallRow
+              key={msg.id}
+              message={msg}
+              selected={selectedToolMessageId === msg.id}
+              onSelect={onSelectToolMessage}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ToolCallRow({
+  message,
+  selected,
+  onSelect,
+}: {
+  message: ChatMessage;
+  selected?: boolean;
+  onSelect?: (message: ChatMessage) => void;
+}) {
+  const hasDiff = Boolean(message.diffPatch);
+  const path = resolveToolPath(message);
+  const title = toolCallTitle(message);
+  const tool = normalizeToolName(message.toolName);
+
+  return (
+    <button
+      type="button"
+      onClick={() => onSelect?.(message)}
+      className={`w-full rounded-lg border px-3 py-2 text-left transition-colors ${
+        selected
+          ? "border-[#26405d] bg-[#17202a]/80"
+          : "border-[#242424] bg-[#171717] hover:bg-[#1d1d1d]"
+      }`}
+      aria-pressed={selected}
+    >
+      <div className="flex items-center gap-2.5">
         {hasDiff ? (
-          <span className="flex h-6 w-6 items-center justify-center rounded-md bg-[#17202a] text-[#4d9fff]">
+          <span className="flex h-6 w-6 items-center justify-center rounded-md bg-[#17202a] text-[#4d9fff] shrink-0">
             <GitCompare className="h-3.5 w-3.5" strokeWidth={1.75} />
           </span>
         ) : (
           <ToolStatusIcon status={message.status} />
         )}
-        <div className="min-w-0 flex-1 flex items-center gap-2">
-          <span className="text-[12px] text-[#d0d0d0] font-medium shrink-0">
-            {message.toolName || "tool"}
-          </span>
-          {hasDiff ? (
-            <span className="text-[11px] text-[#8a8a8a] font-mono truncate">
-              {file}
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="text-[12px] text-[#d0d0d0] font-medium truncate">
+              {title}
             </span>
-          ) : (
-            message.content && (
-              <span className="text-[11px] text-[#6e6e6e] font-mono truncate">
-                {message.content}
+            {tool !== title && (
+              <span className="text-[10px] text-[#6e6e6e] shrink-0">
+                {tool}
               </span>
-            )
+            )}
+          </div>
+          {(path || message.content) && (
+            <div className="mt-0.5 text-[11px] text-[#7d7d7d] font-mono truncate">
+              {path || message.content}
+            </div>
           )}
         </div>
         {hasDiff && message.diffPatch && <DiffStats patch={message.diffPatch} />}
         <ToolStatusText status={message.status} />
-      </button>
-      {open && (
-        <div className="px-3.5 pb-3">
-          {hasDiff && message.diffPatch ? (
-            <InlineDiff patch={message.diffPatch} alwaysOpen hideHeader />
-          ) : (
-            message.content && (
-              <p className="text-[12px] text-[#8a8a8a] font-mono break-all whitespace-pre-wrap">
-                {message.content}
-              </p>
-            )
-          )}
-        </div>
+      </div>
+    </button>
+  );
+}
+
+function ToolCategoryIcon({ category }: { category: ToolCategoryKey }) {
+  switch (category) {
+    case "search":
+      return <Search className="h-3.5 w-3.5" strokeWidth={1.75} />;
+    case "read":
+      return <FileText className="h-3.5 w-3.5" strokeWidth={1.75} />;
+    case "terminal":
+      return <SquareTerminal className="h-3.5 w-3.5" strokeWidth={1.75} />;
+    case "edit":
+      return <GitCompare className="h-3.5 w-3.5" strokeWidth={1.75} />;
+    default:
+      return <Wrench className="h-3.5 w-3.5" strokeWidth={1.75} />;
+  }
+}
+
+function StatusDots({ messages }: { messages: ChatMessage[] }) {
+  return (
+    <span className="hidden sm:flex items-center gap-1.5 shrink-0" aria-hidden>
+      {messages.slice(0, 8).map((msg) => (
+        <span
+          key={msg.id}
+          className={`h-2 w-2 rounded-full ${
+            msg.status === "streaming"
+              ? "bg-[#4d9fff]"
+              : msg.status === "error"
+                ? "bg-[#f07070]"
+                : "bg-[#3ecf8e]"
+          }`}
+        />
+      ))}
+      {messages.length > 8 && (
+        <span className="text-[10px] text-[#6e6e6e]">
+          +{messages.length - 8}
+        </span>
       )}
-    </div>
+    </span>
   );
 }
 
