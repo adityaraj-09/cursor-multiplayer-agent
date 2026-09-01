@@ -4,12 +4,7 @@ import { useMemo } from "react";
 import {
   AlertTriangle,
   CheckCircle2,
-  FileText,
-  GitCompare,
   LoaderCircle,
-  Search,
-  SquareTerminal,
-  Wrench,
   X,
 } from "lucide-react";
 import type { ChatMessage } from "../../shared/events";
@@ -17,26 +12,19 @@ import InlineDiff, { countDiffLines } from "./InlineDiff";
 import {
   normalizeToolName,
   resolveToolPath,
-  toolCallTitle,
-  toolCategoryFor,
-  toolCategoryMeta,
 } from "../lib/toolMessages";
 
 interface ToolDetailPanelProps {
   message: ChatMessage | null;
-  agentLabel?: string;
   mobile?: boolean;
   onClose: () => void;
 }
 
 export default function ToolDetailPanel({
   message,
-  agentLabel,
   mobile = false,
   onClose,
 }: ToolDetailPanelProps) {
-  const category = message ? toolCategoryFor(message) : "other";
-  const meta = toolCategoryMeta(category);
   const path = message ? resolveToolPath(message) : null;
   const stats = useMemo(
     () => (message?.diffPatch ? countDiffLines(message.diffPatch) : null),
@@ -45,69 +33,47 @@ export default function ToolDetailPanel({
 
   if (!message) return null;
 
-  const title = toolCallTitle(message);
+  const toolName = normalizeToolName(message.toolName);
   const body = (
     <>
-      <div className="relative flex items-center gap-2 px-3 h-11 border-b border-[#2b2b2b] bg-[#171717] shrink-0">
-        {mobile && (
-          <div className="w-8 h-1 rounded-full bg-[#3c3c3c] absolute left-1/2 -translate-x-1/2 top-2" />
-        )}
-        <span className="flex h-6 w-6 items-center justify-center rounded-md bg-[#252525] text-[#a0a0a0] shrink-0">
-          <PanelIcon category={category} />
-        </span>
-        <div className="min-w-0 flex-1">
-          <div className="text-[12px] font-medium text-[#e4e4e4] truncate">
-            Tool details
-          </div>
-          <div className="text-[10px] text-[#6e6e6e] truncate">
-            {meta.label} / {normalizeToolName(message.toolName)}
-          </div>
-        </div>
-        <button
-          type="button"
-          onClick={onClose}
-          className="inline-flex h-7 items-center gap-1.5 px-2.5 rounded-lg text-[12px] text-[#a0a0a0] hover:text-[#e4e4e4] border border-[#2b2b2b] shrink-0"
-        >
-          <X className="h-3.5 w-3.5" strokeWidth={1.75} />
-          Close
-        </button>
-      </div>
-
+      {mobile && (
+        <div className="w-8 h-1 rounded-full bg-[#3c3c3c] mx-auto mt-2 shrink-0" />
+      )}
       <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-3">
         <div className="rounded-xl border border-[#2b2b2b] bg-[#181818] p-3">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <div className="flex items-center gap-2 flex-wrap">
-                <span className="text-[13px] font-medium text-[#e4e4e4] truncate">
-                  {title}
+                <span className="text-[15px] font-semibold text-[#e4e4e4] truncate">
+                  {toolName}
                 </span>
                 <StatusBadge status={message.status} />
               </div>
-              <p className="mt-1 text-[12px] leading-relaxed text-[#8a8a8a]">
-                {meta.description}
-              </p>
+              {path && (
+                <p className="mt-2 text-[12px] leading-relaxed text-[#c8c8c8] font-mono break-all">
+                  {path}
+                </p>
+              )}
             </div>
             <span className="text-[10px] text-[#555] font-mono shrink-0">
               {formatTime(message.ts)}
             </span>
+            <button
+              type="button"
+              onClick={onClose}
+              className="inline-flex h-7 items-center gap-1.5 px-2.5 rounded-lg text-[12px] text-[#a0a0a0] hover:text-[#e4e4e4] border border-[#2b2b2b] shrink-0"
+            >
+              <X className="h-3.5 w-3.5" strokeWidth={1.75} />
+              Close
+            </button>
           </div>
-          <div className="mt-3 grid gap-2">
-            <MetaRow label="Tool" value={normalizeToolName(message.toolName)} mono />
-            {agentLabel && <MetaRow label="Agent" value={agentLabel} />}
-            {path && <MetaRow label="File path" value={path} mono />}
-            {stats && (
-              <div className="flex items-center gap-2">
-                <div className="text-[11px] text-[#6e6e6e] w-20 shrink-0">
-                  Diff
-                </div>
-                <div className="text-[12px]">
-                  <span className="text-[#3ecf8e]">+{stats.added}</span>
-                  <span className="mx-1.5 text-[#555]">/</span>
-                  <span className="text-[#f07070]">-{stats.removed}</span>
-                </div>
-              </div>
-            )}
-          </div>
+          {stats && (
+            <div className="mt-3 inline-flex items-center gap-2 rounded-lg border border-[#2b2b2b] bg-[#141414] px-2.5 py-1 text-[12px]">
+              <span className="text-[#6e6e6e]">Diff</span>
+              <span className="text-[#3ecf8e]">+{stats.added}</span>
+              <span className="text-[#f07070]">-{stats.removed}</span>
+            </div>
+          )}
         </div>
 
         {message.content && (
@@ -128,6 +94,11 @@ export default function ToolDetailPanel({
             </div>
             <InlineDiff patch={message.diffPatch} alwaysOpen hideHeader />
           </section>
+        )}
+        {!message.content && !message.diffPatch && (
+          <div className="rounded-xl border border-[#2b2b2b] bg-[#181818] p-3 text-[12px] text-[#7d7d7d]">
+            No additional details for this tool call.
+          </div>
         )}
       </div>
     </>
@@ -156,21 +127,6 @@ export default function ToolDetailPanel({
   );
 }
 
-function PanelIcon({ category }: { category: string }) {
-  switch (category) {
-    case "search":
-      return <Search className="h-3.5 w-3.5" strokeWidth={1.75} />;
-    case "read":
-      return <FileText className="h-3.5 w-3.5" strokeWidth={1.75} />;
-    case "terminal":
-      return <SquareTerminal className="h-3.5 w-3.5" strokeWidth={1.75} />;
-    case "edit":
-      return <GitCompare className="h-3.5 w-3.5" strokeWidth={1.75} />;
-    default:
-      return <Wrench className="h-3.5 w-3.5" strokeWidth={1.75} />;
-  }
-}
-
 function StatusBadge({ status }: { status: ChatMessage["status"] }) {
   if (status === "streaming") {
     return (
@@ -193,29 +149,6 @@ function StatusBadge({ status }: { status: ChatMessage["status"] }) {
       <CheckCircle2 className="h-3 w-3" strokeWidth={1.8} />
       done
     </span>
-  );
-}
-
-function MetaRow({
-  label,
-  value,
-  mono,
-}: {
-  label: string;
-  value?: string;
-  mono?: boolean;
-}) {
-  return (
-    <div className="flex gap-2">
-      <div className="text-[11px] text-[#6e6e6e] w-20 shrink-0">{label}</div>
-      <div
-        className={`min-w-0 text-[12px] text-[#e4e4e4] break-all ${
-          mono ? "font-mono" : ""
-        }`}
-      >
-        {value || "-"}
-      </div>
-    </div>
   );
 }
 

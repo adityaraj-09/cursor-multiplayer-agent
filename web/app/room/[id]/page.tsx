@@ -376,9 +376,6 @@ function LiveRoom({
   const selectedToolMessage =
     messages.find((m) => m.id === selectedToolMessageId && m.role === "tool") ||
     null;
-  const selectedToolAgentLabel = selectedToolMessage?.agentId
-    ? agents.find((a) => a.id === selectedToolMessage.agentId)?.label
-    : selectedAgent?.label;
   useEffect(() => {
     if (!selectedToolMessageId) return;
     if (!selectedToolMessage) {
@@ -1084,7 +1081,6 @@ function LiveRoom({
 
         <ToolDetailPanel
           message={selectedToolMessage}
-          agentLabel={selectedToolAgentLabel}
           onClose={() => setSelectedToolMessageId(null)}
         />
         <SidePanel
@@ -1150,7 +1146,6 @@ function LiveRoom({
       {selectedToolMessage && (
         <ToolDetailPanel
           message={selectedToolMessage}
-          agentLabel={selectedToolAgentLabel}
           mobile
           onClose={() => setSelectedToolMessageId(null)}
         />
