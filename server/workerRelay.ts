@@ -69,6 +69,10 @@ export class WorkerRelay {
   private runLostListeners = new Set<(runs: RunRef[]) => void>();
   private runDisconnectSoftListeners = new Set<(runs: RunRef[]) => void>();
   private runGraceTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private revertListeners = new Map<
+    string,
+    (data: { filePaths: string[]; error?: string }) => void
+  >();
   private static readonly DISCONNECT_GRACE_MS = 5 * 60_000;
   private static readonly DEFAULT_MAX_CONCURRENT = 4;
   private folderPickWaiters = new Map<
@@ -306,6 +310,16 @@ export class WorkerRelay {
           const room = db.getRoom(data.roomId);
           if (!room || room.owner_id !== userId || !this.fileLocks) return;
           this.fileLocks.release(data.roomId, data.agentId, data.path);
+        });
+
+        socket.on("worker:files-reverted", (data) => {
+          const runKey = makeRunKey(data.roomId, data.agentId || "");
+          const cb =
+            this.revertListeners.get(runKey) ||
+            this.revertListeners.get(data.roomId);
+          if (cb) {
+            cb({ filePaths: data.filePaths, error: data.error });
+          }
         });
 
         socket.on("disconnect", () => {
@@ -641,6 +655,46 @@ export class WorkerRelay {
     const runKey = makeRunKey(roomId, agentId);
     this.diffListeners.set(runKey, cb);
     return () => this.diffListeners.delete(runKey);
+  }
+
+  hasWorker(roomId: string): boolean {
+    return this.getWorkerForRoom(roomId) !== null;
+  }
+
+  async revertFilesOnWorker(
+    roomId: string,
+    filePaths: string[],
+    agentId?: string,
+    messageId?: string,
+  ): Promise<{ reverted: string[]; errors: string[] }> {
+    const worker = this.getWorkerForRoom(roomId);
+    if (!worker) {
+      return { reverted: [], errors: ["No worker connected for room"] };
+    }
+
+    const key = agentId ? makeRunKey(roomId, agentId) : roomId;
+    return new Promise<{ reverted: string[]; errors: string[] }>((resolve) => {
+      const timeout = setTimeout(() => {
+        this.revertListeners.delete(key);
+        resolve({ reverted: [], errors: ["Worker revert timed out"] });
+      }, 10000);
+
+      this.revertListeners.set(key, (res) => {
+        clearTimeout(timeout);
+        this.revertListeners.delete(key);
+        resolve({
+          reverted: res.filePaths,
+          errors: res.error ? [res.error] : [],
+        });
+      });
+
+      worker.socket.emit("worker:revert-files", {
+        roomId,
+        agentId,
+        filePaths,
+        messageId,
+      });
+    });
   }
 
   getOnlineWorkersForUser(userId: string): Array<{

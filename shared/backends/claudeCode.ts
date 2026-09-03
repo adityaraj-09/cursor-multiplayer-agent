@@ -8,12 +8,13 @@ import {
   diffFromToolArgs,
   formatToolResultDetail,
   isEditTool,
+  isQuestionTool,
   isTodoTool,
+  parseQuestionToolArgs,
   todoStatusSummary,
   todosFromToolArgs,
   TOOL_RESULT_DETAIL_LIMIT,
 } from "./cursor.js";
-
 interface PendingTool {
   name: string;
   path?: string;
@@ -230,6 +231,7 @@ export class ClaudeCodeBackend implements WorkerBackend {
           if (alreadyStarted) continue;
 
           const todos = args ? todosFromToolArgs(args) : [];
+          const questions = args ? parseQuestionToolArgs(args) : [];
           if (parentCallId) {
             out.push({
               kind: "subagent_nested",
@@ -244,10 +246,16 @@ export class ClaudeCodeBackend implements WorkerBackend {
             out.push({
               kind: "tool_start",
               callId,
-              name: todos.length && !isTodoTool(name) ? "todo" : name,
+              name:
+                todos.length && !isTodoTool(name)
+                  ? "todo"
+                  : isQuestionTool(name)
+                    ? "AskUserQuestion"
+                    : name,
               detail: toolDetail(name, args, path),
               path,
               todos: todos.length ? todos : undefined,
+              questions: questions.length ? questions : undefined,
             });
           }
         }
@@ -304,10 +312,16 @@ export class ClaudeCodeBackend implements WorkerBackend {
               ? diffFromToolArgs(name, pending.args)
               : undefined;
           const todos = pending?.args ? todosFromToolArgs(pending.args) : [];
+          const questions = pending?.args ? parseQuestionToolArgs(pending.args) : [];
           out.push({
             kind: "tool_done",
             callId,
-            name: todos.length && !isTodoTool(name) ? "todo" : name,
+            name:
+              todos.length && !isTodoTool(name)
+                ? "todo"
+                : isQuestionTool(name)
+                  ? "AskUserQuestion"
+                  : name,
             detail:
               todos.length
                 ? `${todos.length} todo${todos.length === 1 ? "" : "s"} · ${todoStatusSummary(todos)}`
@@ -315,6 +329,7 @@ export class ClaudeCodeBackend implements WorkerBackend {
             path,
             diffPatch: diffPatch || undefined,
             todos: todos.length ? todos : undefined,
+            questions: questions.length ? questions : undefined,
           });
         }
       }

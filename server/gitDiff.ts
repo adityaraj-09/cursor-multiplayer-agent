@@ -1,4 +1,4 @@
-import { existsSync } from "fs";
+import { existsSync, promises as fsPromises } from "fs";
 import { resolve, relative, isAbsolute } from "path";
 import { execFile } from "child_process";
 import { promisify } from "util";
@@ -151,3 +151,74 @@ export {
   diffFromToolEvent,
   formatToolResultDetail,
 } from "../shared/backends/cursor.js";
+
+/**
+ * Reverts uncommitted changes made to one or more files in the git repo.
+ * Handles tracked files (via git checkout HEAD) and untracked files (deleting newly created files).
+ */
+export async function revertFiles(
+  repoPath: string,
+  filePaths: string[],
+): Promise<{ reverted: string[]; errors: string[] }> {
+  const reverted: string[] = [];
+  const errors: string[] = [];
+
+  for (const rawPath of filePaths) {
+    if (!rawPath || !rawPath.trim()) continue;
+    const rel = resolveInRepo(repoPath, rawPath.trim());
+    if (!rel) continue;
+
+    const abs = resolve(repoPath, rel);
+
+    try {
+      const tracked = await isTracked(repoPath, rel);
+      if (tracked) {
+        // Discard staged changes first if any
+        await runGit(repoPath, ["reset", "HEAD", "--", rel]);
+        // Discard working directory changes
+        await runGit(repoPath, ["checkout", "HEAD", "--", rel]);
+        reverted.push(rel);
+      } else if (existsSync(abs)) {
+        // Untracked newly created file — delete it
+        await fsPromises.rm(abs, { force: true, recursive: true });
+        reverted.push(rel);
+      } else {
+        // File doesn't exist and not tracked, or was already reverted
+        reverted.push(rel);
+      }
+    } catch (err) {
+      errors.push(
+        `Failed to revert ${rel}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  return { reverted, errors };
+}
+
+/**
+ * Returns a list of all currently modified, staged, or untracked files in the repo.
+ */
+export async function getUncommittedFiles(repoPath: string): Promise<string[]> {
+  try {
+    const statusOut = await runGit(repoPath, ["status", "--porcelain", "-uall"]);
+    if (!statusOut.trim()) return [];
+    const files = statusOut
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => {
+        // porcelain format: "XY path" or "XY orig -> path"
+        const part = line.slice(3).trim();
+        if (part.includes(" -> ")) {
+          return part.split(" -> ")[1].trim();
+        }
+        return part;
+      })
+      .filter(Boolean);
+    return [...new Set(files)];
+  } catch {
+    return [];
+  }
+}
+

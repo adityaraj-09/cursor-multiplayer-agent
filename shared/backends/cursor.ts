@@ -1,10 +1,82 @@
-import type { AgentTodoItem } from "../events.js";
+import type { AgentTodoItem, ClarifyingQuestion } from "../events.js";
 import type {
   BuildArgsOptions,
   NormalizedAgentEvent,
   ParseLineContext,
   WorkerBackend,
 } from "./types.js";
+
+const QUESTION_TOOL_RE =
+  /^(askuserquestion|askfollowupquestion|askquestion|ask_user|ask_followup_question|ask_user_question|clarify|question|userinput|getinput)/i;
+
+/** Whether a tool name represents an agent asking the user clarifying questions. */
+export function isQuestionTool(name: string): boolean {
+  return QUESTION_TOOL_RE.test(name.replace(/ToolCall$/i, ""));
+}
+
+function parseQuestionOption(opt: unknown): { label: string; description?: string } | null {
+  if (typeof opt === "string" && opt.trim()) return { label: opt.trim() };
+  if (!opt || typeof opt !== "object") return null;
+  const o = opt as Record<string, unknown>;
+  const label = String(o.label ?? o.text ?? o.title ?? "").trim();
+  const description = typeof o.description === "string" ? o.description.trim() : undefined;
+  return label ? { label, description } : null;
+}
+
+/** Parse structured clarifying questions from a tool's args (Claude AskUserQuestion, etc). */
+export function parseQuestionToolArgs(
+  args: Record<string, unknown> | unknown,
+): ClarifyingQuestion[] {
+  if (!args || typeof args !== "object") return [];
+  const raw = args as Record<string, unknown>;
+
+  if (Array.isArray(raw.questions)) {
+    const list: ClarifyingQuestion[] = [];
+    for (let i = 0; i < raw.questions.length; i++) {
+      const q = raw.questions[i];
+      if (typeof q === "string" && q.trim()) {
+        list.push({ id: `q-${i + 1}`, question: q.trim() });
+      } else if (q && typeof q === "object") {
+        const item = q as Record<string, unknown>;
+        const questionText = String(
+          item.question ?? item.prompt ?? item.text ?? item.title ?? "",
+        ).trim();
+        if (!questionText) continue;
+        const options = Array.isArray(item.options)
+          ? item.options.map(parseQuestionOption).filter((o): o is NonNullable<typeof o> => o !== null)
+          : undefined;
+        list.push({
+          id: String(item.id || `q-${i + 1}`),
+          question: questionText,
+          header: typeof item.header === "string" ? item.header.trim() : undefined,
+          options: options && options.length ? options : undefined,
+          multiSelect: Boolean(item.multiSelect),
+        });
+      }
+    }
+    if (list.length) return list;
+  }
+
+  const singleText = String(
+    raw.question ?? raw.prompt ?? raw.query ?? raw.message ?? "",
+  ).trim();
+  if (singleText) {
+    const options = Array.isArray(raw.options)
+      ? raw.options.map(parseQuestionOption).filter((o): o is NonNullable<typeof o> => o !== null)
+      : undefined;
+    return [
+      {
+        id: "q-1",
+        question: singleText,
+        header: typeof raw.header === "string" ? raw.header.trim() : undefined,
+        options: options && options.length ? options : undefined,
+        multiSelect: Boolean(raw.multiSelect),
+      },
+    ];
+  }
+
+  return [];
+}
 
 /**
  * Merge a new assistant payload into the accumulated stream.
@@ -806,8 +878,14 @@ export class CursorAgentBackend implements WorkerBackend {
       }
       const todos = info.args ? todosFromToolArgs(info.args) : [];
       const todoTool = isTodoTool(info.name) || todos.length > 0;
+      const questions = info.args ? parseQuestionToolArgs(info.args) : [];
+      const questionTool = isQuestionTool(info.name) || questions.length > 0;
       const toolName =
-        todoTool && !isTodoTool(info.name) ? "todo" : info.name;
+        todoTool && !isTodoTool(info.name)
+          ? "todo"
+          : questionTool && !isQuestionTool(info.name)
+            ? "AskUserQuestion"
+            : info.name;
       if (ev.subtype === "started") {
         out.push({
           kind: "tool_start",
@@ -816,6 +894,7 @@ export class CursorAgentBackend implements WorkerBackend {
           detail: info.detail,
           path: info.path,
           todos: todos.length ? todos : undefined,
+          questions: questions.length ? questions : undefined,
         });
       } else if (ev.subtype === "completed") {
         const path = info.path || pathFromToolResult(info.result);
@@ -842,6 +921,7 @@ export class CursorAgentBackend implements WorkerBackend {
           path,
           diffPatch: diffPatch || undefined,
           todos: todos.length ? todos : undefined,
+          questions: questions.length ? questions : undefined,
         });
       }
       return out;

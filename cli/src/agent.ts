@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "child_process";
 import { createInterface } from "readline";
-import { existsSync } from "fs";
+import { existsSync, promises as fsPromises } from "fs";
 import { resolve, relative, isAbsolute } from "path";
 import { execFile } from "child_process";
 import { promisify } from "util";
@@ -232,3 +232,40 @@ export async function getFileDiff(
 
   return patch.trim();
 }
+
+export async function revertFiles(
+  repoPath: string,
+  filePaths: string[],
+): Promise<{ reverted: string[]; errors: string[] }> {
+  const reverted: string[] = [];
+  const errors: string[] = [];
+
+  for (const rawPath of filePaths) {
+    if (!rawPath || !rawPath.trim()) continue;
+    const rel = resolveInRepo(repoPath, rawPath.trim());
+    if (!rel) continue;
+
+    const abs = resolve(repoPath, rel);
+
+    try {
+      const tracked = await isTracked(repoPath, rel);
+      if (tracked) {
+        await runGit(repoPath, ["reset", "HEAD", "--", rel]);
+        await runGit(repoPath, ["checkout", "HEAD", "--", rel]);
+        reverted.push(rel);
+      } else if (existsSync(abs)) {
+        await fsPromises.rm(abs, { force: true, recursive: true });
+        reverted.push(rel);
+      } else {
+        reverted.push(rel);
+      }
+    } catch (err) {
+      errors.push(
+        `Failed to revert ${rel}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  return { reverted, errors };
+}
+

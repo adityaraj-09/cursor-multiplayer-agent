@@ -12,13 +12,14 @@ import {
   type SDKMessage,
   type SDKUserMessage,
 } from "@cursor/sdk";
-import type { AgentRuntime, AgentTodoItem } from "../shared/events.js";
+import type { AgentRuntime, AgentTodoItem, ClarifyingQuestion } from "../shared/events.js";
 import {
+  isQuestionTool,
   isTodoTool,
+  parseQuestionToolArgs,
   todoStatusSummary,
   todosFromToolArgs,
-} from "../shared/backends/cursor.js";
-import {
+} from "../shared/backends/cursor.js";import {
   diffFromToolEvent,
   formatToolResultDetail,
   unwrapToolResultPayload,
@@ -43,6 +44,7 @@ export type SdkStreamEvent =
       detail: string;
       path?: string;
       todos?: AgentTodoItem[];
+      questions?: ClarifyingQuestion[];
     }
   | {
       kind: "tool_done";
@@ -53,6 +55,7 @@ export type SdkStreamEvent =
       /** Synthetic or tool-provided unified diff for chat display. */
       diffPatch?: string;
       todos?: AgentTodoItem[];
+      questions?: ClarifyingQuestion[];
     }
   | { kind: "error"; message: string }
   | { kind: "done"; result: string; git?: RunGitInfo };

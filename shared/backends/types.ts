@@ -1,4 +1,4 @@
-import type { AgentTodoItem } from "../events.js";
+import type { AgentTodoItem, ClarifyingQuestion } from "../events.js";
 
 /** Backend kind for a room-level agent process. */
 export type AgentBackendKind = "cursor" | "claude-code";
@@ -12,7 +12,7 @@ export interface RunGitInfo {
   }>;
 }
 
-export type { AgentTodoItem };
+export type { AgentTodoItem, ClarifyingQuestion };
 
 /**
  * Normalized agent stream events used internally by Steer.
@@ -30,6 +30,7 @@ export type NormalizedAgentEvent =
       detail: string;
       path?: string;
       todos?: AgentTodoItem[];
+      questions?: ClarifyingQuestion[];
     }
   | {
       kind: "tool_done";
@@ -39,6 +40,7 @@ export type NormalizedAgentEvent =
       path?: string;
       diffPatch?: string;
       todos?: AgentTodoItem[];
+      questions?: ClarifyingQuestion[];
     }
   | {
       kind: "subagent_nested";

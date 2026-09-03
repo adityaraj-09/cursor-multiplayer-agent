@@ -1131,6 +1131,37 @@ app.post("/api/rooms/:id/abort", requireAuth, async (req, res) => {
 });
 
 /**
+ * POST /api/rooms/:id/revert — revert uncommitted file changes made by LLM.
+ */
+app.post("/api/rooms/:id/revert", requireAuth, async (req, res) => {
+  const id = routeParam(req.params.id);
+  if (!roomManager.userCanAccessRoom(id, req.user!.id)) {
+    res.status(404).json({ error: "Room not found" });
+    return;
+  }
+  const room = roomManager.getRoomState(id);
+  if (!room) {
+    res.status(404).json({ error: "Room not found or not loaded" });
+    return;
+  }
+  try {
+    const result = await roomManager.revertChanges(room, {
+      agentId: req.body?.agentId ? String(req.body.agentId) : undefined,
+      filePaths: Array.isArray(req.body?.filePaths)
+        ? req.body.filePaths.map(String)
+        : undefined,
+      messageId: req.body?.messageId ? String(req.body.messageId) : undefined,
+      actorUserId: req.user!.id,
+    });
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    res.status(400).json({
+      error: err instanceof Error ? err.message : "Failed to revert changes",
+    });
+  }
+});
+
+/**
  * POST /api/rooms/:id/leave — member leaves (host cannot).
  */
 app.post("/api/rooms/:id/leave", requireAuth, (req, res) => {
@@ -1422,6 +1453,9 @@ io.on("connection", (socket) => {
   );
   socket.on("dismiss-plan", (payload) =>
     roomManager.handleDismissPlan(socket, payload || { messageId: "" }),
+  );
+  socket.on("revert-changes", (payload) =>
+    roomManager.handleRevertChanges(socket, payload || {}),
   );
   socket.on("typing", (agentId) => roomManager.handleTyping(socket, agentId));
   socket.on("typing-stop", (agentId) =>

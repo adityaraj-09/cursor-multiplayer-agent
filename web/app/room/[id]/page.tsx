@@ -273,6 +273,7 @@ function LiveRoom({
     cloudMeta,
     modelId: liveModelId,
     sendSteer,
+    revertChanges,
     notifyTyping,
     notifyTypingStop,
     requestDrive,
@@ -1076,6 +1077,20 @@ function LiveRoom({
             onSelectToolMessage={(message: ChatMessage) =>
               setSelectedToolMessageId(message.id)
             }
+            onAnswerQuestions={(messageId, answers) => {
+              const msg = messages.find((m) => m.id === messageId);
+              if (!msg) return;
+              const lines = Object.entries(answers)
+                .filter(([, v]) => v)
+                .map(([q, a]) => `**${q}**\n${a}`)
+                .join("\n\n");
+              if (lines) {
+                sendSteer(lines, msg.agentId || undefined);
+              }
+            }}
+            onRevertMessage={(messageId, agentId) => {
+              revertChanges({ messageId, agentId });
+            }}
           />
         </div>
 

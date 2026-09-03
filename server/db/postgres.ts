@@ -73,6 +73,8 @@ async function initSchema() {
       tool_name TEXT,
       diff_patch TEXT,
       todos_json TEXT,
+      questions_json TEXT,
+      reverted INTEGER NOT NULL DEFAULT 0,
       status TEXT NOT NULL DEFAULT 'done',
       ts BIGINT NOT NULL,
       sender_user_id TEXT
@@ -368,6 +370,8 @@ async function initSchema() {
     `ALTER TABLE rooms ADD COLUMN IF NOT EXISTS auto_memory TEXT NOT NULL DEFAULT 'extract'`,
     `ALTER TABLE memory_entries ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'human'`,
     `ALTER TABLE agents ADD COLUMN IF NOT EXISTS auto_mem_cursor_ts BIGINT NOT NULL DEFAULT 0`,
+    `ALTER TABLE messages ADD COLUMN IF NOT EXISTS questions_json TEXT`,
+    `ALTER TABLE messages ADD COLUMN IF NOT EXISTS reverted INTEGER NOT NULL DEFAULT 0`,
   ];
 
   for (const sql of migrations) {
@@ -544,6 +548,19 @@ function parseAttachmentsJson(
   }
 }
 
+function parseQuestionsJson(
+  raw: unknown,
+): ChatMessage["questions"] {
+  if (typeof raw !== "string" || !raw) return undefined;
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed) || parsed.length === 0) return undefined;
+    return parsed as NonNullable<ChatMessage["questions"]>;
+  } catch {
+    return undefined;
+  }
+}
+
 function rowToMessage(r: Record<string, unknown>): ChatMessage {
   const planRaw = r.plan_status as string | null | undefined;
   const planStatus =
@@ -566,6 +583,8 @@ function rowToMessage(r: Record<string, unknown>): ChatMessage {
     senderUserId: (r.sender_user_id as string) || undefined,
     planStatus,
     attachments: parseAttachmentsJson(r.attachments_json),
+    questions: parseQuestionsJson(r.questions_json),
+    reverted: Boolean(r.reverted),
   };
 }
 
@@ -829,8 +848,8 @@ export function getSteerHistory(
 
 export function insertMessage(msg: ChatMessage): void {
   syncQuery(
-    `INSERT INTO messages (id, room_id, role, content, sender_name, sender_color, tool_name, diff_patch, todos_json, status, ts, agent_id, sender_user_id, plan_status, attachments_json)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+    `INSERT INTO messages (id, room_id, role, content, sender_name, sender_color, tool_name, diff_patch, todos_json, status, ts, agent_id, sender_user_id, plan_status, attachments_json, questions_json, reverted)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
     [
       msg.id,
       msg.roomId,
@@ -847,6 +866,8 @@ export function insertMessage(msg: ChatMessage): void {
       msg.senderUserId ?? null,
       msg.planStatus ?? null,
       msg.attachments?.length ? JSON.stringify(msg.attachments) : null,
+      msg.questions?.length ? JSON.stringify(msg.questions) : null,
+      msg.reverted ? 1 : 0,
     ],
   );
 }
@@ -901,23 +922,37 @@ export function updateMessageTool(
   opts: {
     diffPatch?: string;
     todos?: ChatMessage["todos"];
+    questions?: ChatMessage["questions"];
   } = {},
 ): void {
   const todosJson =
     opts.todos && opts.todos.length > 0 ? JSON.stringify(opts.todos) : null;
+  const questionsJson =
+    opts.questions && opts.questions.length > 0
+      ? JSON.stringify(opts.questions)
+      : null;
   syncQuery(
     `UPDATE messages SET content = $1, status = $2,
         diff_patch = COALESCE($3, diff_patch),
-        todos_json = COALESCE($4, todos_json)
-     WHERE id = $5`,
+        todos_json = COALESCE($4, todos_json),
+        questions_json = COALESCE($5, questions_json)
+     WHERE id = $6`,
     [
       content,
       status,
       opts.diffPatch?.trim() ? opts.diffPatch : null,
       todosJson,
+      questionsJson,
       id,
     ],
   );
+}
+
+export function updateMessageReverted(id: string, reverted = true): void {
+  syncQuery(`UPDATE messages SET reverted = $1 WHERE id = $2`, [
+    reverted ? 1 : 0,
+    id,
+  ]);
 }
 
 export function getMessages(roomId: string, limit = 500): ChatMessage[] {

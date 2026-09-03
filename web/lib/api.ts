@@ -716,6 +716,25 @@ export async function abortRoomRun(
   }
 }
 
+export async function revertRoomChanges(
+  id: string,
+  opts: { agentId?: string; filePaths?: string[]; messageId?: string } = {},
+): Promise<{ ok: boolean; reverted: string[]; errors: string[] }> {
+  const res = await fetch(`${API_BASE}/rooms/${id}/revert`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(await authHeaders()),
+    },
+    body: JSON.stringify(opts),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Failed to revert changes");
+  }
+  return res.json();
+}
+
 export async function fetchRoomModels(
   roomId: string,
   agentId?: string,

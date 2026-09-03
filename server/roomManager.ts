@@ -22,9 +22,8 @@ import {
   DEFAULT_CLAUDE_MODEL,
 } from "../shared/claudeModels.js";
 import { DiffWatcher } from "./diffWatcher.js";
-import { extractToolPath, getFileDiff, isEditTool } from "./gitDiff.js";
-import { isTodoTool } from "../shared/backends/cursor.js";
-import type { NormalizedAgentEvent } from "../shared/backends/index.js";
+import { extractToolPath, getFileDiff, isEditTool, revertFiles, getUncommittedFiles } from "./gitDiff.js";
+import { isTodoTool } from "../shared/backends/cursor.js";import type { NormalizedAgentEvent } from "../shared/backends/index.js";
 import { listCliModels } from "./cliModels.js";
 import { WorkerRelay } from "./workerRelay.js";
 import * as db from "./db.js";
@@ -1432,6 +1431,7 @@ export class RoomManager {
       content: string;
       path?: string;
       todos?: ChatMessage["todos"];
+      questions?: ChatMessage["questions"];
       status: "streaming" | "done" | "error";
       diffPatch?: string;
       /** When true, allow falling back to lastToolMsgId for non-todo tools. */
@@ -1460,19 +1460,22 @@ export class RoomManager {
       agentId: agent.row.id,
     };
     if (opts.todos?.length) msg.todos = opts.todos;
+    if (opts.questions?.length) msg.questions = opts.questions;
     if (opts.diffPatch) msg.diffPatch = opts.diffPatch;
 
     if (existingId) {
-      // Always persist content + status on completion; attach diff/todos when present.
+      // Always persist content + status on completion; attach diff/todos/questions when present.
       if (
         opts.diffPatch ||
         opts.todos?.length ||
+        opts.questions?.length ||
         opts.status === "done" ||
         opts.status === "error"
       ) {
         db.updateMessageTool(id, opts.content, opts.status, {
           diffPatch: opts.diffPatch,
           todos: opts.todos,
+          questions: opts.questions,
         });
       } else {
         db.updateMessageContent(id, opts.content, opts.status);
@@ -2188,6 +2191,172 @@ export class RoomManager {
     if (updated) this.io.to(room.id).emit("chat-message", updated);
   }
 
+  async handleRevertChanges(
+    socket: Socket,
+    payload: {
+      roomId?: string;
+      agentId?: string;
+      filePaths?: string[];
+      messageId?: string;
+    },
+  ): Promise<void> {
+    const room = this.getRoomForSocket(socket.id);
+    if (!room) return;
+    const p = room.participants.get(socket.id);
+    if (!p?.userId) {
+      socket.emit("error", "Sign in required to revert changes");
+      return;
+    }
+    const role = this.resolveUserRoomRole(room.id, p.userId);
+    if (role === "viewer") {
+      socket.emit("error", "Viewers cannot revert changes");
+      return;
+    }
+
+    try {
+      await this.revertChanges(room, {
+        agentId: payload.agentId,
+        filePaths: payload.filePaths,
+        messageId: payload.messageId,
+        actorUserId: p.userId,
+      });
+    } catch (err) {
+      socket.emit(
+        "error",
+        `Failed to revert changes: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  async revertChanges(
+    room: RoomState,
+    opts: {
+      agentId?: string;
+      filePaths?: string[];
+      messageId?: string;
+      actorUserId?: string;
+    },
+  ): Promise<{ reverted: string[]; errors: string[] }> {
+    const agent = opts.agentId ? room.agents.get(opts.agentId) : undefined;
+    let pathsToRevert: string[] = [];
+
+    if (opts.filePaths && opts.filePaths.length > 0) {
+      pathsToRevert = [...opts.filePaths];
+    } else if (opts.messageId) {
+      const msg = db.getMessage(opts.messageId);
+      if (msg) {
+        const p =
+          extractToolPath(msg.content) ||
+          (msg.toolName && isEditTool(msg.toolName) ? msg.content : "");
+        if (p) pathsToRevert = [p];
+      }
+    } else if (agent) {
+      pathsToRevert = [
+        ...new Set([...agent.filePatches.keys(), ...agent.touchedPaths]),
+      ];
+    } else {
+      const allPaths = new Set<string>();
+      for (const a of room.agents.values()) {
+        for (const p of a.filePatches.keys()) allPaths.add(p);
+        for (const p of a.touchedPaths) allPaths.add(p);
+      }
+      pathsToRevert = [...allPaths];
+    }
+
+    // If local room and no paths found in agent memory, check git status
+    if (
+      pathsToRevert.length === 0 &&
+      room.row.runtime === "local" &&
+      room.row.repo_path
+    ) {
+      pathsToRevert = await getUncommittedFiles(room.row.repo_path);
+    }
+
+    if (pathsToRevert.length === 0) {
+      return { reverted: [], errors: [] };
+    }
+
+    let reverted: string[] = [];
+    const errors: string[] = [];
+
+    if (this.workerRelay?.hasWorker(room.id)) {
+      const workerRes = await this.workerRelay.revertFilesOnWorker(
+        room.id,
+        pathsToRevert,
+        agent?.row.id,
+        opts.messageId,
+      );
+      reverted = workerRes.reverted;
+      errors.push(...workerRes.errors);
+    } else if (room.row.runtime === "local" && room.row.repo_path) {
+      const localRes = await revertFiles(room.row.repo_path, pathsToRevert);
+      reverted = localRes.reverted;
+      errors.push(...localRes.errors);
+    } else {
+      reverted = [...pathsToRevert];
+    }
+
+    // Clean up filePatches and touchedPaths for affected agents
+    const affectedAgents = agent ? [agent] : [...room.agents.values()];
+    for (const a of affectedAgents) {
+      for (const p of reverted) {
+        a.filePatches.delete(p);
+        a.touchedPaths.delete(p);
+        for (const k of [...a.filePatches.keys()]) {
+          if (k.endsWith(p) || p.endsWith(k)) {
+            a.filePatches.delete(k);
+          }
+        }
+        for (const k of [...a.touchedPaths]) {
+          if (k.endsWith(p) || p.endsWith(k)) {
+            a.touchedPaths.delete(k);
+          }
+        }
+      }
+      this.emitAgentDiff(room, a);
+    }
+
+    if (opts.messageId) {
+      db.updateMessageReverted(opts.messageId, true);
+      const msg = db.getMessage(opts.messageId);
+      if (msg) {
+        msg.reverted = true;
+        this.io.to(room.id).emit("chat-message", msg);
+      }
+    }
+
+    // Post a brief system message announcing the revert
+    if (reverted.length > 0) {
+      const actorName = opts.actorUserId
+        ? db.getUserById(opts.actorUserId)?.name || "User"
+        : "User";
+      const sysMsg: ChatMessage = {
+        id: nanoid(12),
+        roomId: room.id,
+        role: "system",
+        content: `↺ ${actorName} reverted changes to ${
+          reverted.length === 1
+            ? `\`${reverted[0]}\``
+            : `${reverted.length} files (${reverted.map((f) => `\`${f}\``).join(", ")})`
+        }`,
+        status: "done",
+        ts: Date.now(),
+        agentId: agent?.row.id,
+      };
+      db.insertMessage(sysMsg);
+      this.io.to(room.id).emit("chat-message", sysMsg);
+    }
+
+    // Broadcast changes-reverted
+    this.io.to(room.id).emit("changes-reverted", {
+      agentId: agent?.row.id,
+      filePaths: reverted,
+      messageId: opts.messageId,
+    });
+
+    return { reverted, errors };
+  }
+
   private markAssistantPlan(
     room: RoomState,
     agent: AgentState,
@@ -2423,6 +2592,7 @@ export class RoomManager {
               content: event.detail || "Running…",
               path: toolPath,
               todos: event.todos?.length ? event.todos : undefined,
+              questions: event.questions?.length ? event.questions : undefined,
               status: "streaming",
             });
             break;
@@ -2443,6 +2613,7 @@ export class RoomManager {
               content: event.detail || event.path || "Done",
               path: toolPath,
               todos: event.todos?.length ? event.todos : undefined,
+              questions: event.questions?.length ? event.questions : undefined,
               status: "done",
               diffPatch: event.diffPatch?.trim() || undefined,
               allowLastToolFallback: true,
@@ -2872,6 +3043,7 @@ export class RoomManager {
               content: event.detail || "Running…",
               path,
               todos: event.todos?.length ? event.todos : undefined,
+              questions: event.questions?.length ? event.questions : undefined,
               status: "streaming",
             });
             break;
@@ -2896,6 +3068,7 @@ export class RoomManager {
               content,
               path,
               todos: event.todos?.length ? event.todos : undefined,
+              questions: event.questions?.length ? event.questions : undefined,
               status: "done",
               diffPatch: synthetic || undefined,
               allowLastToolFallback: true,
@@ -4595,6 +4768,10 @@ export class RoomManager {
       summary: lines.join("\n"),
       exportedAt: Date.now(),
     };
+  }
+
+  getRoomState(id: string): RoomState | undefined {
+    return this.rooms.get(id);
   }
 
   getRoomInfo(id: string, actorUserId?: string): RoomInfo | null {

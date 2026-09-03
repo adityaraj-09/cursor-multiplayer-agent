@@ -13,6 +13,7 @@ import {
   abortAll,
   isEditTool,
   getFileDiff,
+  revertFiles,
   type AgentStreamEvent,
 } from "./agent.js";
 import { listChatSessions } from "./listSessions.js";
@@ -556,6 +557,32 @@ export function startWorker(repoPathOverride?: string): void {
           activeRuns.delete(key);
         }
       }
+    }
+  });
+
+  socket.on("worker:revert-files", async (payload) => {
+    console.log(
+      chalk.yellow(
+        `  ↺ Revert requested for ${payload.filePaths.length} file(s) in room ${payload.roomId}`,
+      ),
+    );
+    try {
+      const { reverted, errors } = await revertFiles(cwd, payload.filePaths);
+      emitOrQueue("worker:files-reverted", {
+        roomId: payload.roomId,
+        agentId: payload.agentId,
+        filePaths: reverted,
+        messageId: payload.messageId,
+        error: errors.length ? errors.join("; ") : undefined,
+      });
+    } catch (err) {
+      emitOrQueue("worker:files-reverted", {
+        roomId: payload.roomId,
+        agentId: payload.agentId,
+        filePaths: [],
+        messageId: payload.messageId,
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   });
 

@@ -120,6 +120,21 @@ export interface ChatAttachment {
   url: string;
 }
 
+export interface ClarifyingQuestionOption {
+  label: string;
+  description?: string;
+}
+
+export interface ClarifyingQuestion {
+  id?: string;
+  question: string;
+  header?: string;
+  options?: ClarifyingQuestionOption[];
+  multiSelect?: boolean;
+  selectedAnswers?: string[];
+  answered?: boolean;
+}
+
 export interface ChatMessage {
   id: string;
   roomId: string;
@@ -144,6 +159,10 @@ export interface ChatMessage {
   planStatus?: PlanStatus;
   /** Images / files the user attached to this message. */
   attachments?: ChatAttachment[];
+  /** Structured clarifying questions when the LLM asks for user clarification. */
+  questions?: ClarifyingQuestion[];
+  /** Flag when an edit / tool message has been reverted. */
+  reverted?: boolean;
 }
 
 export interface CloudMeta {
@@ -330,6 +349,12 @@ export interface ServerToClientEvents {
     count: number;
     entries: MemoryEntryInfo[];
   }) => void;
+  /** File changes were reverted. */
+  "changes-reverted": (payload: {
+    agentId?: string;
+    filePaths: string[];
+    messageId?: string;
+  }) => void;
   error: (message: string) => void;
 }
 
@@ -339,6 +364,13 @@ export interface ClientToServerEvents {
     text?: string,
     extras?: { attachmentIds?: string[] },
   ) => void;
+  /** Revert uncommitted file changes made by the LLM (specific files, tool message, or all). */
+  "revert-changes": (payload: {
+    roomId?: string;
+    agentId?: string;
+    filePaths?: string[];
+    messageId?: string;
+  }) => void;
   /** Approve a finished plan and switch the agent to implement it. */
   "approve-plan": (payload: { messageId: string; agentId?: string }) => void;
   /** Hide the approve card without implementing. */
@@ -426,6 +458,13 @@ export interface WorkerToServerEvents {
     agentId: string;
     path: string;
   }) => void;
+  "worker:files-reverted": (data: {
+    roomId: string;
+    agentId?: string;
+    filePaths: string[];
+    messageId?: string;
+    error?: string;
+  }) => void;
 }
 
 export interface ServerToWorkerEvents {
@@ -458,6 +497,12 @@ export interface ServerToWorkerEvents {
     granted: boolean;
     holderAgentId?: string;
   }) => void;
+  "worker:revert-files": (data: {
+    roomId: string;
+    agentId?: string;
+    filePaths: string[];
+    messageId?: string;
+  }) => void;
 }
 
 export interface AgentStreamEventPayload {
@@ -472,6 +517,8 @@ export interface AgentStreamEventPayload {
   diffPatch?: string;
   /** Structured todos for TodoWrite / todo tools. */
   todos?: AgentTodoItem[];
+  /** Structured clarifying questions when the LLM asks for user clarification. */
+  questions?: ClarifyingQuestion[];
   message?: string;
   result?: string;
   parentCallId?: string;

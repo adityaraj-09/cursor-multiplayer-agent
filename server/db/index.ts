@@ -41,6 +41,7 @@ export const insertMessage = backend.insertMessage;
 export const updateMessageContent = backend.updateMessageContent;
 export const updateMessageDiff = backend.updateMessageDiff;
 export const updateMessageTool = backend.updateMessageTool;
+export const updateMessageReverted = backend.updateMessageReverted;
 export const updateMessagePlanStatus = backend.updateMessagePlanStatus;
 export const getMessage = backend.getMessage;
 export const getMessages = backend.getMessages;

@@ -1,17 +1,23 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import {
   AlertTriangle,
   Bot,
+  Check,
   CheckCircle2,
+  ClipboardCopy,
   FileText,
   GitCompare,
+  HelpCircle,
   ListChecks,
   LoaderCircle,
+  MessageCircleQuestion,
+  Redo2,
   Search,
   Sparkles,
   SquareTerminal,
+  Undo2,
   User,
   Wrench,
 } from "lucide-react";
@@ -19,6 +25,7 @@ import type {
   AgentRunStatus,
   ChatAttachment,
   ChatMessage,
+  ClarifyingQuestion,
 } from "../../shared/events";
 import { fetchRoomUploadBlob } from "../lib/api";
 import Markdown from "./Markdown";
@@ -44,6 +51,10 @@ interface ChatPanelProps {
   onDismissPlan?: (messageId: string) => void;
   selectedToolMessageId?: string | null;
   onSelectToolMessage?: (message: ChatMessage) => void;
+  /** Called when user submits answers to clarifying questions. */
+  onAnswerQuestions?: (messageId: string, answers: Record<string, string>) => void;
+  /** Called when user triggers a revert of LLM changes. */
+  onRevertMessage?: (messageId: string, agentId?: string) => void;
 }
 
 type ChatItem =
@@ -98,6 +109,8 @@ export default function ChatPanel({
   onDismissPlan,
   selectedToolMessageId = null,
   onSelectToolMessage,
+  onAnswerQuestions,
+  onRevertMessage,
 }: ChatPanelProps) {
   const scrollerRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
@@ -277,6 +290,7 @@ export default function ChatPanel({
                   agentLabel={agentLabel(item.messages[0]?.agentId)}
                   selectedToolMessageId={selectedToolMessageId}
                   onSelectToolMessage={onSelectToolMessage}
+                  onRevertMessage={onRevertMessage}
                 />
               );
             }
@@ -290,6 +304,7 @@ export default function ChatPanel({
                 canApprovePlan={canApprovePlan}
                 onApprovePlan={onApprovePlan}
                 onDismissPlan={onDismissPlan}
+                onAnswerQuestions={onAnswerQuestions}
               />
             );
           })}
@@ -310,11 +325,13 @@ function ToolCallGroup({
   agentLabel,
   selectedToolMessageId,
   onSelectToolMessage,
+  onRevertMessage,
 }: {
   messages: ChatMessage[];
   agentLabel?: string;
   selectedToolMessageId?: string | null;
   onSelectToolMessage?: (message: ChatMessage) => void;
+  onRevertMessage?: (messageId: string, agentId?: string) => void;
 }) {
   const anyStreaming = messages.some((m) => m.status === "streaming");
   const [open, setOpen] = useState(false);
@@ -376,6 +393,7 @@ function ToolCallGroup({
               messages={group.messages}
               selectedToolMessageId={selectedToolMessageId}
               onSelectToolMessage={onSelectToolMessage}
+              onRevertMessage={onRevertMessage}
             />
           ))}
         </div>
@@ -406,6 +424,7 @@ function ToolTypeSection({
   messages,
   selectedToolMessageId,
   onSelectToolMessage,
+  onRevertMessage,
 }: {
   groupKey: ToolCategoryKey;
   label: string;
@@ -413,6 +432,7 @@ function ToolTypeSection({
   messages: ChatMessage[];
   selectedToolMessageId?: string | null;
   onSelectToolMessage?: (message: ChatMessage) => void;
+  onRevertMessage?: (messageId: string, agentId?: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const anyStreaming = messages.some((m) => m.status === "streaming");
@@ -465,6 +485,11 @@ function ToolTypeSection({
               message={msg}
               selected={selectedToolMessageId === msg.id}
               onSelect={onSelectToolMessage}
+              onRevert={
+                onRevertMessage && msg.diffPatch && msg.status === "done" && !msg.reverted
+                  ? () => onRevertMessage(msg.id, msg.agentId)
+                  : undefined
+              }
             />
           ))}
         </div>
@@ -477,56 +502,113 @@ function ToolCallRow({
   message,
   selected,
   onSelect,
+  onRevert,
 }: {
   message: ChatMessage;
   selected?: boolean;
   onSelect?: (message: ChatMessage) => void;
+  onRevert?: () => void;
 }) {
+  const [revertConfirm, setRevertConfirm] = useState(false);
   const hasDiff = Boolean(message.diffPatch);
   const path = resolveToolPath(message);
   const title = toolCallTitle(message);
   const tool = normalizeToolName(message.toolName);
 
   return (
-    <button
-      type="button"
-      onClick={() => onSelect?.(message)}
-      className={`w-full rounded-lg border px-3 py-2 text-left transition-colors ${
-        selected
-          ? "border-[#26405d] bg-[#17202a]/80"
-          : "border-[#242424] bg-[#171717] hover:bg-[#1d1d1d]"
-      }`}
-      aria-pressed={selected}
-    >
-      <div className="flex items-center gap-2.5">
-        {hasDiff ? (
-          <span className="flex h-6 w-6 items-center justify-center rounded-md bg-[#17202a] text-[#4d9fff] shrink-0">
-            <GitCompare className="h-3.5 w-3.5" strokeWidth={1.75} />
-          </span>
-        ) : (
-          <ToolStatusIcon status={message.status} />
-        )}
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2 min-w-0">
-            <span className="text-[12px] text-[#d0d0d0] font-medium truncate">
-              {title}
-            </span>
-            {tool !== title && (
-              <span className="text-[10px] text-[#6e6e6e] shrink-0">
-                {tool}
+    <div className="relative group">
+      <button
+        type="button"
+        onClick={() => onSelect?.(message)}
+        className={`w-full rounded-lg border px-3 py-2 text-left transition-colors ${
+          selected
+            ? "border-[#26405d] bg-[#17202a]/80"
+            : message.reverted
+              ? "border-[#2b2b2b] bg-[#151515] opacity-60"
+              : "border-[#242424] bg-[#171717] hover:bg-[#1d1d1d]"
+        }`}
+        aria-pressed={selected}
+      >
+        <div className="flex items-center gap-2.5">
+          {hasDiff ? (
+            message.reverted ? (
+              <span className="flex h-6 w-6 items-center justify-center rounded-md bg-[#222] text-[#6e6e6e] shrink-0">
+                <Undo2 className="h-3.5 w-3.5" strokeWidth={1.75} />
               </span>
+            ) : (
+              <span className="flex h-6 w-6 items-center justify-center rounded-md bg-[#17202a] text-[#4d9fff] shrink-0">
+                <GitCompare className="h-3.5 w-3.5" strokeWidth={1.75} />
+              </span>
+            )
+          ) : (
+            <ToolStatusIcon status={message.status} />
+          )}
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className={`text-[12px] font-medium truncate ${message.reverted ? "line-through text-[#6e6e6e]" : "text-[#d0d0d0]"}`}>
+                {title}
+              </span>
+              {tool !== title && (
+                <span className="text-[10px] text-[#6e6e6e] shrink-0">
+                  {tool}
+                </span>
+              )}
+            </div>
+            {(path || message.content) && (
+              <div className="mt-0.5 text-[11px] text-[#7d7d7d] font-mono truncate">
+                {path || message.content}
+              </div>
             )}
           </div>
-          {(path || message.content) && (
-            <div className="mt-0.5 text-[11px] text-[#7d7d7d] font-mono truncate">
-              {path || message.content}
-            </div>
+          {message.reverted && (
+            <span className="text-[10px] shrink-0 text-[#6e6e6e] italic">reverted</span>
           )}
+          {hasDiff && message.diffPatch && !message.reverted && <DiffStats patch={message.diffPatch} />}
+          {!message.reverted && <ToolStatusText status={message.status} />}
         </div>
-        {hasDiff && message.diffPatch && <DiffStats patch={message.diffPatch} />}
-        <ToolStatusText status={message.status} />
-      </div>
-    </button>
+      </button>
+      {onRevert && !revertConfirm && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            setRevertConfirm(true);
+          }}
+          title="Revert this file change"
+          className="absolute right-2 top-1/2 -translate-y-1/2 hidden group-hover:flex items-center gap-1 text-[10px] text-[#a0a0a0] hover:text-[#f07070] bg-[#1a1a1a] border border-[#2b2b2b] rounded-md px-2 py-1 transition-colors"
+        >
+          <Undo2 className="h-3 w-3" strokeWidth={1.8} />
+          Revert
+        </button>
+      )}
+      {onRevert && revertConfirm && (
+        <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1.5 bg-[#1a1a1a] border border-[#f07070]/50 rounded-md px-2 py-1">
+          <span className="text-[10px] text-[#f07070]">Revert?</span>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onRevert();
+              setRevertConfirm(false);
+            }}
+            className="text-[10px] text-[#f07070] hover:text-[#ff8080] font-medium"
+          >
+            Yes
+          </button>
+          <span className="text-[#4a4a4a]">·</span>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setRevertConfirm(false);
+            }}
+            className="text-[10px] text-[#8a8a8a] hover:text-[#b0b0b0]"
+          >
+            No
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -588,6 +670,7 @@ function MessageBubble({
   canApprovePlan,
   onApprovePlan,
   onDismissPlan,
+  onAnswerQuestions,
 }: {
   message: ChatMessage;
   agentLabel?: string;
@@ -596,7 +679,31 @@ function MessageBubble({
   canApprovePlan?: boolean;
   onApprovePlan?: (messageId: string, agentId?: string) => void;
   onDismissPlan?: (messageId: string) => void;
+  onAnswerQuestions?: (messageId: string, answers: Record<string, string>) => void;
 }) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = useCallback(async () => {
+    if (!message.content) return;
+    try {
+      await navigator.clipboard.writeText(message.content);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // fallback for environments without clipboard API
+      const el = document.createElement("textarea");
+      el.value = message.content;
+      el.style.position = "fixed";
+      el.style.opacity = "0";
+      document.body.appendChild(el);
+      el.select();
+      document.execCommand("copy");
+      document.body.removeChild(el);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  }, [message.content]);
+
   if (message.role === "user") {
     return (
       <div className="flex justify-end gap-3">
@@ -679,6 +786,20 @@ function MessageBubble({
         ) : (
           <span className="text-[13px] text-[#6e6e6e]">Thinking…</span>
         )}
+        {message.questions && message.questions.length > 0 && message.role === "tool" && (
+          <ClarifyingQuestionsCard
+            messageId={message.id}
+            questions={message.questions}
+            onAnswerQuestions={onAnswerQuestions}
+          />
+        )}
+        {message.questions && message.questions.length > 0 && message.role === "assistant" && (
+          <ClarifyingQuestionsCard
+            messageId={message.id}
+            questions={message.questions}
+            onAnswerQuestions={onAnswerQuestions}
+          />
+        )}
         {message.planStatus && (
           <PlanActions
             message={message}
@@ -687,6 +808,28 @@ function MessageBubble({
             onApprove={onApprovePlan}
             onDismiss={onDismissPlan}
           />
+        )}
+        {message.content && message.status !== "streaming" && message.role === "assistant" && (
+          <div className="mt-2 flex items-center gap-1">
+            <button
+              type="button"
+              onClick={handleCopy}
+              title="Copy as markdown"
+              className="inline-flex items-center gap-1.5 text-[11px] text-[#6e6e6e] hover:text-[#a0a0a0] transition-colors rounded-md px-2 py-1 hover:bg-[#252525]"
+            >
+              {copied ? (
+                <>
+                  <Check className="h-3 w-3 text-[#3ecf8e]" strokeWidth={2} />
+                  <span className="text-[#3ecf8e]">Copied!</span>
+                </>
+              ) : (
+                <>
+                  <ClipboardCopy className="h-3 w-3" strokeWidth={1.8} />
+                  Copy markdown
+                </>
+              )}
+            </button>
+          </div>
         )}
       </div>
     </div>
@@ -876,4 +1019,167 @@ function formatTime(ts: number): string {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+function ClarifyingQuestionsCard({
+  messageId,
+  questions,
+  onAnswerQuestions,
+}: {
+  messageId: string;
+  questions: ClarifyingQuestion[];
+  onAnswerQuestions?: (messageId: string, answers: Record<string, string>) => void;
+}) {
+  const [answers, setAnswers] = useState<Record<string, string[]>>({});
+  const [freeText, setFreeText] = useState<Record<string, string>>({});
+  const [submitted, setSubmitted] = useState(false);
+
+  const allAnswered = questions.every((q) => {
+    const ans = answers[q.question];
+    return (ans && ans.length > 0) || freeText[q.question]?.trim();
+  });
+
+  const handleToggleOption = (question: string, label: string, multi: boolean) => {
+    if (submitted) return;
+    setAnswers((prev) => {
+      const current = prev[question] || [];
+      if (multi) {
+        return {
+          ...prev,
+          [question]: current.includes(label)
+            ? current.filter((l) => l !== label)
+            : [...current, label],
+        };
+      }
+      return {
+        ...prev,
+        [question]: current.includes(label) ? [] : [label],
+      };
+    });
+  };
+
+  const handleSubmit = () => {
+    if (!onAnswerQuestions || submitted) return;
+    const result: Record<string, string> = {};
+    for (const q of questions) {
+      const ans = answers[q.question] || [];
+      const custom = freeText[q.question]?.trim() || "";
+      if (ans.length > 0) {
+        result[q.question] = ans.join(", ");
+      } else if (custom) {
+        result[q.question] = custom;
+      }
+    }
+    onAnswerQuestions(messageId, result);
+    setSubmitted(true);
+  };
+
+  if (submitted) {
+    return (
+      <div className="mt-3 pt-3 border-t border-[#2b2b2b]">
+        <div className="inline-flex items-center gap-1.5 text-[12px] text-[#3ecf8e]">
+          <CheckCircle2 className="h-3.5 w-3.5" strokeWidth={1.75} />
+          Answers sent
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-3 pt-3 border-t border-[#26405d]/60 space-y-4">
+      <div className="inline-flex items-center gap-1.5 text-[12px] text-[#8ec5ff] font-medium">
+        <MessageCircleQuestion className="h-3.5 w-3.5" strokeWidth={1.75} />
+        Clarifying questions
+      </div>
+      {questions.map((q, qi) => (
+        <div key={q.id || qi} className="space-y-2">
+          <p className="text-[13px] text-[#e4e4e4] leading-relaxed">
+            {q.header ? (
+              <span className="text-[11px] uppercase tracking-[0.08em] text-[#8ec5ff] block mb-1">
+                {q.header}
+              </span>
+            ) : null}
+            {q.question}
+          </p>
+          {q.options && q.options.length > 0 ? (
+            <div className="flex flex-wrap gap-2">
+              {q.options.map((opt) => {
+                const isSelected = (answers[q.question] || []).includes(opt.label);
+                return (
+                  <button
+                    key={opt.label}
+                    type="button"
+                    onClick={() =>
+                      handleToggleOption(q.question, opt.label, Boolean(q.multiSelect))
+                    }
+                    className={`px-3 py-1.5 rounded-lg border text-[12px] transition-colors text-left ${
+                      isSelected
+                        ? "border-[#4d9fff] bg-[#17202a] text-[#8ec5ff]"
+                        : "border-[#2b2b2b] bg-[#1a1a1a] text-[#b0b0b0] hover:border-[#3a3a3a]"
+                    }`}
+                  >
+                    <span className="font-medium">{opt.label}</span>
+                    {opt.description && (
+                      <span className="block text-[11px] text-[#6e6e6e] mt-0.5">
+                        {opt.description}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          ) : (
+            <textarea
+              className="w-full rounded-lg border border-[#2b2b2b] bg-[#141414] text-[13px] text-[#e4e4e4] placeholder-[#4a4a4a] px-3 py-2 resize-none focus:outline-none focus:border-[#4d9fff]/50"
+              rows={2}
+              placeholder="Your answer…"
+              value={freeText[q.question] || ""}
+              onChange={(e) =>
+                setFreeText((prev) => ({
+                  ...prev,
+                  [q.question]: e.target.value,
+                }))
+              }
+            />
+          )}
+          {q.multiSelect && q.options && q.options.length > 0 && (
+            <p className="text-[11px] text-[#6e6e6e]">Select all that apply</p>
+          )}
+          {q.options && q.options.length > 0 && (
+            <textarea
+              className="w-full rounded-lg border border-[#2b2b2b] bg-[#141414] text-[12px] text-[#b0b0b0] placeholder-[#3a3a3a] px-3 py-1.5 resize-none focus:outline-none focus:border-[#3a3a3a]"
+              rows={1}
+              placeholder="Or type a custom answer…"
+              value={freeText[q.question] || ""}
+              onChange={(e) =>
+                setFreeText((prev) => ({
+                  ...prev,
+                  [q.question]: e.target.value,
+                }))
+              }
+            />
+          )}
+        </div>
+      ))}
+      {onAnswerQuestions && (
+        <div className="flex items-center gap-2 pt-1">
+          <button
+            type="button"
+            disabled={!allAnswered}
+            onClick={handleSubmit}
+            className="h-8 px-4 rounded-lg border border-[#2a4a35] bg-[#1c2a22] text-[12px] text-[#7ddea8] hover:bg-[#243830] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          >
+            Send answers
+          </button>
+          <button
+            type="button"
+            onClick={() => onAnswerQuestions(messageId, {})}
+            className="h-8 px-3 rounded-lg border border-[#2b2b2b] bg-[#1a1a1a] text-[12px] text-[#6e6e6e] hover:text-[#a0a0a0] hover:bg-[#222] transition-colors"
+          >
+            Skip
+          </button>
+        </div>
+      )}
+    </div>
+  );
 }

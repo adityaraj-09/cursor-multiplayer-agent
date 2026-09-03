@@ -13,6 +13,7 @@ import type {
   CloudMeta,
   FileLease,
   Participant,
+
   PingInfo,
   RoomMemberInfo,
   TypingUser,
@@ -68,6 +69,11 @@ interface UseSocketReturn {
   decideApproval: (requestId: string, approved: boolean) => void;
   approvePlan: (messageId: string, agentId?: string) => void;
   dismissPlan: (messageId: string) => void;
+  revertChanges: (opts?: {
+    agentId?: string;
+    filePaths?: string[];
+    messageId?: string;
+  }) => void;
   flagReview: (payload: { note?: string; targetUserIds?: string[] }) => void;
   ackReview: (pingId: string) => void;
   dismissReview: (pingId: string) => void;
@@ -496,6 +502,20 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
       }
     };
 
+    const onChangesReverted = (payload: {
+      agentId?: string;
+      filePaths: string[];
+      messageId?: string;
+    }) => {
+      if (payload.messageId) {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === payload.messageId ? { ...m, reverted: true } : m,
+          ),
+        );
+      }
+    };
+
     void (async () => {
       let token: string | null = null;
       for (let i = 0; i < 10 && !cancelled; i++) {
@@ -552,6 +572,7 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
       s.on("context-receipt", onContextReceipt);
       s.on("context-stale", onContextStale);
       s.on("auto-memory-saved", onAutoMemorySaved);
+      s.on("changes-reverted", onChangesReverted);
     })();
 
     return () => {
@@ -573,6 +594,8 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
         attached.off("room-pings", onRoomPings);
         attached.off("review-flagged", onReviewFlagged);
         attached.off("review-acked", onReviewAcked);
+        attached.off("review-dismissed", onReviewDismissed);
+        attached.off("changes-reverted", onChangesReverted);
         attached.off("review-dismissed", onReviewDismissed);
         attached.off("agent-conflict-blocked", onConflictBlocked);
         attached.off("drive-requested", onDriveRequested);
@@ -719,6 +742,22 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
     socketRef.current?.emit("remove-member", userId);
   }, []);
 
+  const revertChanges = useCallback(
+    (
+      opts: {
+        agentId?: string;
+        filePaths?: string[];
+        messageId?: string;
+      } = {},
+    ) => {
+      socketRef.current?.emit("revert-changes", {
+        roomId,
+        ...opts,
+      });
+    },
+    [roomId],
+  );
+
   return {
     socket,
     connected,
@@ -745,6 +784,7 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
     cloudMeta,
     modelId,
     sendSteer,
+    revertChanges,
     notifyTyping,
     notifyTypingStop,
     requestDrive,

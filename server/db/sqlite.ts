@@ -100,6 +100,8 @@ db.exec(`
     tool_name TEXT,
     diff_patch TEXT,
     todos_json TEXT,
+    questions_json TEXT,
+    reverted INTEGER NOT NULL DEFAULT 0,
     status TEXT NOT NULL DEFAULT 'done',
     ts INTEGER NOT NULL,
     sender_user_id TEXT
@@ -302,6 +304,8 @@ const migrations = [
   `ALTER TABLE rooms ADD COLUMN auto_memory TEXT NOT NULL DEFAULT 'extract'`,
   `ALTER TABLE memory_entries ADD COLUMN source TEXT NOT NULL DEFAULT 'human'`,
   `ALTER TABLE agents ADD COLUMN auto_mem_cursor_ts INTEGER NOT NULL DEFAULT 0`,
+  `ALTER TABLE messages ADD COLUMN questions_json TEXT`,
+  `ALTER TABLE messages ADD COLUMN reverted INTEGER NOT NULL DEFAULT 0`,
 ];
 
 for (const sql of migrations) {
@@ -570,8 +574,8 @@ const stmts = {
     ORDER BY ts DESC LIMIT ?
   `),
   insertMessage: db.prepare(`
-    INSERT INTO messages (id, room_id, role, content, sender_name, sender_color, tool_name, diff_patch, todos_json, status, ts, agent_id, sender_user_id, plan_status, attachments_json)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO messages (id, room_id, role, content, sender_name, sender_color, tool_name, diff_patch, todos_json, status, ts, agent_id, sender_user_id, plan_status, attachments_json, questions_json, reverted)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `),
   updateMessagePlanStatus: db.prepare(
     `UPDATE messages SET plan_status = ? WHERE id = ?`,
@@ -585,8 +589,12 @@ const stmts = {
   updateMessageTool: db.prepare(
     `UPDATE messages SET content = ?, status = ?,
         diff_patch = COALESCE(?, diff_patch),
-        todos_json = COALESCE(?, todos_json)
+        todos_json = COALESCE(?, todos_json),
+        questions_json = COALESCE(?, questions_json)
      WHERE id = ?`,
+  ),
+  updateMessageReverted: db.prepare(
+    `UPDATE messages SET reverted = ? WHERE id = ?`,
   ),
   // Newest-first so LIMIT keeps recent history; reversed in getMessages().
   getMessages: db.prepare(`
@@ -1067,6 +1075,19 @@ function parseTodosJson(
   }
 }
 
+function parseQuestionsJson(
+  raw: string | null | undefined,
+): ChatMessage["questions"] {
+  if (!raw) return undefined;
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed) || parsed.length === 0) return undefined;
+    return parsed as NonNullable<ChatMessage["questions"]>;
+  } catch {
+    return undefined;
+  }
+}
+
 function rowToMessage(r: {
   id: string;
   room_id: string;
@@ -1083,6 +1104,8 @@ function rowToMessage(r: {
   sender_user_id?: string | null;
   plan_status?: string | null;
   attachments_json?: string | null;
+  questions_json?: string | null;
+  reverted?: number | null;
 }): ChatMessage {
   const planStatus =
     r.plan_status === "pending" ||
@@ -1106,6 +1129,8 @@ function rowToMessage(r: {
     senderUserId: r.sender_user_id || undefined,
     planStatus,
     attachments: parseAttachmentsJson(r.attachments_json),
+    questions: parseQuestionsJson(r.questions_json),
+    reverted: Boolean(r.reverted),
   };
 }
 
@@ -1314,6 +1339,8 @@ export function insertMessage(msg: ChatMessage): void {
     msg.senderUserId ?? null,
     msg.planStatus ?? null,
     msg.attachments?.length ? JSON.stringify(msg.attachments) : null,
+    msg.questions?.length ? JSON.stringify(msg.questions) : null,
+    msg.reverted ? 1 : 0,
   );
 }
 
@@ -1359,18 +1386,28 @@ export function updateMessageTool(
   opts: {
     diffPatch?: string;
     todos?: ChatMessage["todos"];
+    questions?: ChatMessage["questions"];
   } = {},
 ): void {
   const todosJson =
     opts.todos && opts.todos.length > 0 ? JSON.stringify(opts.todos) : null;
+  const questionsJson =
+    opts.questions && opts.questions.length > 0
+      ? JSON.stringify(opts.questions)
+      : null;
   // null keeps the previous column value (COALESCE in SQL).
   stmts.updateMessageTool.run(
     content,
     status,
     opts.diffPatch?.trim() ? opts.diffPatch : null,
     todosJson,
+    questionsJson,
     id,
   );
+}
+
+export function updateMessageReverted(id: string, reverted = true): void {
+  stmts.updateMessageReverted.run(reverted ? 1 : 0, id);
 }
 
 export function getMessages(roomId: string, limit = 500): ChatMessage[] {
