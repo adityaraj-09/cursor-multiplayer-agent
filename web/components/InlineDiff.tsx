@@ -67,8 +67,10 @@ export default function InlineDiff({
     <div
       className={
         hideHeader
-          ? "overflow-hidden bg-[#121212]"
-          : "rounded-md border border-[#2b2b2b] overflow-hidden bg-[#121212]"
+          ? `overflow-hidden bg-[#121212] ${alwaysOpen ? "h-full" : ""}`
+          : `rounded-md border border-[#2b2b2b] overflow-hidden bg-[#121212] ${
+              alwaysOpen ? "h-full" : ""
+            }`
       }
     >
       {showChrome && (
@@ -121,9 +123,9 @@ export default function InlineDiff({
       {open && (
         <div
           ref={containerRef}
-          className={`max-h-80 overflow-auto font-mono text-[11px] diff-container inline-diff ${
-            alwaysOpen ? "" : "border-t border-[#2b2b2b]"
-          }`}
+          className={`overflow-auto font-mono text-[11px] diff-container inline-diff ${
+            alwaysOpen ? "h-full" : "max-h-80"
+          } ${alwaysOpen ? "" : "border-t border-[#2b2b2b]"}`}
         />
       )}
     </div>

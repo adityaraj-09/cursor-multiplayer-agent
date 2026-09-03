@@ -1097,6 +1097,25 @@ function LiveRoom({
         <ToolDetailPanel
           message={selectedToolMessage}
           onClose={() => setSelectedToolMessageId(null)}
+          onRevert={
+            canManage &&
+            selectedToolMessage?.diffPatch &&
+            selectedToolMessage.status === "done" &&
+            !selectedToolMessage.reverted
+              ? () => {
+                  if (
+                    window.confirm(
+                      "Revert this file change? This discards the LLM edits for this tool call.",
+                    )
+                  ) {
+                    revertChanges({
+                      messageId: selectedToolMessage.id,
+                      agentId: selectedToolMessage.agentId,
+                    });
+                  }
+                }
+              : undefined
+          }
         />
         <SidePanel
           socket={socket}
@@ -1163,6 +1182,25 @@ function LiveRoom({
           message={selectedToolMessage}
           mobile
           onClose={() => setSelectedToolMessageId(null)}
+          onRevert={
+            canManage &&
+            selectedToolMessage?.diffPatch &&
+            selectedToolMessage.status === "done" &&
+            !selectedToolMessage.reverted
+              ? () => {
+                  if (
+                    window.confirm(
+                      "Revert this file change? This discards the LLM edits for this tool call.",
+                    )
+                  ) {
+                    revertChanges({
+                      messageId: selectedToolMessage.id,
+                      agentId: selectedToolMessage.agentId,
+                    });
+                  }
+                }
+              : undefined
+          }
         />
       )}
 

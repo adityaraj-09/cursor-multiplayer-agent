@@ -6,6 +6,7 @@ import {
   CheckCircle2,
   GitCompare,
   LoaderCircle,
+  Undo2,
   X,
 } from "lucide-react";
 import type { ChatMessage } from "../../shared/events";
@@ -20,12 +21,14 @@ interface ToolDetailPanelProps {
   message: ChatMessage | null;
   mobile?: boolean;
   onClose: () => void;
+  onRevert?: () => void;
 }
 
 export default function ToolDetailPanel({
   message,
   mobile = false,
   onClose,
+  onRevert,
 }: ToolDetailPanelProps) {
   const path = message ? resolveToolPath(message) : null;
   const category = message ? toolCategoryFor(message) : "other";
@@ -66,6 +69,17 @@ export default function ToolDetailPanel({
               </span>
             )}
             <StatusBadge status={message.status} />
+            {onRevert && !message.reverted && message.status === "done" && (
+              <button
+                type="button"
+                onClick={onRevert}
+                className="inline-flex h-7 items-center gap-1 px-2.5 rounded-lg text-[12px] text-[#a0a0a0] hover:text-[#f07070] border border-[#2b2b2b] shrink-0 transition-colors bg-[#1a1a1a]"
+                title="Revert this change"
+              >
+                <Undo2 className="h-3.5 w-3.5" strokeWidth={1.8} />
+                Revert
+              </button>
+            )}
             <button
               type="button"
               onClick={onClose}

@@ -510,6 +510,8 @@ function ToolCallRow({
   onRevert?: () => void;
 }) {
   const [revertConfirm, setRevertConfirm] = useState(false);
+  const canRevert = Boolean(onRevert) && !message.reverted;
+  const showRevertButton = canRevert && !revertConfirm;
   const hasDiff = Boolean(message.diffPatch);
   const path = resolveToolPath(message);
   const title = toolCallTitle(message);
@@ -526,7 +528,7 @@ function ToolCallRow({
             : message.reverted
               ? "border-[#2b2b2b] bg-[#151515] opacity-60"
               : "border-[#242424] bg-[#171717] hover:bg-[#1d1d1d]"
-        }`}
+        } ${showRevertButton ? "pr-20" : ""}`}
         aria-pressed={selected}
       >
         <div className="flex items-center gap-2.5">
@@ -567,7 +569,7 @@ function ToolCallRow({
           {!message.reverted && <ToolStatusText status={message.status} />}
         </div>
       </button>
-      {onRevert && !revertConfirm && (
+      {showRevertButton && (
         <button
           type="button"
           onClick={(e) => {
@@ -575,20 +577,20 @@ function ToolCallRow({
             setRevertConfirm(true);
           }}
           title="Revert this file change"
-          className="absolute right-2 top-1/2 -translate-y-1/2 hidden group-hover:flex items-center gap-1 text-[10px] text-[#a0a0a0] hover:text-[#f07070] bg-[#1a1a1a] border border-[#2b2b2b] rounded-md px-2 py-1 transition-colors"
+          className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1 text-[10px] text-[#a0a0a0] hover:text-[#f07070] bg-[#1a1a1a] border border-[#2b2b2b] rounded-md px-2 py-1 transition-colors"
         >
           <Undo2 className="h-3 w-3" strokeWidth={1.8} />
           Revert
         </button>
       )}
-      {onRevert && revertConfirm && (
+      {canRevert && revertConfirm && (
         <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1.5 bg-[#1a1a1a] border border-[#f07070]/50 rounded-md px-2 py-1">
           <span className="text-[10px] text-[#f07070]">Revert?</span>
           <button
             type="button"
             onClick={(e) => {
               e.stopPropagation();
-              onRevert();
+              onRevert?.();
               setRevertConfirm(false);
             }}
             className="text-[10px] text-[#f07070] hover:text-[#ff8080] font-medium"

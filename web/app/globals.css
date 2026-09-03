@@ -428,6 +428,12 @@ body {
   border-color: var(--border) !important;
   color: var(--text-muted) !important;
   font-size: 11px;
+  min-width: 46px !important;
+  width: 46px !important;
+  text-align: right;
+  padding-right: 8px !important;
+  box-sizing: border-box !important;
+  position: relative !important;
 }
 
 .diff-container .d2h-code-line,

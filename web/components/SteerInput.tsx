@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
   type FormEvent,
+  type DragEvent,
   type KeyboardEvent,
 } from "react";
 import {
@@ -85,6 +86,7 @@ export default function SteerInput({
   const [previews, setPreviews] = useState<Record<string, string>>({});
   const [uploading, setUploading] = useState(false);
   const [attachError, setAttachError] = useState("");
+  const [dragActive, setDragActive] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const lastTypingEmitRef = useRef(0);
   const idleStopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -196,6 +198,14 @@ export default function SteerInput({
     }
   };
 
+  const handleDrop = async (e: DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragActive(false);
+    if (!roomId) return;
+    await handleFiles(e.dataTransfer.files);
+  };
+
   const removeAttachment = (id: string) => {
     setAttachments((prev) => prev.filter((a) => a.id !== id));
     setPreviews((prev) => {
@@ -252,10 +262,29 @@ export default function SteerInput({
       className="px-3 sm:px-5 pb-3 sm:pb-4 pt-3"
     >
       <div
+        onDragEnter={(e) => {
+          e.preventDefault();
+          if (!canSteer) return;
+          setDragActive(true);
+        }}
+        onDragOver={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (!canSteer) return;
+          setDragActive(true);
+        }}
+        onDragLeave={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          setDragActive(false);
+        }}
+        onDrop={(e) => void handleDrop(e)}
         className={`rounded-2xl border bg-[#181818] transition-all shadow-[0_18px_55px_rgba(0,0,0,0.28)] overflow-hidden ${
           !connected
             ? "border-[#5a3a3a]"
-            : "border-[#2b2b2b] focus-within:border-[#4d9fff]/60 focus-within:shadow-[0_18px_70px_rgba(77,159,255,0.08)]"
+            : dragActive
+              ? "border-[#4d9fff]/70 shadow-[0_18px_70px_rgba(77,159,255,0.12)]"
+              : "border-[#2b2b2b] focus-within:border-[#4d9fff]/60 focus-within:shadow-[0_18px_70px_rgba(77,159,255,0.08)]"
         }`}
       >
         <div className="flex items-center gap-2 border-b border-[#2b2b2b]/80 px-3 h-9">
