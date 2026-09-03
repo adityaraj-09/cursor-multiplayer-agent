@@ -8,6 +8,7 @@ import type {
   RepoMapInfo,
   RoomContextSnapshot,
 } from "./roomContext.js";
+import type { WorkerPromptAttachment } from "./uploads.js";
 
 export type { ControlMode, RoomInviteRole, RoomRole } from "./roomPermissions.js";
 export type {
@@ -441,6 +442,8 @@ export interface ServerToWorkerEvents {
     backend?: AgentBackendKind;
     /** Plan vs agent mode for this run. */
     mode?: AgentMode;
+    /** Protocol 4+: user images/files to write into the worker cwd. */
+    attachments?: WorkerPromptAttachment[];
   }) => void;
   "worker:abort": (data: { roomId: string; agentId?: string }) => void;
   "worker:pick-folder": (data: { requestId: string }) => void;

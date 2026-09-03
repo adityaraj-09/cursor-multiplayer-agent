@@ -4,7 +4,7 @@ CLI worker for **Steer** — runs local **Cursor** and **Claude Code** agents on
 
 When you create a **Local** session in Steer, prompts are relayed to this worker, which executes `cursor agent` or `claude` against a folder on your machine.
 
-**Protocol 3** is required for Claude Code backends and multi-agent file locks. Install/update:
+**Protocol 4** is required to forward chat images/files into the local workspace. Install/update:
 
 ```bash
 npm i -g @oblivihon/steer@latest
@@ -88,6 +88,7 @@ While `steer start` is connected, the API can ask your machine to:
 - Open a native folder picker for Local session create
 - Run **Cursor** or **Claude Code** prompts in the selected repo and stream events back to the room
 - Stream tool results (including file paths and edit diffs) as each tool finishes so the web chat can group and inspect them
+- **Protocol 4+**: write chat images/files into `.steer-uploads/` in the repo so local agents can Read them
 - **Protocol 3+**: Claude Code backend + exclusive file locks before edit tools run (multi-agent conflict resolution)
 
 ## Development

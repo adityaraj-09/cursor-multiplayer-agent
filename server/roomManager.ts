@@ -62,12 +62,15 @@ import {
   parseAutoMemoryMode,
   sanitizeMemoryText,
 } from "../shared/roomContext.js";
+import { attachmentWorkspaceRelPath } from "../shared/uploads.js";
+import type { WorkerPromptAttachment } from "../shared/uploads.js";
 import {
   buildAttachmentPromptSuffix,
   materializeUploadsForAgent,
   resolveUploads,
   toAttachment,
   toPromptImages,
+  toWorkerAttachments,
   type PromptImage,
 } from "./uploads.js";
 import {
@@ -2037,7 +2040,16 @@ export class RoomManager {
     const sdkImages = toPromptImages(uploads);
     const canSendImages =
       agent.backend instanceof SdkAgentSession && sdkImages.length > 0;
-    const attachSuffix = buildAttachmentPromptSuffix(uploads, materialized, {
+    const promptFiles =
+      materialized.length > 0
+        ? materialized
+        : room.row.runtime === "local"
+          ? uploads.map((rec) => ({
+              rec,
+              agentPath: attachmentWorkspaceRelPath(rec.id, rec.name),
+            }))
+          : [];
+    const attachSuffix = buildAttachmentPromptSuffix(uploads, promptFiles, {
       imagesAttachedToMessage: canSendImages,
     });
 
@@ -2066,6 +2078,7 @@ export class RoomManager {
       canSendImages
         ? { text: promptWithAttr, images: sdkImages }
         : promptWithAttr,
+      toWorkerAttachments(uploads),
     );
   }
 
@@ -2197,6 +2210,7 @@ export class RoomManager {
     room: RoomState,
     agent: AgentState,
     prompt: AgentPrompt,
+    workerAttachments?: WorkerPromptAttachment[],
   ): boolean {
     if (!this.workerRelay) return false;
     if (room.row.auth_mode !== "cli") return false;
@@ -2494,6 +2508,7 @@ export class RoomManager {
         agent.cwd,
         agent.row.backend,
         agent.row.plan_mode ? "plan" : "agent",
+        workerAttachments,
       );
     } catch (err) {
       // Multi-agent CLI upgrade error
@@ -2578,6 +2593,7 @@ export class RoomManager {
     room: RoomState,
     agent: AgentState,
     prompt: AgentPrompt,
+    workerAttachments?: WorkerPromptAttachment[],
   ): Promise<void> {
     let nextPrompt: AgentPrompt = prompt;
     agent.runStartedAt = Date.now();
@@ -2609,7 +2625,8 @@ export class RoomManager {
       );
     }
 
-    if (this.tryDispatchToWorker(room, agent, nextPrompt)) return;
+    if (this.tryDispatchToWorker(room, agent, nextPrompt, workerAttachments))
+      return;
 
     // CLI rooms whose repo isn't on this host must use the worker
     if (

@@ -1,7 +1,12 @@
 import { mkdirSync, writeFileSync, readFileSync, unlinkSync, existsSync, readdirSync, statSync } from "fs";
-import { dirname, join, resolve } from "path";
+import { join, resolve } from "path";
 import { randomBytes } from "crypto";
 import type { ChatAttachment } from "../shared/events.js";
+import {
+  attachmentWorkspaceRelPath,
+  safeAttachmentFileName,
+  type WorkerPromptAttachment,
+} from "../shared/uploads.js";
 
 const TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_BYTES = 8 * 1024 * 1024;
@@ -53,10 +58,6 @@ function metaPath(filePath: string): string {
   return `${filePath}.json`;
 }
 
-function safeName(name: string): string {
-  return name.replace(/[^a-zA-Z0-9._-]+/g, "_").slice(0, 120) || "file";
-}
-
 export function guessMime(name: string, fallback = "application/octet-stream"): string {
   const ext = name.split(".").pop()?.toLowerCase() || "";
   return EXT_MIME[ext] || fallback;
@@ -85,7 +86,7 @@ export function saveUpload(opts: {
   const id = `upl_${randomBytes(8).toString("hex")}`;
   const dir = join(uploadsRoot(), opts.roomId);
   mkdirSync(dir, { recursive: true });
-  const path = join(dir, `${id}-${safeName(opts.name)}`);
+  const path = join(dir, `${id}-${safeAttachmentFileName(opts.name)}`);
   writeFileSync(path, opts.data);
   const rec: StoredUpload = {
     id,
@@ -168,12 +169,25 @@ export function materializeUploadsForAgent(
   const dest = join(cwd, ".steer-uploads");
   mkdirSync(dest, { recursive: true });
   return uploads.map((rec) => {
-    const agentPath = join(dest, `${rec.id}-${safeName(rec.name)}`);
+    const rel = attachmentWorkspaceRelPath(rec.id, rec.name);
+    const agentPath = join(cwd, rel);
     if (!existsSync(agentPath)) {
       writeFileSync(agentPath, readFileSync(rec.path));
     }
-    return { rec, agentPath };
+    return { rec, agentPath: rel.replace(/\\/g, "/") };
   });
+}
+
+export function toWorkerAttachments(
+  uploads: StoredUpload[],
+): WorkerPromptAttachment[] {
+  return uploads.map((rec) => ({
+    id: rec.id,
+    name: rec.name,
+    mime: rec.mime,
+    relPath: attachmentWorkspaceRelPath(rec.id, rec.name),
+    data: readUpload(rec).toString("base64"),
+  }));
 }
 
 export interface PromptImage {
@@ -255,6 +269,3 @@ export function purgeExpiredUploads(): void {
     }
   }
 }
-
-// Keep dirname referenced so tree-shaking doesn't drop the import if unused later.
-void dirname;
