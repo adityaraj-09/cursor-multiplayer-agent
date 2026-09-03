@@ -918,7 +918,7 @@ export async function integrateRoomAgent(
   agentId: string,
 ): Promise<{
   ok: true;
-  status: "started" | "queued";
+  status: "started" | "queued" | "pr_ready";
   integratorAgentId: string;
   integrationBranch: string;
   prUrl: string | null;

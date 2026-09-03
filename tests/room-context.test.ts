@@ -221,9 +221,14 @@ export default function RoomPage() { return null; }
       prompt: "fix the login button",
       isBaseline: true,
     });
-    const combined = prependPackedContext("fix the login button", packed);
+    const combined = prependPackedContext(
+      "fix the login button",
+      packed,
+      "<steer_git_rules>\nstay on your branch\n</steer_git_rules>",
+    );
     expect(combined.endsWith("fix the login button")).toBe(true);
     expect(combined).toContain("<steer_repo_map");
+    expect(combined.startsWith("<steer_git_rules>")).toBe(true);
     const imagePrompt = { text: "describe this", images: [{ url: "x" }] };
     expect({
       ...imagePrompt,

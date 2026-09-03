@@ -306,7 +306,10 @@ export function packRoomContext(input: PackInput): PackedContext {
 export function prependPackedContext(
   prompt: string,
   packed: PackedContext | null,
+  extraTrusted?: string | null,
 ): string {
-  if (!packed?.text.trim()) return prompt;
-  return `${packed.text}\n\n${prompt}`;
+  const parts = [extraTrusted?.trim(), packed?.text.trim(), prompt].filter(
+    Boolean,
+  ) as string[];
+  return parts.join("\n\n");
 }

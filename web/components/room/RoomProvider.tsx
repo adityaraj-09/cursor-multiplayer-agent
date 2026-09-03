@@ -607,8 +607,15 @@ export default function RoomProvider({
           onRoomInfo({
             ...roomInfo,
             integrationBranch: result.integrationBranch,
-            integrationPrUrl: result.prUrl || roomInfo.integrationPrUrl,
-            integrationAgentId: result.integratorAgentId,
+            integrationPrUrl:
+              result.status === "pr_ready"
+                ? roomInfo.integrationPrUrl
+                : result.prUrl || roomInfo.integrationPrUrl,
+            prUrl: result.prUrl || roomInfo.prUrl,
+            integrationAgentId:
+              result.status === "pr_ready"
+                ? roomInfo.integrationAgentId
+                : result.integratorAgentId,
             integrationJob: result.job || roomInfo.integrationJob,
           });
         }
@@ -617,9 +624,11 @@ export default function RoomProvider({
             `Queued behind ${result.queuedBehind.label}’s integration`,
           );
         }
-        setSelectedAgentId(result.integratorAgentId);
-        setChatFilterAgentId(result.integratorAgentId);
-        setVisibleIds((prev) => pinVisibleId(prev, result.integratorAgentId));
+        if (result.status !== "pr_ready") {
+          setSelectedAgentId(result.integratorAgentId);
+          setChatFilterAgentId(result.integratorAgentId);
+          setVisibleIds((prev) => pinVisibleId(prev, result.integratorAgentId));
+        }
       } catch (err) {
         setActionError(
           err instanceof Error ? err.message : "Failed to integrate agent",

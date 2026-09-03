@@ -19,6 +19,45 @@ export interface BuildIntegratePromptInput {
   agents: IntegrateAgentSnapshot[];
 }
 
+export function isBaseBranch(branch: string | null | undefined, startingRef = "main"): boolean {
+  const head = branch?.trim().replace(/^origin\//, "");
+  const base = startingRef.trim().replace(/^origin\//, "") || "main";
+  if (!head) return false;
+  return head === base || head === "main" || head === "master";
+}
+
+export function liveFeatureAgents<T extends { kind?: string | null; status?: string | null }>(
+  agents: T[],
+): T[] {
+  return agents.filter(
+    (agent) => agent.kind !== "integrator" && agent.status !== "stopped",
+  );
+}
+
+/** Platform instructions for feature agents — equivalent of a per-agent cursor.md. */
+export function buildFeatureAgentGitRules(input: {
+  agentLabel: string;
+  assignedBranch?: string | null;
+  startingRef?: string | null;
+}): string {
+  const base = input.startingRef?.trim() || "main";
+  const assigned = input.assignedBranch?.trim();
+  const branchLine = assigned
+    ? `Your assigned feature branch is \`${assigned}\`. Stay on this branch for the entire session.`
+    : `Steer will create a dedicated feature branch for you. Stay on that branch for the entire session.`;
+  return [
+    `<steer_git_rules>`,
+    `You are feature agent “${input.agentLabel}” in a Steer room. A human will later click Integrate to combine agent branches.`,
+    branchLine,
+    `Never checkout, create, or push extra branches. If you already made another branch, merge that work back onto your assigned branch and stay there.`,
+    `Never push, merge, reset, or force-push to \`${base}\` (or main/master). Do not commit on \`${base}\`.`,
+    `Do not open a pull request targeting \`${base}\`. Integrate does that.`,
+    `Do not merge other agents’ feature branches or the room integration branch.`,
+    `Keep your work mergeable: small focused commits, no deleting unrelated files, no rewriting shared history.`,
+    `</steer_git_rules>`,
+  ].join("\n");
+}
+
 export function integrationBranchName(roomId: string, roomName?: string): string {
   const slug = slugifyBranchPart(roomName || "room", 20);
   const shortId = roomId.replace(/[^a-zA-Z0-9]/g, "").slice(0, 8) || "room";

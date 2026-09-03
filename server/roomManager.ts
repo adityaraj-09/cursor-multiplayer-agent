@@ -19,11 +19,14 @@ import {
   parseGithubRepoUrl,
 } from "./githubPr.js";
 import {
+  buildFeatureAgentGitRules,
   buildIntegratePrompt,
   buildIntegrationPrBody,
   buildIntegrationPrComment,
   featureAgentSnapshots,
   integrationBranchName,
+  isBaseBranch,
+  liveFeatureAgents,
 } from "./integration.js";
 import {
   dequeueNextIntegrationJob,
@@ -741,8 +744,7 @@ export class RoomManager {
           localCwd: row.runtime === "local" ? cwd : undefined,
           repoUrl: row.repo_url || undefined,
           startingRef: row.starting_ref || undefined,
-          autoCreatePR:
-            Boolean(row.auto_create_pr) || isIntegratorAgent(agentRow),
+          autoCreatePR: isIntegratorAgent(agentRow),
         });
       }
 
@@ -957,8 +959,7 @@ export class RoomManager {
       name: `${row.name}/${agentRow.label}`,
       repoUrl: row.repo_url?.trim() || "",
       startingRef: row.starting_ref || "main",
-      autoCreatePR:
-        Boolean(row.auto_create_pr) || isIntegratorAgent(agentRow),
+      autoCreatePR: isIntegratorAgent(agentRow),
       sessionId: agentRow.session_id,
       sandboxId: agentRow.sdk_agent_id,
       branch: agentRow.branch,
@@ -2812,6 +2813,13 @@ export class RoomManager {
       const skipBriefing =
         agent.seedContext === false && priorReceipts.length === 0;
       agent.seedContext = true;
+      const gitRules = isIntegratorAgent(agent.row)
+        ? ""
+        : buildFeatureAgentGitRules({
+            agentLabel: agent.row.label,
+            assignedBranch: agent.row.branch,
+            startingRef: room.row.starting_ref,
+          });
       if (!skipBriefing) {
         const packed = buildAgentBriefing({
           room: room.row,
@@ -2820,13 +2828,17 @@ export class RoomManager {
           touchedPaths: [...agent.touchedPaths],
           checkoutRoot: agent.cwd || room.row.repo_path,
         });
-        const text = prependPackedContext(promptText(prompt), packed);
+        const text = prependPackedContext(promptText(prompt), packed, gitRules);
         nextPrompt =
           typeof prompt === "string" ? text : { ...prompt, text };
         const receipts = db.listAgentContextReceipts(agent.row.id, 1);
         if (receipts[0]) {
           this.io.to(room.id).emit("context-receipt", toReceiptInfo(receipts[0]));
         }
+      } else if (gitRules) {
+        const text = prependPackedContext(promptText(prompt), null, gitRules);
+        nextPrompt =
+          typeof prompt === "string" ? text : { ...prompt, text };
       }
     } catch (err) {
       console.warn(
@@ -4064,7 +4076,7 @@ export class RoomManager {
         localCwd: row.runtime === "local" ? cwd : undefined,
         repoUrl: row.repo_url || undefined,
         startingRef: row.starting_ref || undefined,
-        autoCreatePR: Boolean(row.auto_create_pr) || asIntegrator,
+        autoCreatePR: asIntegrator,
         mode: agentRow.plan_mode ? "plan" : "agent",
       });
     }
@@ -5017,19 +5029,19 @@ export class RoomManager {
     return this.rooms.get(roomId);
   }
 
-  integrateAgent(
+  async integrateAgent(
     roomId: string,
     sourceAgentId: string,
     actorUserId: string,
-  ): {
+  ): Promise<{
     ok: true;
-    status: "started" | "queued";
+    status: "started" | "queued" | "pr_ready";
     integratorAgentId: string;
     integrationBranch: string;
     prUrl: string | null;
     queuedBehind?: { agentId: string; label: string };
     job: IntegrationJobInfo;
-  } {
+  }> {
     this.assertCanManage(roomId, actorUserId);
     const room = this.rooms.get(roomId);
     const row = db.getRoom(roomId);
@@ -5059,6 +5071,18 @@ export class RoomManager {
     }
     if (!row.repo_url?.trim()) {
       throw new Error("Integrate needs a GitHub repo URL on this room");
+    }
+    if (isBaseBranch(sourceBranch, row.starting_ref || "main")) {
+      throw new Error(
+        "This agent is on the base branch. It must work on its own feature branch before Integrate.",
+      );
+    }
+
+    const liveFeatures = liveFeatureAgents(
+      [...room.agents.values()].map((a) => a.row),
+    );
+    if (liveFeatures.length <= 1) {
+      return this.openDirectFeaturePr(room, source, actorUserId);
     }
 
     const integrationBranch =
@@ -5152,6 +5176,81 @@ export class RoomManager {
       integratorAgentId: integrator.row.id,
       integrationBranch,
       prUrl: row.integration_pr_url || null,
+      job: this.integrationJobInfo(room),
+    };
+  }
+
+  private async openDirectFeaturePr(
+    room: RoomState,
+    source: AgentState,
+    actorUserId: string,
+  ): Promise<{
+    ok: true;
+    status: "pr_ready";
+    integratorAgentId: string;
+    integrationBranch: string;
+    prUrl: string | null;
+    job: IntegrationJobInfo;
+  }> {
+    const token = githubTokenFromEnv();
+    const repoUrl = room.row.repo_url?.trim() || "";
+    const head = source.row.branch!.trim();
+    const base = room.row.starting_ref?.trim() || "main";
+    if (!token) {
+      throw new Error("GITHUB_TOKEN is required to open a pull request");
+    }
+    const parsed = parseGithubRepoUrl(repoUrl);
+    if (!parsed) {
+      throw new Error("Integrate needs an https://github.com/... repo URL");
+    }
+    const title = `[Steer] ${source.row.label} — ${room.row.name}`.slice(0, 100);
+    const body = [
+      `Pull request from Steer agent **${source.row.label}**.`,
+      ``,
+      `Head: \`${head}\` → \`${base}\``,
+      ``,
+      `This room has a single agent, so Integrate opened this PR directly instead of using the Integrator.`,
+      actorUserId ? `Requested by \`${actorUserId}\`.` : "",
+    ]
+      .filter((line) => line !== "")
+      .join("\n");
+    const pr = await ensurePullRequest({
+      owner: parsed.owner,
+      repo: parsed.repo,
+      title,
+      body,
+      head,
+      base,
+      token,
+    });
+    db.setAgentPr(source.row.id, pr.url, head);
+    db.setPrUrl(room.id, pr.url);
+    source.row.pr_url = pr.url;
+    room.row.pr_url = pr.url;
+    room.cloudMeta = { ...room.cloudMeta, prUrl: pr.url, branch: head };
+    this.io.to(room.id).emit("cloud-meta", room.cloudMeta);
+    this.broadcastAgents(room);
+    const sys: ChatMessage = {
+      id: nanoid(12),
+      roomId: room.id,
+      role: "system",
+      content: `Opened PR for ${source.row.label} (\`${head}\` → \`${base}\`): ${pr.url}`,
+      status: "done",
+      ts: Date.now(),
+      agentId: source.row.id,
+    };
+    db.insertMessage(sys);
+    this.io.to(room.id).emit("chat-message", sys);
+    this.emitIntegrationUpdated(room, {
+      sourceAgentId: source.row.id,
+      integratorAgentId: source.row.id,
+    });
+    return {
+      ok: true,
+      status: "pr_ready",
+      integratorAgentId: source.row.id,
+      integrationBranch: head,
+      prUrl: pr.url,
       job: this.integrationJobInfo(room),
     };
   }

@@ -19,6 +19,7 @@ export default function IntegrateButton({
   queuedBehind,
   disabled,
   compact,
+  singleAgent,
   onClick,
 }: {
   hasPr: boolean;
@@ -26,6 +27,7 @@ export default function IntegrateButton({
   queuedBehind?: string;
   disabled?: boolean;
   compact?: boolean;
+  singleAgent?: boolean;
   onClick: () => void;
 }) {
   const label =
@@ -35,7 +37,9 @@ export default function IntegrateButton({
         ? "Queued"
         : hasPr
           ? "Update PR"
-          : "Integrate";
+          : singleAgent
+            ? "Open PR"
+            : "Integrate";
   const title =
     state === "merging"
       ? "Integrator is merging this work"
@@ -44,8 +48,12 @@ export default function IntegrateButton({
           ? `Queued behind ${queuedBehind}’s integration`
           : "Queued behind the current integration"
         : hasPr
-          ? "Queue a merge of this agent into the existing integration PR"
-          : "Merge this agent into the integration branch and open a PR";
+          ? singleAgent
+            ? "Update this agent’s pull request to the base branch"
+            : "Queue a merge of this agent into the existing integration PR"
+          : singleAgent
+            ? "Open a pull request from this agent’s branch to the base branch"
+            : "Merge this agent into the integration branch and open a PR";
   const busy = state === "merging" || state === "queued";
   return (
     <button

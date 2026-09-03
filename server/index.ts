@@ -1073,7 +1073,7 @@ app.post("/api/rooms/:id/agents/:agentId/stop", requireAuth, async (req, res) =>
   }
 });
 
-app.post("/api/rooms/:id/agents/:agentId/integrate", requireAuth, (req, res) => {
+app.post("/api/rooms/:id/agents/:agentId/integrate", requireAuth, async (req, res) => {
   const id = routeParam(req.params.id);
   const agentId = routeParam(req.params.agentId);
   if (!roomManager.userCanAccessRoom(id, req.user!.id)) {
@@ -1081,7 +1081,7 @@ app.post("/api/rooms/:id/agents/:agentId/integrate", requireAuth, (req, res) => 
     return;
   }
   try {
-    const result = roomManager.integrateAgent(id, agentId, req.user!.id);
+    const result = await roomManager.integrateAgent(id, agentId, req.user!.id);
     res.json(result);
   } catch (err) {
     res.status(400).json({

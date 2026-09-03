@@ -172,7 +172,13 @@ export default function RoomChatPane() {
       onVisibleIdsChange={setVisibleIds}
       canIntegrate={canManage && Boolean(roomInfo?.repoUrl)}
       integrationJob={roomInfo?.integrationJob}
-      hasIntegrationPr={Boolean(roomInfo?.integrationPrUrl)}
+      hasIntegrationPr={Boolean(
+        roomInfo?.integrationPrUrl || roomInfo?.prUrl,
+      )}
+      singleAgent={
+        agents.filter((a) => isFeatureAgent(a) && a.status !== "stopped")
+          .length <= 1
+      }
       onIntegrate={(id) => void handleIntegrateAgent(id)}
     />
   ) : (
@@ -262,15 +268,21 @@ export default function RoomChatPane() {
               {roomInfo?.name || roomId}
             </h1>
             <AttentionBadge attention={attention} />
-            {roomInfo?.integrationPrUrl && (
+            {(roomInfo?.integrationPrUrl ||
+              selectedAgent?.prUrl ||
+              roomInfo?.prUrl) && (
               <a
-                href={roomInfo.integrationPrUrl}
+                href={
+                  roomInfo?.integrationPrUrl ||
+                  selectedAgent?.prUrl ||
+                  roomInfo?.prUrl
+                }
                 target="_blank"
                 rel="noreferrer"
                 className="hidden sm:inline-flex h-7 items-center px-2 rounded-md border border-[#26405d] bg-[#17202a] text-[10px] text-[#8ec5ff] hover:underline shrink-0"
-                title="Shared integration pull request"
+                title="Pull request"
               >
-                Integration PR
+                {roomInfo?.integrationPrUrl ? "Integration PR" : "Pull request"}
               </a>
             )}
             {agents.filter(isFeatureAgent).length > 1 && (
@@ -353,7 +365,16 @@ export default function RoomChatPane() {
               selectedAgent.branch &&
               !splitActive && (
                 <IntegrateButton
-                  hasPr={Boolean(roomInfo.integrationPrUrl)}
+                  hasPr={Boolean(
+                    roomInfo.integrationPrUrl ||
+                      selectedAgent.prUrl ||
+                      roomInfo.prUrl,
+                  )}
+                  singleAgent={
+                    agents.filter(
+                      (a) => isFeatureAgent(a) && a.status !== "stopped",
+                    ).length <= 1
+                  }
                   state={integrateButtonState(
                     selectedAgent.id,
                     roomInfo.integrationJob,

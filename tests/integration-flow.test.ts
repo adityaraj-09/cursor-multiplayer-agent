@@ -2,11 +2,14 @@ import { describe, expect, it } from "vitest";
 import { randomUUID } from "crypto";
 import { isFeatureAgent, isIntegratorAgent } from "../shared/events.js";
 import {
+  buildFeatureAgentGitRules,
   buildIntegratePrompt,
   buildIntegrationPrBody,
   buildIntegrationPrComment,
   featureAgentSnapshots,
   integrationBranchName,
+  isBaseBranch,
+  liveFeatureAgents,
 } from "../server/integration.js";
 import {
   dequeueNextIntegrationJob,
@@ -100,6 +103,27 @@ describe("integration helpers", () => {
     expect(body).toContain("feat/b");
     expect(body).toContain("(just merged)");
     expect(body).not.toContain("Integrator");
+  });
+
+  it("tells feature agents to stay on one branch and not PR main", () => {
+    const rules = buildFeatureAgentGitRules({
+      agentLabel: "Agent A",
+      assignedBranch: "steer/claude-a-1",
+      startingRef: "main",
+    });
+    expect(rules).toContain("<steer_git_rules>");
+    expect(rules).toContain("steer/claude-a-1");
+    expect(rules).toContain("Do not open a pull request targeting `main`");
+    expect(rules).toContain("Never push");
+    expect(isBaseBranch("main", "main")).toBe(true);
+    expect(isBaseBranch("steer/claude-a", "main")).toBe(false);
+    expect(
+      liveFeatureAgents([
+        { kind: "feature", status: "idle" },
+        { kind: "integrator", status: "idle" },
+        { kind: "feature", status: "stopped" },
+      ]).length,
+    ).toBe(1);
   });
 
   it("asks humans to spot-check the resolution on the PR comment", () => {

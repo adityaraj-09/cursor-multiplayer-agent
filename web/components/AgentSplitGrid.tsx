@@ -68,6 +68,7 @@ export default function AgentSplitGrid({
   canIntegrate,
   integrationJob,
   hasIntegrationPr,
+  singleAgent,
   onIntegrate,
 }: {
   agents: AgentInfo[];
@@ -95,6 +96,7 @@ export default function AgentSplitGrid({
   canIntegrate?: boolean;
   integrationJob?: IntegrationJobInfo | null;
   hasIntegrationPr?: boolean;
+  singleAgent?: boolean;
   onIntegrate?: (agentId: string) => void;
 }) {
   const liveAgents = useMemo(
@@ -186,7 +188,8 @@ export default function AgentSplitGrid({
                   Boolean(agent.branch) && (
                     <IntegrateButton
                       compact
-                      hasPr={Boolean(hasIntegrationPr)}
+                      hasPr={Boolean(hasIntegrationPr || agent.prUrl)}
+                      singleAgent={singleAgent}
                       state={integrateButtonState(agent.id, integrationJob)}
                       queuedBehind={integrationJob?.sourceLabel}
                       disabled={status === "running"}

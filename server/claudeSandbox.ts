@@ -380,9 +380,33 @@ export class ClaudeSandboxSession {
     }
   }
 
+  private async ensureAssignedBranch(sbx: Sandbox): Promise<void> {
+    if (!this.branch) return;
+    const current = await sbx.commands.run(`git rev-parse --abbrev-ref HEAD`, {
+      cwd: REPO_DIR,
+      timeoutMs: 15_000,
+    });
+    const head = current.stdout?.trim();
+    if (!head || head === this.branch || head === "HEAD") return;
+    await sbx.commands.run(
+      [
+        `git checkout ${shellQuote(this.branch)} || git checkout -B ${shellQuote(this.branch)}`,
+        `git merge --no-edit ${shellQuote(head)} || true`,
+      ].join(" && "),
+      { cwd: REPO_DIR, timeoutMs: 60_000 },
+    );
+  }
+
   private async finalizeGit(sbx: Sandbox): Promise<RunGitInfo | undefined> {
     const parsed = parseGithubRepoUrl(this.config.repoUrl);
     if (!parsed || !this.branch) return undefined;
+    const base = this.config.startingRef?.trim() || "main";
+    if (this.branch === base || this.branch === "main" || this.branch === "master") {
+      throw new Error(
+        `Refusing to push base branch ${this.branch}. Feature agents must stay on their assigned branch.`,
+      );
+    }
+    await this.ensureAssignedBranch(sbx);
 
     const status = await sbx.commands.run(
       `git status --porcelain`,
@@ -436,7 +460,6 @@ export class ClaudeSandboxSession {
       );
     }
 
-    const base = this.config.startingRef?.trim() || "main";
     let prUrl = this.prUrl || undefined;
 
     if (this.config.autoCreatePR && !prUrl) {
