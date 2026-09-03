@@ -28,8 +28,10 @@ import {
   closeVisibleId,
   pinVisibleId,
   readBroadcastEnabled,
+  readRoomViewPrefs,
   syncVisibleIds,
   writeBroadcastEnabled,
+  writeRoomViewPrefs,
 } from "../../lib/splitViewSettings";
 import type {
   ApprovalMode,
@@ -172,34 +174,55 @@ export default function RoomProvider({
   const [changesOpen, setChangesOpen] = useState(false);
   const [memoryOpen, setMemoryOpen] = useState(false);
   const [addAgentOpen, setAddAgentOpen] = useState(false);
-  const [selectedToolMessageId, setSelectedToolMessageId] = useState<
-    string | null
-  >(null);
   const [cursorSessionError, setCursorSessionError] = useState("");
   const [savingCursorSession, setSavingCursorSession] = useState(false);
   const [actionError, setActionError] = useState("");
   const [stopping, setStopping] = useState(false);
   const [aborting, setAborting] = useState(false);
-  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
-  const [chatFilterAgentId, setChatFilterAgentId] = useState<string | null>(
-    null,
+  const storedView = readRoomViewPrefs(roomId);
+  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(
+    () => storedView.selectedAgentId ?? null,
   );
-  const [viewMode, setViewMode] = useState<"tabs" | "split">("split");
-  const [visibleIds, setVisibleIds] = useState<string[]>([]);
+  const [chatFilterAgentId, setChatFilterAgentId] = useState<string | null>(
+    () =>
+      storedView.chatFilterAgentId === undefined
+        ? null
+        : storedView.chatFilterAgentId,
+  );
+  const [viewMode, setViewMode] = useState<"tabs" | "split">(
+    () => storedView.viewMode || "split",
+  );
+  const [visibleIds, setVisibleIds] = useState<string[]>(
+    () => storedView.visibleIds || [],
+  );
   const [broadcastEnabled, setBroadcastEnabled] = useState(true);
   const [splitViewMenuOpen, setSplitViewMenuOpen] = useState(false);
+  const [prefsReady, setPrefsReady] = useState(false);
   const splitViewRef = useRef<HTMLDivElement>(null);
   const [seenMessageCount, setSeenMessageCount] = useState(0);
   const historyPrimedRef = useRef(false);
 
   useEffect(() => {
-    if (!agents.length) return;
-    if (!selectedAgentId || !agents.some((a) => a.id === selectedAgentId)) {
-      const first = agents.find((a) => a.status !== "stopped") || agents[0];
-      const frame = requestAnimationFrame(() => setSelectedAgentId(first.id));
-      return () => cancelAnimationFrame(frame);
+    const prefs = readRoomViewPrefs(roomId);
+    if (prefs.viewMode) setViewMode(prefs.viewMode);
+    if (prefs.visibleIds?.length) setVisibleIds(prefs.visibleIds);
+    if (prefs.selectedAgentId) setSelectedAgentId(prefs.selectedAgentId);
+    if (prefs.chatFilterAgentId !== undefined) {
+      setChatFilterAgentId(prefs.chatFilterAgentId);
     }
-  }, [agents, selectedAgentId]);
+    setPrefsReady(true);
+  }, [roomId]);
+
+  useEffect(() => {
+    if (!agents.length) return;
+    if (selectedAgentId && agents.some((a) => a.id === selectedAgentId)) return;
+    const storedId = readRoomViewPrefs(roomId).selectedAgentId;
+    const next =
+      (storedId && agents.some((a) => a.id === storedId) && storedId) ||
+      (agents.find((a) => a.status !== "stopped") || agents[0]).id;
+    const frame = requestAnimationFrame(() => setSelectedAgentId(next));
+    return () => cancelAnimationFrame(frame);
+  }, [agents, selectedAgentId, roomId]);
 
   const selectedAgent =
     agents.find((a) => a.id === selectedAgentId) || agents[0] || null;
@@ -217,24 +240,6 @@ export default function RoomProvider({
         : agentStatus);
   const selectedDiff =
     (selectedAgentId && diffByAgent[selectedAgentId]) || lastDiff;
-  const selectedToolMessage =
-    messages.find((m) => m.id === selectedToolMessageId && m.role === "tool") ||
-    null;
-
-  useEffect(() => {
-    if (!selectedToolMessageId) return;
-    if (!selectedToolMessage) {
-      setSelectedToolMessageId(null);
-      return;
-    }
-    if (
-      chatFilterAgentId &&
-      selectedToolMessage.agentId &&
-      selectedToolMessage.agentId !== chatFilterAgentId
-    ) {
-      setSelectedToolMessageId(null);
-    }
-  }, [chatFilterAgentId, selectedToolMessage, selectedToolMessageId]);
 
   const amDrivingSelected =
     Boolean(selectedAgentId && drivingAgentIds.includes(selectedAgentId)) ||
@@ -262,8 +267,32 @@ export default function RoomProvider({
   }, []);
 
   useEffect(() => {
-    setVisibleIds((prev) => syncVisibleIds(prev, splitPoolIds));
-  }, [splitPoolIds]);
+    setVisibleIds((prev) => {
+      const stored = readRoomViewPrefs(roomId).visibleIds || [];
+      return syncVisibleIds(prev.length ? prev : stored, splitPoolIds);
+    });
+  }, [splitPoolIds, roomId]);
+
+  useEffect(() => {
+    if (!prefsReady) return;
+    if (!splitPoolIds.length) return;
+    writeRoomViewPrefs(roomId, {
+      viewMode,
+      visibleIds: visibleIds.length
+        ? visibleIds
+        : readRoomViewPrefs(roomId).visibleIds,
+      selectedAgentId,
+      chatFilterAgentId,
+    });
+  }, [
+    prefsReady,
+    roomId,
+    viewMode,
+    visibleIds,
+    selectedAgentId,
+    chatFilterAgentId,
+    splitPoolIds.length,
+  ]);
 
   useEffect(() => {
     if (!splitActive) setSplitViewMenuOpen(false);
@@ -708,28 +737,6 @@ export default function RoomProvider({
     [messages, sendSteer],
   );
 
-  const canRevertSelectedTool = Boolean(
-    canManage &&
-      selectedToolMessage?.diffPatch &&
-      selectedToolMessage.status === "done" &&
-      !selectedToolMessage.reverted,
-  );
-
-  const handleRevertToolMessage = useCallback(() => {
-    if (!selectedToolMessage || !canRevertSelectedTool) return;
-    if (
-      !window.confirm(
-        "Revert this file change? This discards the LLM edits for this tool call.",
-      )
-    ) {
-      return;
-    }
-    revertChanges({
-      messageId: selectedToolMessage.id,
-      agentId: selectedToolMessage.agentId,
-    });
-  }, [canRevertSelectedTool, revertChanges, selectedToolMessage]);
-
   const attention = computeRoomAttention({
     pendingApprovals,
     openPings: relevantPings,
@@ -832,8 +839,6 @@ export default function RoomProvider({
         setMemoryOpen,
         addAgentOpen,
         setAddAgentOpen,
-        selectedToolMessageId,
-        setSelectedToolMessageId,
         cursorSessionError,
         savingCursorSession,
         actionError,
@@ -856,7 +861,6 @@ export default function RoomProvider({
         selectedModelId,
         selectedStatus,
         selectedDiff,
-        selectedToolMessage,
         amDrivingSelected,
         canSteerSelected,
         steerLockReason,
@@ -887,8 +891,6 @@ export default function RoomProvider({
         handleDecideApproval,
         handleExport,
         handleAnswerQuestions,
-        handleRevertToolMessage,
-        canRevertSelectedTool,
       }}
     >
       {children}

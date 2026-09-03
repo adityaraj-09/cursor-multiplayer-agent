@@ -52,8 +52,6 @@ export default function AgentSplitGrid({
   models,
   canManage,
   savingModel,
-  selectedToolMessageId,
-  onSelectToolMessage,
   onSend,
   onTyping,
   onTypingStop,
@@ -77,8 +75,6 @@ export default function AgentSplitGrid({
   models: ModelInfo[];
   canManage: boolean;
   savingModel: boolean;
-  selectedToolMessageId?: string | null;
-  onSelectToolMessage?: (message: ChatMessage) => void;
   onSend: (text: string, agentId: string, attachmentIds?: string[]) => void;
   onTyping?: (agentId: string) => void;
   onTypingStop?: (agentId?: string) => void;
@@ -208,8 +204,6 @@ export default function AgentSplitGrid({
                 canApprovePlan={canSteer}
                 onApprovePlan={onApprovePlan}
                 onDismissPlan={onDismissPlan}
-                selectedToolMessageId={selectedToolMessageId}
-                onSelectToolMessage={onSelectToolMessage}
                 onAnswerQuestions={onAnswerQuestions}
                 onRevertMessage={onRevertMessage}
               />

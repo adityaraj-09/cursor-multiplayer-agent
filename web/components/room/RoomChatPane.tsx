@@ -21,7 +21,6 @@ import DriverControls from "../DriverControls";
 import AgentTabs from "../AgentTabs";
 import AgentSplitGrid from "../AgentSplitGrid";
 import SplitViewMenu from "../SplitViewMenu";
-import ToolDetailPanel from "../ToolDetailPanel";
 import LockPanel from "../LockPanel";
 import ReviewPingBanner from "../ReviewPingBanner";
 import AttentionBadge from "../board/AttentionBadge";
@@ -29,7 +28,6 @@ import {
   formatTypingIndicator,
   formatTypingIndicatorAll,
 } from "../../../shared/typing";
-import type { ChatMessage } from "../../../shared/events";
 import { useRoomContext } from "./RoomContext";
 
 export default function RoomChatPane() {
@@ -80,8 +78,6 @@ export default function RoomChatPane() {
     setSettingsOpen,
     setAddAgentOpen,
     setMemoryOpen,
-    selectedToolMessageId,
-    setSelectedToolMessageId,
     cursorSessionError,
     savingCursorSession,
     actionError,
@@ -102,7 +98,6 @@ export default function RoomChatPane() {
     selectedBackend,
     selectedModelId,
     selectedStatus,
-    selectedToolMessage,
     amDrivingSelected,
     canSteerSelected,
     steerLockReason,
@@ -124,8 +119,6 @@ export default function RoomChatPane() {
     handleForceRelease,
     handleDecideApproval,
     handleAnswerQuestions,
-    handleRevertToolMessage,
-    canRevertSelectedTool,
     conflicts,
     fileLocks,
     lastBlocked,
@@ -158,10 +151,6 @@ export default function RoomChatPane() {
       models={models}
       canManage={canManage}
       savingModel={savingModel}
-      selectedToolMessageId={selectedToolMessageId}
-      onSelectToolMessage={(message: ChatMessage) =>
-        setSelectedToolMessageId(message.id)
-      }
       onSend={(text, agentId, attachmentIds) =>
         sendSteer(text, agentId, attachmentIds)
       }
@@ -189,10 +178,6 @@ export default function RoomChatPane() {
       canApprovePlan={canSteerSelected}
       onApprovePlan={(messageId, agentId) => approvePlan(messageId, agentId)}
       onDismissPlan={(messageId) => dismissPlan(messageId)}
-      selectedToolMessageId={selectedToolMessageId}
-      onSelectToolMessage={(message: ChatMessage) =>
-        setSelectedToolMessageId(message.id)
-      }
       onAnswerQuestions={handleAnswerQuestions}
       onRevertMessage={(messageId, agentId) => {
         revertChanges({ messageId, agentId });
@@ -462,16 +447,6 @@ export default function RoomChatPane() {
           )}
           {chat}
         </div>
-
-        {!splitActive && (
-          <ToolDetailPanel
-            message={selectedToolMessage}
-            onClose={() => setSelectedToolMessageId(null)}
-            onRevert={
-              canRevertSelectedTool ? handleRevertToolMessage : undefined
-            }
-          />
-        )}
       </main>
 
       {splitActive &&

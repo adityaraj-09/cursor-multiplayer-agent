@@ -3,7 +3,6 @@
 import AgentTabs from "../AgentTabs";
 import SidePanel from "../SidePanel";
 import ContextPanel from "../ContextPanel";
-import ToolDetailPanel from "../ToolDetailPanel";
 import RoomSettingsDialog from "../RoomSettingsDialog";
 import InvitePanel from "../InvitePanel";
 import FlagForReviewDialog from "../FlagForReviewDialog";
@@ -65,8 +64,6 @@ export default function RoomDrawers() {
     setMemoryOpen,
     addAgentOpen,
     setAddAgentOpen,
-    selectedToolMessage,
-    setSelectedToolMessageId,
     stopping,
     selectedAgentId,
     setSelectedAgentId,
@@ -90,8 +87,6 @@ export default function RoomDrawers() {
     handleExport,
     handleStopSession,
     handleAddAgent,
-    handleRevertToolMessage,
-    canRevertSelectedTool,
   } = useRoomContext();
 
   return (
@@ -134,17 +129,6 @@ export default function RoomDrawers() {
           agentId={selectedAgentId}
           mobile
           onClose={() => setChangesOpen(false)}
-        />
-      )}
-
-      {selectedToolMessage && (
-        <ToolDetailPanel
-          message={selectedToolMessage}
-          mobile
-          onClose={() => setSelectedToolMessageId(null)}
-          onRevert={
-            canRevertSelectedTool ? handleRevertToolMessage : undefined
-          }
         />
       )}
 

@@ -123,8 +123,6 @@ export type RoomContextValue = {
   setMemoryOpen: Dispatch<SetStateAction<boolean>>;
   addAgentOpen: boolean;
   setAddAgentOpen: Dispatch<SetStateAction<boolean>>;
-  selectedToolMessageId: string | null;
-  setSelectedToolMessageId: Dispatch<SetStateAction<string | null>>;
   cursorSessionError: string;
   savingCursorSession: boolean;
   actionError: string;
@@ -147,7 +145,6 @@ export type RoomContextValue = {
   selectedModelId: string;
   selectedStatus: AgentRunStatus;
   selectedDiff: string;
-  selectedToolMessage: ChatMessage | null;
   amDrivingSelected: boolean;
   canSteerSelected: boolean;
   steerLockReason: string | null;
@@ -190,8 +187,6 @@ export type RoomContextValue = {
     messageId: string,
     answers: Record<string, string>,
   ) => void;
-  handleRevertToolMessage: () => void;
-  canRevertSelectedTool: boolean;
 };
 
 const RoomContext = createContext<RoomContextValue | null>(null);

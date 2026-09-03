@@ -29,7 +29,7 @@ import type {
 } from "../../shared/events";
 import { fetchRoomUploadBlob } from "../lib/api";
 import Markdown from "./Markdown";
-import { countDiffLines } from "./InlineDiff";
+import InlineDiff, { countDiffLines } from "./InlineDiff";
 import TodoCard, { coalesceTodoMessages, messageHasTodos } from "./TodoCard";
 import {
   groupToolMessages,
@@ -49,8 +49,6 @@ interface ChatPanelProps {
   canApprovePlan?: boolean;
   onApprovePlan?: (messageId: string, agentId?: string) => void;
   onDismissPlan?: (messageId: string) => void;
-  selectedToolMessageId?: string | null;
-  onSelectToolMessage?: (message: ChatMessage) => void;
   /** Called when user submits answers to clarifying questions. */
   onAnswerQuestions?: (messageId: string, answers: Record<string, string>) => void;
   /** Called when user triggers a revert of LLM changes. */
@@ -107,8 +105,6 @@ export default function ChatPanel({
   canApprovePlan = false,
   onApprovePlan,
   onDismissPlan,
-  selectedToolMessageId = null,
-  onSelectToolMessage,
   onAnswerQuestions,
   onRevertMessage,
 }: ChatPanelProps) {
@@ -288,8 +284,6 @@ export default function ChatPanel({
                   key={item.key}
                   messages={item.messages}
                   agentLabel={agentLabel(item.messages[0]?.agentId)}
-                  selectedToolMessageId={selectedToolMessageId}
-                  onSelectToolMessage={onSelectToolMessage}
                   onRevertMessage={onRevertMessage}
                 />
               );
@@ -323,14 +317,10 @@ export default function ChatPanel({
 function ToolCallGroup({
   messages,
   agentLabel,
-  selectedToolMessageId,
-  onSelectToolMessage,
   onRevertMessage,
 }: {
   messages: ChatMessage[];
   agentLabel?: string;
-  selectedToolMessageId?: string | null;
-  onSelectToolMessage?: (message: ChatMessage) => void;
   onRevertMessage?: (messageId: string, agentId?: string) => void;
 }) {
   const anyStreaming = messages.some((m) => m.status === "streaming");
@@ -391,8 +381,6 @@ function ToolCallGroup({
               label={group.label}
               description={group.description}
               messages={group.messages}
-              selectedToolMessageId={selectedToolMessageId}
-              onSelectToolMessage={onSelectToolMessage}
               onRevertMessage={onRevertMessage}
             />
           ))}
@@ -422,16 +410,12 @@ function ToolTypeSection({
   label,
   description,
   messages,
-  selectedToolMessageId,
-  onSelectToolMessage,
   onRevertMessage,
 }: {
   groupKey: ToolCategoryKey;
   label: string;
   description: string;
   messages: ChatMessage[];
-  selectedToolMessageId?: string | null;
-  onSelectToolMessage?: (message: ChatMessage) => void;
   onRevertMessage?: (messageId: string, agentId?: string) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -483,8 +467,6 @@ function ToolTypeSection({
             <ToolCallRow
               key={msg.id}
               message={msg}
-              selected={selectedToolMessageId === msg.id}
-              onSelect={onSelectToolMessage}
               onRevert={
                 onRevertMessage && msg.diffPatch && msg.status === "done" && !msg.reverted
                   ? () => onRevertMessage(msg.id, msg.agentId)
@@ -500,15 +482,12 @@ function ToolTypeSection({
 
 function ToolCallRow({
   message,
-  selected,
-  onSelect,
   onRevert,
 }: {
   message: ChatMessage;
-  selected?: boolean;
-  onSelect?: (message: ChatMessage) => void;
   onRevert?: () => void;
 }) {
+  const [expanded, setExpanded] = useState(false);
   const [revertConfirm, setRevertConfirm] = useState(false);
   const canRevert = Boolean(onRevert) && !message.reverted;
   const showRevertButton = canRevert && !revertConfirm;
@@ -516,20 +495,21 @@ function ToolCallRow({
   const path = resolveToolPath(message);
   const title = toolCallTitle(message);
   const tool = normalizeToolName(message.toolName);
+  const hasDetails = Boolean(message.diffPatch || message.content);
 
   return (
     <div className="relative group">
       <button
         type="button"
-        onClick={() => onSelect?.(message)}
+        onClick={() => setExpanded((open) => !open)}
         className={`w-full rounded-lg border px-3 py-2 text-left transition-colors ${
-          selected
+          expanded
             ? "border-[#26405d] bg-[#17202a]/80"
             : message.reverted
               ? "border-[#2b2b2b] bg-[#151515] opacity-60"
               : "border-[#242424] bg-[#171717] hover:bg-[#1d1d1d]"
         } ${showRevertButton ? "pr-20" : ""}`}
-        aria-pressed={selected}
+        aria-expanded={expanded}
       >
         <div className="flex items-center gap-2.5">
           {hasDiff ? (
@@ -567,6 +547,9 @@ function ToolCallRow({
           )}
           {hasDiff && message.diffPatch && !message.reverted && <DiffStats patch={message.diffPatch} />}
           {!message.reverted && <ToolStatusText status={message.status} />}
+          {hasDetails && (
+            <Chevron open={expanded} />
+          )}
         </div>
       </button>
       {showRevertButton && (
@@ -577,14 +560,14 @@ function ToolCallRow({
             setRevertConfirm(true);
           }}
           title="Revert this file change"
-          className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1 text-[10px] text-[#a0a0a0] hover:text-[#f07070] bg-[#1a1a1a] border border-[#2b2b2b] rounded-md px-2 py-1 transition-colors"
+          className="absolute right-2 top-3 flex items-center gap-1 text-[10px] text-[#a0a0a0] hover:text-[#f07070] bg-[#1a1a1a] border border-[#2b2b2b] rounded-md px-2 py-1 transition-colors"
         >
           <Undo2 className="h-3 w-3" strokeWidth={1.8} />
           Revert
         </button>
       )}
       {canRevert && revertConfirm && (
-        <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1.5 bg-[#1a1a1a] border border-[#f07070]/50 rounded-md px-2 py-1">
+        <div className="absolute right-2 top-3 flex items-center gap-1.5 bg-[#1a1a1a] border border-[#f07070]/50 rounded-md px-2 py-1">
           <span className="text-[10px] text-[#f07070]">Revert?</span>
           <button
             type="button"
@@ -608,6 +591,21 @@ function ToolCallRow({
           >
             No
           </button>
+        </div>
+      )}
+      {expanded && (
+        <div className="mt-1.5 rounded-lg border border-[#2b2b2b] overflow-hidden bg-[#121212]">
+          {message.diffPatch ? (
+            <InlineDiff patch={message.diffPatch} defaultOpen hideHeader />
+          ) : message.content ? (
+            <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words p-3 text-[12px] leading-relaxed text-[#cfcfcf] font-mono">
+              {message.content}
+            </pre>
+          ) : (
+            <p className="px-3 py-2 text-[11px] text-[#6e6e6e]">
+              No additional details for this tool call.
+            </p>
+          )}
         </div>
       )}
     </div>

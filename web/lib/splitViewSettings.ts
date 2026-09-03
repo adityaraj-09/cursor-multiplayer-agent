@@ -1,6 +1,58 @@
 export const BROADCAST_KEY = "steer-broadcast-enabled";
 export const MAX_VISIBLE_SPLIT_PANES = 4;
 
+export type RoomViewPrefs = {
+  viewMode?: "tabs" | "split";
+  visibleIds?: string[];
+  selectedAgentId?: string | null;
+  chatFilterAgentId?: string | null;
+};
+
+function roomViewKey(roomId: string): string {
+  return `steer:roomView:${roomId}`;
+}
+
+export function readRoomViewPrefs(roomId: string): RoomViewPrefs {
+  if (typeof window === "undefined" || !roomId) return {};
+  try {
+    const raw = window.localStorage.getItem(roomViewKey(roomId));
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as RoomViewPrefs;
+    if (!parsed || typeof parsed !== "object") return {};
+    const viewMode =
+      parsed.viewMode === "tabs" || parsed.viewMode === "split"
+        ? parsed.viewMode
+        : undefined;
+    const visibleIds = Array.isArray(parsed.visibleIds)
+      ? parsed.visibleIds.filter((id): id is string => typeof id === "string")
+      : undefined;
+    return {
+      viewMode,
+      visibleIds,
+      selectedAgentId:
+        typeof parsed.selectedAgentId === "string" || parsed.selectedAgentId === null
+          ? parsed.selectedAgentId
+          : undefined,
+      chatFilterAgentId:
+        typeof parsed.chatFilterAgentId === "string" ||
+        parsed.chatFilterAgentId === null
+          ? parsed.chatFilterAgentId
+          : undefined,
+    };
+  } catch {
+    return {};
+  }
+}
+
+export function writeRoomViewPrefs(roomId: string, prefs: RoomViewPrefs): void {
+  if (typeof window === "undefined" || !roomId) return;
+  try {
+    window.localStorage.setItem(roomViewKey(roomId), JSON.stringify(prefs));
+  } catch {
+    /* ignore quota / private mode */
+  }
+}
+
 export function readBroadcastEnabled(): boolean {
   if (typeof window === "undefined") return true;
   try {
