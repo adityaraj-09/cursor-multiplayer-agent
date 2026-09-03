@@ -43,6 +43,7 @@ import type {
   RoomMemberInfo,
 } from "../../../shared/events";
 import { isFeatureAgent, isIntegratorAgent } from "../../../shared/events";
+import { resolveAgentRunStatus } from "../../../shared/agentRunStatus";
 import {
   CLAUDE_MODELS,
   DEFAULT_CLAUDE_MODEL,
@@ -238,13 +239,7 @@ export default function RoomProvider({
     selectedAgent?.modelId ||
     (selectedBackend === "claude-code" ? DEFAULT_CLAUDE_MODEL : modelId);
   const modelsCacheKey = `room:${roomId}:agent:${selectedAgent?.id || "default"}:${selectedBackend}`;
-  const selectedStatus =
-    (selectedAgentId && statusByAgent[selectedAgentId]) ||
-    (selectedAgent?.status === "running"
-      ? "running"
-      : selectedAgent?.status === "error"
-        ? "error"
-        : agentStatus);
+  const selectedStatus = resolveAgentRunStatus(selectedAgent, statusByAgent);
   const selectedDiff =
     (selectedAgentId && diffByAgent[selectedAgentId]) || lastDiff;
 
