@@ -7,14 +7,22 @@ import {
   Bot,
   Cloud,
   Download,
+  Eye,
   GitCompare,
   Link2,
+  Radio,
   Settings2,
   Share2,
   StopCircle,
   Users,
 } from "lucide-react";
-import type { AgentInfo, ApprovalMode, ControlMode } from "../../shared/events";
+import type {
+  AgentInfo,
+  AgentRunStatus,
+  ApprovalMode,
+  ControlMode,
+} from "../../shared/events";
+import SplitAgentPicker from "./SplitAgentPicker";
 import type { AutoMemoryMode } from "../../shared/roomContext";
 import {
   approvalModeDescription,
@@ -61,6 +69,15 @@ export default function RoomSettingsDialog({
   onOpenMembers,
   onOpenFlag,
   onOpenAgents,
+  splitAvailable,
+  broadcastEnabled,
+  onBroadcastEnabledChange,
+  splitAgents,
+  visibleAgentIds,
+  statusByAgent,
+  onShowSplitAgent,
+  onHideSplitAgent,
+  onFocusSplitAgent,
 }: {
   open: boolean;
   onClose: () => void;
@@ -95,6 +112,15 @@ export default function RoomSettingsDialog({
   onOpenMembers?: () => void;
   onOpenFlag?: () => void;
   onOpenAgents?: () => void;
+  splitAvailable?: boolean;
+  broadcastEnabled?: boolean;
+  onBroadcastEnabledChange?: (enabled: boolean) => void;
+  splitAgents?: AgentInfo[];
+  visibleAgentIds?: string[];
+  statusByAgent?: Record<string, AgentRunStatus>;
+  onShowSplitAgent?: (id: string) => void;
+  onHideSplitAgent?: (id: string) => void;
+  onFocusSplitAgent?: (id: string) => void;
 }) {
   const [copiedLink, setCopiedLink] = useState(false);
 
@@ -183,6 +209,78 @@ export default function RoomSettingsDialog({
               </p>
             )}
           </section>
+
+          {(splitAvailable || onBroadcastEnabledChange) && (
+            <section className="space-y-2">
+              <h3 className="text-[11px] uppercase tracking-wide text-[#6e6e6e]">
+                View
+              </h3>
+              {onBroadcastEnabledChange && (
+                <div className="flex items-center justify-between gap-3 rounded-md border border-[#2b2b2b] bg-[#141414] px-3 py-2.5">
+                  <div className="flex items-start gap-2.5 min-w-0">
+                    <Radio
+                      className="h-4 w-4 text-[#a0a0a0] shrink-0 mt-0.5"
+                      strokeWidth={1.75}
+                    />
+                    <div className="min-w-0">
+                      <p className="text-[12px] text-[#e4e4e4]">
+                        Broadcast to agents
+                      </p>
+                      <p className="text-[11px] text-[#6e6e6e]">
+                        When on, send one message to every visible pane from the
+                        view icon
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onBroadcastEnabledChange(!broadcastEnabled)
+                    }
+                    aria-pressed={Boolean(broadcastEnabled)}
+                    className={`h-8 px-2.5 rounded-md text-[11px] border shrink-0 ${
+                      broadcastEnabled
+                        ? "border-[#4d9fff] bg-[#1a2430] text-[#8ec5ff]"
+                        : "border-[#2b2b2b] bg-[#1f1f1f] text-[#a0a0a0]"
+                    }`}
+                  >
+                    {broadcastEnabled ? "On" : "Off"}
+                  </button>
+                </div>
+              )}
+              {splitAvailable &&
+                splitAgents &&
+                visibleAgentIds &&
+                statusByAgent &&
+                onShowSplitAgent &&
+                onHideSplitAgent && (
+                  <div className="rounded-md border border-[#2b2b2b] bg-[#141414] px-3 py-2.5 space-y-2">
+                    <div className="flex items-start gap-2.5">
+                      <Eye
+                        className="h-4 w-4 text-[#a0a0a0] shrink-0 mt-0.5"
+                        strokeWidth={1.75}
+                      />
+                      <div className="min-w-0">
+                        <p className="text-[12px] text-[#e4e4e4]">
+                          Visible agents
+                        </p>
+                        <p className="text-[11px] text-[#6e6e6e]">
+                          Choose which panes stay open in split view
+                        </p>
+                      </div>
+                    </div>
+                    <SplitAgentPicker
+                      agents={splitAgents}
+                      visibleIds={visibleAgentIds}
+                      statusByAgent={statusByAgent}
+                      onShow={onShowSplitAgent}
+                      onHide={onHideSplitAgent}
+                      onFocus={onFocusSplitAgent}
+                    />
+                  </div>
+                )}
+            </section>
+          )}
 
           <section className="space-y-2">
             <h3 className="text-[11px] uppercase tracking-wide text-[#6e6e6e]">

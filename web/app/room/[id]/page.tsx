@@ -1,10 +1,11 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import {
   Columns2,
+  Eye,
   Home,
   LayoutList,
   Settings2,
@@ -43,6 +44,7 @@ import InvitePanel from "../../../components/InvitePanel";
 import MemberRoster from "../../../components/MemberRoster";
 import AgentTabs from "../../../components/AgentTabs";
 import AgentSplitGrid from "../../../components/AgentSplitGrid";
+import SplitViewMenu from "../../../components/SplitViewMenu";
 import AddAgentDialog from "../../../components/AddAgentDialog";
 import ContextPanel from "../../../components/ContextPanel";
 import ToolDetailPanel from "../../../components/ToolDetailPanel";
@@ -75,6 +77,13 @@ import {
   steerDeniedReason,
   type RoomRole,
 } from "../../../../shared/roomPermissions";
+import {
+  closeVisibleId,
+  pinVisibleId,
+  readBroadcastEnabled,
+  syncVisibleIds,
+  writeBroadcastEnabled,
+} from "../../../lib/splitViewSettings";
 
 export default function RoomPage() {
   const params = useParams();
@@ -334,6 +343,10 @@ function LiveRoom({
     null,
   );
   const [viewMode, setViewMode] = useState<"tabs" | "split">("split");
+  const [visibleIds, setVisibleIds] = useState<string[]>([]);
+  const [broadcastEnabled, setBroadcastEnabled] = useState(true);
+  const [splitViewMenuOpen, setSplitViewMenuOpen] = useState(false);
+  const splitViewRef = useRef<HTMLDivElement>(null);
 
   // Auto-select first agent when agents arrive
   useEffect(() => {
@@ -397,6 +410,74 @@ function LiveRoom({
   });
   const showDriverControls = canRequestDrive(myRole);
   const splitActive = viewMode === "split" && agents.length > 1;
+  const splitPool = useMemo(() => {
+    const live = agents.filter((a) => a.status !== "stopped");
+    return live.length ? live : agents;
+  }, [agents]);
+  const splitPoolIds = useMemo(() => splitPool.map((a) => a.id), [splitPool]);
+
+  useEffect(() => {
+    queueMicrotask(() => setBroadcastEnabled(readBroadcastEnabled()));
+  }, []);
+
+  useEffect(() => {
+    setVisibleIds((prev) => syncVisibleIds(prev, splitPoolIds));
+  }, [splitPoolIds]);
+
+  useEffect(() => {
+    if (!splitActive) setSplitViewMenuOpen(false);
+  }, [splitActive]);
+
+  useEffect(() => {
+    if (!splitViewMenuOpen) return;
+    const onPointer = (event: PointerEvent) => {
+      if (!splitViewRef.current?.contains(event.target as Node)) {
+        setSplitViewMenuOpen(false);
+      }
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setSplitViewMenuOpen(false);
+    };
+    window.addEventListener("pointerdown", onPointer);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("pointerdown", onPointer);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [splitViewMenuOpen]);
+
+  const handleBroadcastEnabledChange = (enabled: boolean) => {
+    setBroadcastEnabled(enabled);
+    writeBroadcastEnabled(enabled);
+  };
+
+  const handleShowSplitAgent = (id: string) => {
+    setVisibleIds((prev) => pinVisibleId(prev, id));
+    setSelectedAgentId(id);
+    setChatFilterAgentId(id);
+  };
+
+  const handleHideSplitAgent = (id: string) => {
+    setVisibleIds((prev) => closeVisibleId(prev, id));
+  };
+
+  const handleFocusSplitAgent = (id: string) => {
+    setSelectedAgentId(id);
+    setChatFilterAgentId(id);
+  };
+
+  const handleBroadcast = (text: string) => {
+    for (const id of visibleIds) {
+      const driving = drivingAgentIds.includes(id);
+      const canSteer = canSteerWithRole({
+        role: myRole,
+        controlMode,
+        isDrivingAgent: driving,
+      });
+      if (!canSteer) continue;
+      sendSteer(text, id);
+    }
+  };
 
   useEffect(() => {
     if (!socket || !roomInfo) return;
@@ -782,33 +863,65 @@ function LiveRoom({
               {roomInfo?.name || roomId}
             </h1>
             {agents.length > 1 && (
-              <div className="inline-flex items-center rounded-lg border border-[#2b2b2b] bg-[#1a1a1a] p-0.5 shrink-0">
-                <button
-                  type="button"
-                  onClick={() => setViewMode("split")}
-                  className={`inline-flex h-7 items-center gap-1 px-2 rounded-md text-[11px] ${
-                    viewMode === "split"
-                      ? "bg-[#252525] text-[#e4e4e4]"
-                      : "text-[#8a8a8a] hover:text-[#c8c8c8]"
-                  }`}
-                  title="Split agents"
-                >
-                  <Columns2 className="h-3.5 w-3.5" strokeWidth={1.75} />
-                  Split
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setViewMode("tabs")}
-                  className={`inline-flex h-7 items-center gap-1 px-2 rounded-md text-[11px] ${
-                    viewMode === "tabs"
-                      ? "bg-[#252525] text-[#e4e4e4]"
-                      : "text-[#8a8a8a] hover:text-[#c8c8c8]"
-                  }`}
-                  title="One agent at a time"
-                >
-                  <LayoutList className="h-3.5 w-3.5" strokeWidth={1.75} />
-                  Tabs
-                </button>
+              <div className="inline-flex items-center gap-1.5 shrink-0">
+                <div className="inline-flex items-center rounded-lg border border-[#2b2b2b] bg-[#1a1a1a] p-0.5">
+                  <button
+                    type="button"
+                    onClick={() => setViewMode("split")}
+                    className={`inline-flex h-7 items-center gap-1 px-2 rounded-md text-[11px] ${
+                      viewMode === "split"
+                        ? "bg-[#252525] text-[#e4e4e4]"
+                        : "text-[#8a8a8a] hover:text-[#c8c8c8]"
+                    }`}
+                    title="Split agents"
+                  >
+                    <Columns2 className="h-3.5 w-3.5" strokeWidth={1.75} />
+                    Split
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setViewMode("tabs")}
+                    className={`inline-flex h-7 items-center gap-1 px-2 rounded-md text-[11px] ${
+                      viewMode === "tabs"
+                        ? "bg-[#252525] text-[#e4e4e4]"
+                        : "text-[#8a8a8a] hover:text-[#c8c8c8]"
+                    }`}
+                    title="One agent at a time"
+                  >
+                    <LayoutList className="h-3.5 w-3.5" strokeWidth={1.75} />
+                    Tabs
+                  </button>
+                </div>
+                {splitActive && (
+                  <div className="relative" ref={splitViewRef}>
+                    <button
+                      type="button"
+                      onClick={() => setSplitViewMenuOpen((open) => !open)}
+                      aria-expanded={splitViewMenuOpen}
+                      aria-haspopup="dialog"
+                      className={`inline-flex h-8 w-8 items-center justify-center rounded-lg border transition-colors ${
+                        splitViewMenuOpen
+                          ? "border-[#26405d] bg-[#17202a] text-[#8ec5ff]"
+                          : "border-[#2b2b2b] bg-[#1f1f1f] text-[#a0a0a0] hover:text-[#e4e4e4] hover:border-[#3c3c3c]"
+                      }`}
+                      title="Visible agents"
+                    >
+                      <Eye className="h-3.5 w-3.5" strokeWidth={1.75} />
+                    </button>
+                    <SplitViewMenu
+                      open={splitViewMenuOpen}
+                      agents={splitPool}
+                      visibleIds={visibleIds}
+                      statusByAgent={statusByAgent}
+                      broadcastEnabled={broadcastEnabled}
+                      connected={connected}
+                      onShow={handleShowSplitAgent}
+                      onHide={handleHideSplitAgent}
+                      onFocus={handleFocusSplitAgent}
+                      onBroadcast={handleBroadcast}
+                    />
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -985,10 +1098,8 @@ function LiveRoom({
               onRevertMessage={(messageId, agentId) => {
                 revertChanges({ messageId, agentId });
               }}
-              onFocusAgent={(id) => {
-                setSelectedAgentId(id);
-                setChatFilterAgentId(id);
-              }}
+              visibleIds={visibleIds}
+              onVisibleIdsChange={setVisibleIds}
             />
           ) : (
             <ChatPanel
@@ -1196,6 +1307,15 @@ function LiveRoom({
               }
             : undefined
         }
+        splitAvailable={agents.length > 1}
+        broadcastEnabled={broadcastEnabled}
+        onBroadcastEnabledChange={handleBroadcastEnabledChange}
+        splitAgents={splitPool}
+        visibleAgentIds={visibleIds}
+        statusByAgent={statusByAgent}
+        onShowSplitAgent={handleShowSplitAgent}
+        onHideSplitAgent={handleHideSplitAgent}
+        onFocusSplitAgent={handleFocusSplitAgent}
       />
 
       <InvitePanel
