@@ -87,6 +87,7 @@ While `steer start` is connected, the API can ask your machine to:
 - List Cursor models (`cursor agent --list-models`)
 - Open a native folder picker for Local session create
 - Run **Cursor** or **Claude Code** prompts in the selected repo and stream events back to the room
+- Stream tool results (including file paths and edit diffs) as each tool finishes so the web chat can group and inspect them
 - **Protocol 3+**: Claude Code backend + exclusive file locks before edit tools run (multi-agent conflict resolution)
 
 ## Development

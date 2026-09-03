@@ -22,8 +22,10 @@ function prompt(question: string): Promise<string> {
 
 program
   .name("steer")
-  .description("CLI worker for Steer — run local Cursor agents")
-  .version("0.4.0");
+  .description(
+    "CLI worker for Steer — run local Cursor and Claude Code agents",
+  )
+  .version("0.6.1");
 
 program
   .command("login")
