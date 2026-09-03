@@ -6,6 +6,21 @@ import type {
   WorkerBackend,
 } from "./types.js";
 
+/**
+ * Merge a new assistant payload into the accumulated stream.
+ * Cursor `--stream-partial-output` may send either token deltas or a growing
+ * snapshot of the same message. Blind concatenation duplicates the paragraph;
+ * blindly replacing with a shorter payload truncates it.
+ */
+export function mergeAssistantText(prev: string, incoming: string): string {
+  if (!incoming) return prev;
+  if (!prev) return incoming;
+  if (incoming === prev) return prev;
+  if (incoming.startsWith(prev)) return incoming;
+  if (prev.startsWith(incoming)) return prev;
+  return prev + incoming;
+}
+
 function extractText(message: unknown): string {
   if (!message || typeof message !== "object") return "";
   const content = (message as { content?: unknown }).content;
@@ -761,15 +776,15 @@ export class CursorAgentBackend implements WorkerBackend {
     if (type === "assistant") {
       const text = extractText(ev.message);
       if (!text) return out;
+      const merged = mergeAssistantText(ctx.assistantBuf.value, text);
+      ctx.assistantBuf.value = merged;
       if ("timestamp_ms" in ev) {
-        ctx.assistantBuf.value += text;
         out.push({
           kind: "assistant_delta",
-          text: ctx.assistantBuf.value,
+          text: merged,
         });
       } else {
-        ctx.assistantBuf.value = text;
-        out.push({ kind: "assistant_final", text });
+        out.push({ kind: "assistant_final", text: merged });
       }
       return out;
     }

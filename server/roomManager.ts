@@ -2322,13 +2322,19 @@ export class RoomManager {
         return;
       }
       let display: string;
-      if (text.length >= bubbleBaseLen) {
+      if (
+        text.length >= bubbleBaseLen &&
+        (text.startsWith(seenFullText.slice(0, bubbleBaseLen)) ||
+          seenFullText.startsWith(text.slice(0, bubbleBaseLen)))
+      ) {
         display = text.slice(bubbleBaseLen).replace(/^\n+/, "");
         seenFullText =
           text.length >= seenFullText.length ? text : seenFullText;
-      } else {
+      } else if (text.length >= seenFullText.length) {
         display = text;
         seenFullText = text;
+      } else {
+        display = assistantContent;
       }
       assistantContent = display || assistantContent;
       db.updateMessageContent(assistantId, assistantContent, status);
@@ -2760,9 +2766,11 @@ export class RoomManager {
         display = text.slice(bubbleBaseLen).replace(/^\n+/, "");
         seenFullText =
           text.length >= seenFullText.length ? text : seenFullText;
-      } else {
+      } else if (text.length >= seenFullText.length) {
         display = text;
         seenFullText = text;
+      } else {
+        display = assistantContent;
       }
 
       assistantContent = display || assistantContent;

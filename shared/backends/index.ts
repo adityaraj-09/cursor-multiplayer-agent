@@ -14,6 +14,7 @@ export {
   CursorAgentBackend,
   cursorAgentBackend,
   isEditTool,
+  mergeAssistantText,
   diffFromToolArgs,
   diffFromToolResult,
   diffFromToolEvent,
