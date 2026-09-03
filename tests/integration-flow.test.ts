@@ -7,6 +7,7 @@ import {
   buildIntegrationPrBody,
   buildIntegrationPrComment,
   cursorModelForIntegrator,
+  extractGithubPrUrl,
   featureAgentSnapshots,
   integrationBranchName,
   isBaseBranch,
@@ -81,7 +82,7 @@ describe("integration helpers", () => {
     expect(prompt).toContain("steer/integration-launch-abc");
     expect(prompt).toContain("steer/claude-a");
     expect(prompt).toContain("Agent B");
-    expect(prompt).toContain("Do not open a second PR");
+    expect(prompt).toContain("Never open a PR from any other branch");
     expect(prompt).toContain("BOTH sides");
     expect(prompt).toContain("HARD GATE");
     expect(prompt).toContain("merge origin/main");
@@ -92,6 +93,17 @@ describe("integration helpers", () => {
     expect(prompt).toContain("steer/claude-*");
     expect(prompt).toContain("Fetch origin");
     expect(prompt).toContain("sandbox branch");
+    expect(prompt).toContain("gh pr create");
+    expect(prompt).toContain("Do not wait for human approval");
+  });
+
+  it("extracts a GitHub PR URL from integrator notes", () => {
+    expect(
+      extractGithubPrUrl(
+        "Done.\nPR: https://github.com/acme/app/pull/12\nChecks passed.",
+      ),
+    ).toBe("https://github.com/acme/app/pull/12");
+    expect(extractGithubPrUrl("PR is queued for you")).toBeNull();
   });
 
   it("only reuses a live Cursor integrator", () => {

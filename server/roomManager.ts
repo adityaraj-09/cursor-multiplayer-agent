@@ -24,6 +24,7 @@ import {
   buildIntegrationPrBody,
   buildIntegrationPrComment,
   cursorModelForIntegrator,
+  extractGithubPrUrl,
   featureAgentSnapshots,
   integrationBranchName,
   isBaseBranch,
@@ -793,7 +794,7 @@ export class RoomManager {
           localCwd: useCloud ? undefined : cwd,
           repoUrl: row.repo_url || undefined,
           startingRef: row.starting_ref || undefined,
-          autoCreatePR: false,
+          autoCreatePR: asIntegrator,
         });
       }
 
@@ -4147,7 +4148,7 @@ export class RoomManager {
           asIntegrator || row.runtime === "cloud" ? undefined : cwd,
         repoUrl: row.repo_url || undefined,
         startingRef: row.starting_ref || undefined,
-        autoCreatePR: false,
+        autoCreatePR: asIntegrator,
         mode: agentRow.plan_mode ? "plan" : "agent",
       });
     }
@@ -5515,6 +5516,17 @@ export class RoomManager {
     }
   }
 
+  private canReuseIntegrator(agent: AgentState): boolean {
+    if (!isUsableIntegrator(agent.row)) return false;
+    if (
+      agent.backend instanceof SdkAgentSession &&
+      !agent.backend.wantsAutoCreatePR()
+    ) {
+      return false;
+    }
+    return true;
+  }
+
   private retireUnusableIntegrator(room: RoomState, agent: AgentState): void {
     agent.runGeneration += 1;
     if (agent.workerRunActive) {
@@ -5538,10 +5550,10 @@ export class RoomManager {
     const existingId = row.integration_agent_id;
     if (existingId) {
       const live = room.agents.get(existingId);
-      if (live && isUsableIntegrator(live.row)) return live;
+      if (live && this.canReuseIntegrator(live)) return live;
     }
     for (const agent of room.agents.values()) {
-      if (isUsableIntegrator(agent.row)) {
+      if (this.canReuseIntegrator(agent)) {
         db.setRoomIntegration(row.id, { agentId: agent.row.id });
         row.integration_agent_id = agent.row.id;
         room.row.integration_agent_id = agent.row.id;
@@ -5598,6 +5610,38 @@ export class RoomManager {
     });
   }
 
+  private persistIntegrationPr(
+    room: RoomState,
+    agent: AgentState,
+    url: string,
+    head: string,
+  ): void {
+    db.setRoomIntegration(room.id, { prUrl: url, branch: head });
+    db.setAgentPr(agent.row.id, url, head);
+    room.row.integration_pr_url = url;
+    room.row.integration_branch = head;
+    agent.row.pr_url = url;
+    agent.row.branch = head;
+  }
+
+  private postIntegratorSystem(
+    room: RoomState,
+    agent: AgentState,
+    content: string,
+  ): void {
+    const msg: ChatMessage = {
+      id: nanoid(12),
+      roomId: room.id,
+      role: "system",
+      content,
+      status: "done",
+      ts: Date.now(),
+      agentId: agent.row.id,
+    };
+    db.insertMessage(msg);
+    this.io.to(room.id).emit("chat-message", msg);
+  }
+
   private async finalizeIntegrationPr(
     room: RoomState,
     agent: AgentState,
@@ -5606,16 +5650,57 @@ export class RoomManager {
     const repoUrl = room.row.repo_url?.trim();
     const head =
       room.row.integration_branch?.trim() || agent.row.branch?.trim();
-    if (!token || !repoUrl || !head) return;
-    const parsed = parseGithubRepoUrl(repoUrl);
-    if (!parsed) return;
-
-    const agents = db.listAgents(room.id);
+    const notes = this.latestIntegratorNotes(room, agent);
+    const reportedUrl =
+      extractGithubPrUrl(notes) || room.row.integration_pr_url || null;
     const lock = getActiveIntegrationLock(room.id);
     const source = lock
       ? room.agents.get(lock.source_agent_id)
       : undefined;
-    const notes = this.latestIntegratorNotes(room, agent);
+
+    if (!repoUrl || !head) {
+      this.postIntegratorSystem(
+        room,
+        agent,
+        "Integrate finished but no integration branch was recorded, so a PR was not opened.",
+      );
+      return;
+    }
+
+    if (!token) {
+      if (reportedUrl) {
+        this.persistIntegrationPr(room, agent, reportedUrl, head);
+        this.recordIntegrationMemory(room, agent, source, reportedUrl, notes);
+        this.emitIntegrationUpdated(room, {
+          sourceAgentId: source?.row.id || "",
+          integratorAgentId: agent.row.id,
+        });
+        this.broadcastAgents(room);
+        this.postIntegratorSystem(
+          room,
+          agent,
+          `Integration PR is ready: ${reportedUrl}`,
+        );
+        return;
+      }
+      this.postIntegratorSystem(
+        room,
+        agent,
+        `Integration branch \`${head}\` is pushed, but no pull request was opened. The Integrator must create \`${head}\` → \`${room.row.starting_ref || "main"}\` (or set GITHUB_TOKEN on the server).`,
+      );
+      return;
+    }
+    const parsed = parseGithubRepoUrl(repoUrl);
+    if (!parsed) {
+      this.postIntegratorSystem(
+        room,
+        agent,
+        "Integrate needs an https://github.com/... repo URL to open the PR.",
+      );
+      return;
+    }
+
+    const agents = db.listAgents(room.id);
     const title = `[Steer] Integration — ${room.row.name}`.slice(0, 100);
     const body = buildIntegrationPrBody({
       roomName: room.row.name,
@@ -5645,12 +5730,7 @@ export class RoomManager {
         base: room.row.starting_ref?.trim() || "main",
         token,
       });
-      db.setRoomIntegration(room.id, { prUrl: pr.url, branch: head });
-      db.setAgentPr(agent.row.id, pr.url, head);
-      room.row.integration_pr_url = pr.url;
-      room.row.integration_branch = head;
-      agent.row.pr_url = pr.url;
-      agent.row.branch = head;
+      this.persistIntegrationPr(room, agent, pr.url, head);
       if (source?.row.branch) {
         try {
           await commentOnPullRequest({
@@ -5678,10 +5758,32 @@ export class RoomManager {
         integratorAgentId: agent.row.id,
       });
       this.broadcastAgents(room);
+      this.postIntegratorSystem(
+        room,
+        agent,
+        `${pr.created ? "Opened" : "Updated"} integration PR: ${pr.url}`,
+      );
     } catch (err) {
-      console.warn(
-        "[RoomManager] integration PR failed:",
-        err instanceof Error ? err.message : err,
+      const detail = err instanceof Error ? err.message : String(err);
+      console.warn("[RoomManager] integration PR failed:", detail);
+      if (reportedUrl) {
+        this.persistIntegrationPr(room, agent, reportedUrl, head);
+        this.emitIntegrationUpdated(room, {
+          sourceAgentId: source?.row.id || "",
+          integratorAgentId: agent.row.id,
+        });
+        this.broadcastAgents(room);
+        this.postIntegratorSystem(
+          room,
+          agent,
+          `Could not refresh the PR via GitHub API (${detail}). Using ${reportedUrl}`,
+        );
+        return;
+      }
+      this.postIntegratorSystem(
+        room,
+        agent,
+        `Integration branch \`${head}\` is pushed, but opening the PR failed: ${detail}`,
       );
     }
   }
