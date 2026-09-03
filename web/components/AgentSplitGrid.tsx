@@ -16,7 +16,8 @@ import type {
   TypingUser,
 } from "../../shared/events";
 import { isFeatureAgent } from "../../shared/events";
-import IntegrateButton from "./IntegrateButton";
+import IntegrateButton, { integrateButtonState } from "./IntegrateButton";
+import type { IntegrationJobInfo } from "../../shared/events";
 import { formatTypingIndicator } from "../../shared/typing";
 import {
   canSteerWithRole,
@@ -65,7 +66,7 @@ export default function AgentSplitGrid({
   visibleIds,
   onVisibleIdsChange,
   canIntegrate,
-  integrating,
+  integrationJob,
   hasIntegrationPr,
   onIntegrate,
 }: {
@@ -92,7 +93,7 @@ export default function AgentSplitGrid({
   visibleIds: string[];
   onVisibleIdsChange: (ids: string[]) => void;
   canIntegrate?: boolean;
-  integrating?: boolean;
+  integrationJob?: IntegrationJobInfo | null;
   hasIntegrationPr?: boolean;
   onIntegrate?: (agentId: string) => void;
 }) {
@@ -186,8 +187,9 @@ export default function AgentSplitGrid({
                     <IntegrateButton
                       compact
                       hasPr={Boolean(hasIntegrationPr)}
-                      busy={Boolean(integrating) || status === "running"}
-                      disabled={status === "running" || Boolean(integrating)}
+                      state={integrateButtonState(agent.id, integrationJob)}
+                      queuedBehind={integrationJob?.sourceLabel}
+                      disabled={status === "running"}
                       onClick={() => onIntegrate(agent.id)}
                     />
                   )}

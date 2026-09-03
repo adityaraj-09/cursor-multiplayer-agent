@@ -357,6 +357,31 @@ try {
 
 try {
   db.exec(`
+    CREATE TABLE IF NOT EXISTS integration_locks (
+      room_id TEXT PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,
+      held_by TEXT NOT NULL,
+      source_agent_id TEXT NOT NULL,
+      actor_user_id TEXT,
+      acquired_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS integration_queue (
+      id TEXT PRIMARY KEY,
+      room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+      source_agent_id TEXT NOT NULL,
+      actor_user_id TEXT,
+      created_at INTEGER NOT NULL,
+      UNIQUE (room_id, source_agent_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_integration_queue_room
+      ON integration_queue(room_id, created_at);
+  `);
+} catch {
+  // ignore
+}
+
+try {
+  db.exec(`
     CREATE TABLE IF NOT EXISTS file_locks (
       room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
       path TEXT NOT NULL,
@@ -660,6 +685,41 @@ const stmts = {
     `UPDATE messages SET agent_id = ? WHERE room_id = ? AND agent_id IS NULL`,
   ),
   countAgents: db.prepare(`SELECT COUNT(*) AS c FROM agents WHERE room_id = ?`),
+
+  upsertIntegrationLock: db.prepare(`
+    INSERT INTO integration_locks (
+      room_id, held_by, source_agent_id, actor_user_id, acquired_at, expires_at
+    ) VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(room_id) DO UPDATE SET
+      held_by = excluded.held_by,
+      source_agent_id = excluded.source_agent_id,
+      actor_user_id = excluded.actor_user_id,
+      acquired_at = excluded.acquired_at,
+      expires_at = excluded.expires_at
+  `),
+  getIntegrationLock: db.prepare(
+    `SELECT * FROM integration_locks WHERE room_id = ?`,
+  ),
+  deleteIntegrationLock: db.prepare(
+    `DELETE FROM integration_locks WHERE room_id = ?`,
+  ),
+  deleteExpiredIntegrationLock: db.prepare(
+    `DELETE FROM integration_locks WHERE room_id = ? AND expires_at <= ?`,
+  ),
+  insertIntegrationQueueItem: db.prepare(`
+    INSERT INTO integration_queue (
+      id, room_id, source_agent_id, actor_user_id, created_at
+    ) VALUES (?, ?, ?, ?, ?)
+  `),
+  getIntegrationQueueItem: db.prepare(
+    `SELECT * FROM integration_queue WHERE room_id = ? AND source_agent_id = ?`,
+  ),
+  listIntegrationQueue: db.prepare(`
+    SELECT * FROM integration_queue WHERE room_id = ? ORDER BY created_at ASC
+  `),
+  deleteIntegrationQueueItem: db.prepare(
+    `DELETE FROM integration_queue WHERE id = ?`,
+  ),
 
   upsertFileLock: db.prepare(`
     INSERT INTO file_locks (room_id, path, agent_id, call_id, acquired_at, expires_at)
@@ -2075,6 +2135,80 @@ export function deleteExpiredFileLocksForRoom(
   now: number,
 ): void {
   stmts.deleteExpiredFileLocksForRoom.run(roomId, now);
+}
+
+export interface IntegrationLockRow {
+  room_id: string;
+  held_by: string;
+  source_agent_id: string;
+  actor_user_id: string | null;
+  acquired_at: number;
+  expires_at: number;
+}
+
+export interface IntegrationQueueRow {
+  id: string;
+  room_id: string;
+  source_agent_id: string;
+  actor_user_id: string | null;
+  created_at: number;
+}
+
+export function upsertIntegrationLock(row: IntegrationLockRow): void {
+  stmts.upsertIntegrationLock.run(
+    row.room_id,
+    row.held_by,
+    row.source_agent_id,
+    row.actor_user_id,
+    row.acquired_at,
+    row.expires_at,
+  );
+}
+
+export function getIntegrationLock(
+  roomId: string,
+): IntegrationLockRow | undefined {
+  return stmts.getIntegrationLock.get(roomId) as IntegrationLockRow | undefined;
+}
+
+export function deleteIntegrationLock(roomId: string): void {
+  stmts.deleteIntegrationLock.run(roomId);
+}
+
+export function deleteExpiredIntegrationLock(roomId: string, now: number): void {
+  stmts.deleteExpiredIntegrationLock.run(roomId, now);
+}
+
+export function insertIntegrationQueueItem(row: IntegrationQueueRow): void {
+  stmts.insertIntegrationQueueItem.run(
+    row.id,
+    row.room_id,
+    row.source_agent_id,
+    row.actor_user_id,
+    row.created_at,
+  );
+}
+
+export function getIntegrationQueueItem(
+  roomId: string,
+  sourceAgentId: string,
+): IntegrationQueueRow | undefined {
+  return stmts.getIntegrationQueueItem.get(roomId, sourceAgentId) as
+    | IntegrationQueueRow
+    | undefined;
+}
+
+export function listIntegrationQueue(roomId: string): IntegrationQueueRow[] {
+  return stmts.listIntegrationQueue.all(roomId) as IntegrationQueueRow[];
+}
+
+export function shiftIntegrationQueue(
+  roomId: string,
+): IntegrationQueueRow | undefined {
+  const next = (stmts.listIntegrationQueue.all(roomId) as IntegrationQueueRow[])[0];
+  if (!next) return undefined;
+  stmts.deleteIntegrationQueueItem.run(next.id);
+  return next;
 }
 
 // --- Approval requests ---

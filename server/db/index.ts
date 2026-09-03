@@ -16,6 +16,8 @@ export type {
   RepoMapRow,
   MemoryEntryRow,
   AgentContextReceiptRow,
+  IntegrationLockRow,
+  IntegrationQueueRow,
 } from "./sqlite.js";
 
 const url = process.env.DATABASE_URL ?? "";
@@ -138,6 +140,16 @@ export const deleteFileLocksForRoom = backend.deleteFileLocksForRoom;
 export const deleteExpiredFileLocks = backend.deleteExpiredFileLocks;
 export const deleteExpiredFileLocksForRoom =
   backend.deleteExpiredFileLocksForRoom;
+
+export const upsertIntegrationLock = backend.upsertIntegrationLock;
+export const getIntegrationLock = backend.getIntegrationLock;
+export const deleteIntegrationLock = backend.deleteIntegrationLock;
+export const deleteExpiredIntegrationLock =
+  backend.deleteExpiredIntegrationLock;
+export const insertIntegrationQueueItem = backend.insertIntegrationQueueItem;
+export const getIntegrationQueueItem = backend.getIntegrationQueueItem;
+export const listIntegrationQueue = backend.listIntegrationQueue;
+export const shiftIntegrationQueue = backend.shiftIntegrationQueue;
 
 // Approval requests
 export const createApprovalRequest = backend.createApprovalRequest;

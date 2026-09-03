@@ -66,20 +66,24 @@ export function buildIntegratePrompt(input: BuildIntegratePromptInput): string {
     `Other known feature agents in this room — do not drop their work if it is already on the integration branch:`,
     otherLines,
     ``,
+    `Work in this agent’s own dedicated checkout. Do not reuse another agent’s dirty worktree.`,
+    ``,
     `Required steps:`,
     `1. Fetch origin. If \`${input.integrationBranch}\` does not exist, create it from origin/${base} (or ${base} if origin is missing) and check it out. If it exists, check it out and fast-forward from origin if possible. Never reset it to discard commits.`,
-    `2. Merge \`${input.source.branch}\` into \`${input.integrationBranch}\`.`,
-    `3. If there are merge conflicts, resolve them so BOTH sides’ features remain. Never discard a feature to make the merge easy. Prefer combining both changes. If two implementations of the same thing conflict, keep both behind clear names/paths or compose them, and mention the conflict in the PR body.`,
-    `4. Do not revert, reset --hard, or force-push in a way that drops commits already on \`${input.integrationBranch}\`.`,
-    `5. After resolving conflicts, run a basic check if available (typecheck / lint / tests). Fix breakages caused by the merge without removing features.`,
-    `6. Push \`${input.integrationBranch}\` to origin.`,
-    `7. Open a pull request from \`${input.integrationBranch}\` into \`${base}\` if none exists for that head. If a PR already exists for this head branch, update its title/body to list every merged agent/branch. Do not open a second PR from a different head.`,
-    `8. Reply with: integration branch, PR URL, which branches are included, and any conflict notes.`,
+    `2. Sync with \`${base}\` FIRST: merge origin/${base} into \`${input.integrationBranch}\` (merge, do not rebase). Resolve any main-vs-integration conflicts so existing integrated features and main both survive. This keeps the PR diff current.`,
+    `3. Merge \`${input.source.branch}\` into \`${input.integrationBranch}\`.`,
+    `4. If there are merge conflicts, resolve them so BOTH sides’ features remain. Never discard a feature to make the merge easy. Prefer combining both changes. If two implementations of the same thing conflict, keep both behind clear names/paths or compose them, and mention the conflict in your summary.`,
+    `5. Do not revert, reset --hard, or force-push in a way that drops commits already on \`${input.integrationBranch}\`. If the remote moved, fetch and merge again — never force-push.`,
+    `6. HARD GATE before push: run the strongest available check (tests, otherwise typecheck / lint). If checks fail, fix breakages caused by the merge without removing features. Do not push, do not open/update the PR, and report the failure if checks still fail.`,
+    `7. Only after checks pass: push \`${input.integrationBranch}\` to origin.`,
+    `8. Open a pull request from \`${input.integrationBranch}\` into \`${base}\` if none exists for that head. If a PR already exists for this head branch, update its title/body to list every merged agent/branch. Do not open a second PR from a different head.`,
+    `9. Reply with: integration branch, PR URL, which branches are included, a conflict-resolution summary (what overlapped and how both sides were kept), and the checks you ran.`,
     ``,
     `Hard rules:`,
     `- Merging must preserve features from every agent already on the integration branch plus the source you are merging now.`,
     `- Do not work on a new personal feature branch. Stay on \`${input.integrationBranch}\`.`,
     `- Do not close or replace per-agent feature PRs. Those stay as-is.`,
+    `- Do not self-certify “both features preserved” without listing the overlapping files and how you kept both sides.`,
   ]
     .filter((line) => line !== "")
     .join("\n");
@@ -115,4 +119,22 @@ export function buildIntegrationPrBody(input: {
   ]
     .filter((line) => line !== "")
     .join("\n");
+}
+
+export function buildIntegrationPrComment(input: {
+  sourceLabel: string;
+  sourceBranch: string;
+  integrationBranch: string;
+  notes?: string;
+}): string {
+  const notes = input.notes?.trim();
+  return [
+    `### Integration update`,
+    ``,
+    `Merged **${input.sourceLabel}** (\`${input.sourceBranch}\`) into \`${input.integrationBranch}\`.`,
+    ``,
+    notes ? notes : "No conflict-resolution notes were returned by the Integrator.",
+    ``,
+    `_Please spot-check that both features survived. Tests/typecheck were a hard gate before this push._`,
+  ].join("\n");
 }

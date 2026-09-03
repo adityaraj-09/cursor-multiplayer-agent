@@ -1,26 +1,52 @@
 "use client";
 
 import { GitMerge } from "lucide-react";
+import type { IntegrationJobInfo } from "../../shared/events";
+
+export function integrateButtonState(
+  agentId: string,
+  job?: IntegrationJobInfo | null,
+): "idle" | "merging" | "queued" {
+  if (!job || job.status === "idle") return "idle";
+  if (job.sourceAgentId === agentId) return "merging";
+  if (job.queue.some((item) => item.sourceAgentId === agentId)) return "queued";
+  return "idle";
+}
 
 export default function IntegrateButton({
   hasPr,
-  busy,
+  state = "idle",
+  queuedBehind,
   disabled,
   compact,
   onClick,
 }: {
   hasPr: boolean;
-  busy: boolean;
+  state?: "idle" | "merging" | "queued";
+  queuedBehind?: string;
   disabled?: boolean;
   compact?: boolean;
   onClick: () => void;
 }) {
-  const label = busy ? "Merging…" : hasPr ? "Update PR" : "Integrate";
-  const title = busy
-    ? "Integrator is merging this work"
-    : hasPr
-      ? "Merge this agent into the existing integration PR"
-      : "Merge this agent into the integration branch and open a PR";
+  const label =
+    state === "merging"
+      ? "Merging…"
+      : state === "queued"
+        ? "Queued"
+        : hasPr
+          ? "Update PR"
+          : "Integrate";
+  const title =
+    state === "merging"
+      ? "Integrator is merging this work"
+      : state === "queued"
+        ? queuedBehind
+          ? `Queued behind ${queuedBehind}’s integration`
+          : "Queued behind the current integration"
+        : hasPr
+          ? "Queue a merge of this agent into the existing integration PR"
+          : "Merge this agent into the integration branch and open a PR";
+  const busy = state === "merging" || state === "queued";
   return (
     <button
       type="button"

@@ -179,6 +179,25 @@ async function initSchema() {
       PRIMARY KEY (room_id, path)
     );
 
+    CREATE TABLE IF NOT EXISTS integration_locks (
+      room_id TEXT PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,
+      held_by TEXT NOT NULL,
+      source_agent_id TEXT NOT NULL,
+      actor_user_id TEXT,
+      acquired_at BIGINT NOT NULL,
+      expires_at BIGINT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS integration_queue (
+      id TEXT PRIMARY KEY,
+      room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+      source_agent_id TEXT NOT NULL,
+      actor_user_id TEXT,
+      created_at BIGINT NOT NULL,
+      UNIQUE (room_id, source_agent_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_integration_queue_room
+      ON integration_queue(room_id, created_at);
+
     CREATE TABLE IF NOT EXISTS organizations (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -1895,6 +1914,138 @@ export function deleteExpiredFileLocksForRoom(
     `DELETE FROM file_locks WHERE room_id = $1 AND expires_at <= $2`,
     [roomId, now],
   );
+}
+
+export interface IntegrationLockRow {
+  room_id: string;
+  held_by: string;
+  source_agent_id: string;
+  actor_user_id: string | null;
+  acquired_at: number;
+  expires_at: number;
+}
+
+export interface IntegrationQueueRow {
+  id: string;
+  room_id: string;
+  source_agent_id: string;
+  actor_user_id: string | null;
+  created_at: number;
+}
+
+function rowToIntegrationLock(r: Record<string, unknown>): IntegrationLockRow {
+  return {
+    room_id: String(r.room_id),
+    held_by: String(r.held_by),
+    source_agent_id: String(r.source_agent_id),
+    actor_user_id: (r.actor_user_id as string) ?? null,
+    acquired_at: num(r.acquired_at as string | number) ?? 0,
+    expires_at: num(r.expires_at as string | number) ?? 0,
+  };
+}
+
+function rowToIntegrationQueue(r: Record<string, unknown>): IntegrationQueueRow {
+  return {
+    id: String(r.id),
+    room_id: String(r.room_id),
+    source_agent_id: String(r.source_agent_id),
+    actor_user_id: (r.actor_user_id as string) ?? null,
+    created_at: num(r.created_at as string | number) ?? 0,
+  };
+}
+
+export function upsertIntegrationLock(row: IntegrationLockRow): void {
+  syncQuery(
+    `INSERT INTO integration_locks (
+      room_id, held_by, source_agent_id, actor_user_id, acquired_at, expires_at
+    ) VALUES ($1,$2,$3,$4,$5,$6)
+    ON CONFLICT (room_id) DO UPDATE SET
+      held_by = excluded.held_by,
+      source_agent_id = excluded.source_agent_id,
+      actor_user_id = excluded.actor_user_id,
+      acquired_at = excluded.acquired_at,
+      expires_at = excluded.expires_at`,
+    [
+      row.room_id,
+      row.held_by,
+      row.source_agent_id,
+      row.actor_user_id,
+      row.acquired_at,
+      row.expires_at,
+    ],
+  );
+}
+
+export function getIntegrationLock(
+  roomId: string,
+): IntegrationLockRow | undefined {
+  const rows = syncQuery<Record<string, unknown>>(
+    `SELECT * FROM integration_locks WHERE room_id = $1`,
+    [roomId],
+  );
+  return rows[0] ? rowToIntegrationLock(rows[0]) : undefined;
+}
+
+export function deleteIntegrationLock(roomId: string): void {
+  syncQuery(`DELETE FROM integration_locks WHERE room_id = $1`, [roomId]);
+}
+
+export function deleteExpiredIntegrationLock(roomId: string, now: number): void {
+  syncQuery(
+    `DELETE FROM integration_locks WHERE room_id = $1 AND expires_at <= $2`,
+    [roomId, now],
+  );
+}
+
+export function insertIntegrationQueueItem(row: IntegrationQueueRow): void {
+  syncQuery(
+    `INSERT INTO integration_queue (
+      id, room_id, source_agent_id, actor_user_id, created_at
+    ) VALUES ($1,$2,$3,$4,$5)
+    ON CONFLICT (room_id, source_agent_id) DO NOTHING`,
+    [
+      row.id,
+      row.room_id,
+      row.source_agent_id,
+      row.actor_user_id,
+      row.created_at,
+    ],
+  );
+}
+
+export function getIntegrationQueueItem(
+  roomId: string,
+  sourceAgentId: string,
+): IntegrationQueueRow | undefined {
+  const rows = syncQuery<Record<string, unknown>>(
+    `SELECT * FROM integration_queue WHERE room_id = $1 AND source_agent_id = $2`,
+    [roomId, sourceAgentId],
+  );
+  return rows[0] ? rowToIntegrationQueue(rows[0]) : undefined;
+}
+
+export function listIntegrationQueue(roomId: string): IntegrationQueueRow[] {
+  return syncQuery<Record<string, unknown>>(
+    `SELECT * FROM integration_queue WHERE room_id = $1 ORDER BY created_at ASC`,
+    [roomId],
+  ).map(rowToIntegrationQueue);
+}
+
+export function shiftIntegrationQueue(
+  roomId: string,
+): IntegrationQueueRow | undefined {
+  const rows = syncQuery<Record<string, unknown>>(
+    `DELETE FROM integration_queue
+     WHERE id = (
+       SELECT id FROM integration_queue
+       WHERE room_id = $1
+       ORDER BY created_at ASC
+       LIMIT 1
+     )
+     RETURNING *`,
+    [roomId],
+  );
+  return rows[0] ? rowToIntegrationQueue(rows[0]) : undefined;
 }
 
 function rowToFileLock(r: Record<string, unknown>): FileLockRow {

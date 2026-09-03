@@ -13,6 +13,7 @@ import {
   isClaudeSandboxConfigured,
 } from "./claudeSandbox.js";
 import {
+  commentOnPullRequest,
   ensurePullRequest,
   githubTokenFromEnv,
   parseGithubRepoUrl,
@@ -20,9 +21,19 @@ import {
 import {
   buildIntegratePrompt,
   buildIntegrationPrBody,
+  buildIntegrationPrComment,
   featureAgentSnapshots,
   integrationBranchName,
 } from "./integration.js";
+import {
+  dequeueNextIntegrationJob,
+  enqueueIntegrationJob,
+  getActiveIntegrationLock,
+  listIntegrationQueue,
+  newIntegrationJobId,
+  releaseIntegrationLock,
+  tryAcquireIntegrationLock,
+} from "./integrationLock.js";
 import {
   resolveAnthropicApiKey,
   setUserAnthropicByokKey,
@@ -139,7 +150,11 @@ import type {
   ServerToClientEvents,
   ClientToServerEvents,
 } from "../shared/events.js";
-import { AVATAR_COLORS, isIntegratorAgent } from "../shared/events.js";
+import {
+  AVATAR_COLORS,
+  isIntegratorAgent,
+  type IntegrationJobInfo,
+} from "../shared/events.js";
 
 const MAX_NAME_LENGTH = 30;
 
@@ -438,6 +453,9 @@ export class RoomManager {
         console.error(`Failed to restore room ${row.id}:`, err);
         db.updateRoomStatus(row.id, "stopped");
       }
+    }
+    for (const room of this.rooms.values()) {
+      this.recoverIntegrationLock(room);
     }
   }
 
@@ -3253,8 +3271,8 @@ export class RoomManager {
       }
     }
     this.ingestAutoMemory(room, agent, outcome);
-    if (isIntegratorAgent(agent.row) && outcome === "completed") {
-      void this.finalizeIntegrationPr(room, agent);
+    if (isIntegratorAgent(agent.row)) {
+      void this.finishIntegrationJob(room, agent, outcome);
     }
   }
 
@@ -5005,10 +5023,12 @@ export class RoomManager {
     actorUserId: string,
   ): {
     ok: true;
-    status: "started";
+    status: "started" | "queued";
     integratorAgentId: string;
     integrationBranch: string;
     prUrl: string | null;
+    queuedBehind?: { agentId: string; label: string };
+    job: IntegrationJobInfo;
   } {
     this.assertCanManage(roomId, actorUserId);
     const room = this.rooms.get(roomId);
@@ -5051,15 +5071,6 @@ export class RoomManager {
       actorUserId,
       integrationBranch,
     );
-    if (
-      integrator.workerRunActive ||
-      integrator.backend.isBusy() ||
-      integrator.row.status === "running"
-    ) {
-      throw new Error(
-        "The Integrator is already merging. Wait for it to finish.",
-      );
-    }
 
     if (!row.integration_branch || !row.integration_agent_id) {
       db.setRoomIntegration(roomId, {
@@ -5072,6 +5083,115 @@ export class RoomManager {
       room.row.integration_agent_id = integrator.row.id;
     }
 
+    const holderRunning = this.isIntegratorBusy(integrator);
+    const lockAttempt = tryAcquireIntegrationLock({
+      roomId,
+      heldBy: newIntegrationJobId(),
+      sourceAgentId: source.row.id,
+      actorUserId,
+      holderStillRunning: holderRunning,
+    });
+
+    if (!lockAttempt.ok) {
+      const holder = lockAttempt.lock;
+      if (holder.source_agent_id === source.row.id) {
+        return {
+          ok: true,
+          status: "started",
+          integratorAgentId: integrator.row.id,
+          integrationBranch,
+          prUrl: row.integration_pr_url || null,
+          job: this.integrationJobInfo(room),
+        };
+      }
+      enqueueIntegrationJob({
+        roomId,
+        sourceAgentId: source.row.id,
+        actorUserId,
+      });
+      const holderAgent = room.agents.get(holder.source_agent_id);
+      const queuedMsg: ChatMessage = {
+        id: nanoid(12),
+        roomId: room.id,
+        role: "system",
+        content: `Queued ${source.row.label} behind ${holderAgent?.row.label || "another agent"}’s integration.`,
+        status: "done",
+        ts: Date.now(),
+        agentId: integrator.row.id,
+      };
+      db.insertMessage(queuedMsg);
+      this.io.to(room.id).emit("chat-message", queuedMsg);
+      this.emitIntegrationUpdated(room, {
+        sourceAgentId: source.row.id,
+        integratorAgentId: integrator.row.id,
+      });
+      return {
+        ok: true,
+        status: "queued",
+        integratorAgentId: integrator.row.id,
+        integrationBranch,
+        prUrl: row.integration_pr_url || null,
+        queuedBehind: {
+          agentId: holder.source_agent_id,
+          label: holderAgent?.row.label || "another agent",
+        },
+        job: this.integrationJobInfo(room),
+      };
+    }
+
+    this.startIntegrationRun(
+      room,
+      source,
+      integrator,
+      actorUserId,
+      integrationBranch,
+    );
+    return {
+      ok: true,
+      status: "started",
+      integratorAgentId: integrator.row.id,
+      integrationBranch,
+      prUrl: row.integration_pr_url || null,
+      job: this.integrationJobInfo(room),
+    };
+  }
+
+  private isIntegratorBusy(integrator: AgentState): boolean {
+    return (
+      integrator.workerRunActive ||
+      integrator.backend.isBusy() ||
+      integrator.row.status === "running"
+    );
+  }
+
+  private integrationJobInfo(room: RoomState): IntegrationJobInfo {
+    const lock = getActiveIntegrationLock(room.id);
+    const queue = listIntegrationQueue(room.id).map((item) => ({
+      id: item.id,
+      sourceAgentId: item.source_agent_id,
+      sourceLabel: room.agents.get(item.source_agent_id)?.row.label,
+      createdAt: item.created_at,
+    }));
+    if (!lock) {
+      return { status: "idle", queue };
+    }
+    return {
+      status: "running",
+      sourceAgentId: lock.source_agent_id,
+      sourceLabel: room.agents.get(lock.source_agent_id)?.row.label,
+      heldBy: lock.held_by,
+      expiresAt: lock.expires_at,
+      queue,
+    };
+  }
+
+  private startIntegrationRun(
+    room: RoomState,
+    source: AgentState,
+    integrator: AgentState,
+    actorUserId: string,
+    integrationBranch: string,
+  ): void {
     const actor = actorUserId ? db.getUserById(actorUserId) : undefined;
     const steeredBy: SteerAuthor | null = actorUserId
       ? {
@@ -5083,11 +5203,11 @@ export class RoomManager {
     integrator.lastSteeredBy = steeredBy;
 
     const prompt = buildIntegratePrompt({
-      roomName: row.name,
-      repoUrl: row.repo_url,
-      startingRef: row.starting_ref || "main",
+      roomName: room.row.name,
+      repoUrl: room.row.repo_url || "",
+      startingRef: room.row.starting_ref || "main",
       integrationBranch,
-      existingPrUrl: row.integration_pr_url,
+      existingPrUrl: room.row.integration_pr_url,
       source: {
         id: source.row.id,
         label: source.row.label,
@@ -5110,7 +5230,7 @@ export class RoomManager {
       id: nanoid(12),
       roomId: room.id,
       role: "user",
-      content: `Integrate ${source.row.label} (\`${sourceBranch}\`) into \`${integrationBranch}\`. Keep every agent’s features if there are conflicts.`,
+      content: `Integrate ${source.row.label} (\`${source.row.branch}\`) into \`${integrationBranch}\`. Sync with ${room.row.starting_ref || "main"} first. Keep every agent’s features if there are conflicts. Do not push unless checks pass.`,
       senderName: steeredBy?.name || "Host",
       senderUserId: actorUserId,
       status: "done",
@@ -5130,14 +5250,99 @@ export class RoomManager {
       integrator,
       prompt + attributionPromptSuffix(steeredBy),
     );
+  }
 
-    return {
-      ok: true,
-      status: "started",
-      integratorAgentId: integrator.row.id,
+  private recoverIntegrationLock(room: RoomState): void {
+    const lock = getActiveIntegrationLock(room.id);
+    if (!lock) return;
+    const integratorId = room.row.integration_agent_id;
+    const integrator = integratorId ? room.agents.get(integratorId) : undefined;
+    if (integrator && this.isIntegratorBusy(integrator)) return;
+    releaseIntegrationLock(room.id, lock.held_by);
+    this.startNextQueuedIntegration(room);
+  }
+
+  private startNextQueuedIntegration(room: RoomState): void {
+    const next = dequeueNextIntegrationJob(room.id);
+    if (!next) {
+      this.emitIntegrationUpdated(room, {
+        sourceAgentId: "",
+        integratorAgentId: room.row.integration_agent_id || "",
+      });
+      return;
+    }
+    const source = room.agents.get(next.source_agent_id);
+    const integrationBranch = room.row.integration_branch?.trim();
+    if (
+      !source ||
+      isIntegratorAgent(source.row) ||
+      !source.row.branch?.trim() ||
+      !integrationBranch ||
+      !room.row.repo_url?.trim()
+    ) {
+      this.startNextQueuedIntegration(room);
+      return;
+    }
+    const actorUserId = next.actor_user_id || room.row.owner_id || "";
+    if (!actorUserId) {
+      this.startNextQueuedIntegration(room);
+      return;
+    }
+    let integrator: AgentState;
+    try {
+      integrator = this.ensureIntegratorAgent(
+        room,
+        room.row,
+        source,
+        actorUserId,
+        integrationBranch,
+      );
+    } catch (err) {
+      console.warn(
+        "[RoomManager] queued integration skipped:",
+        err instanceof Error ? err.message : err,
+      );
+      this.startNextQueuedIntegration(room);
+      return;
+    }
+    const acquired = tryAcquireIntegrationLock({
+      roomId: room.id,
+      heldBy: newIntegrationJobId(),
+      sourceAgentId: source.row.id,
+      actorUserId,
+      holderStillRunning: this.isIntegratorBusy(integrator),
+    });
+    if (!acquired.ok) {
+      enqueueIntegrationJob({
+        roomId: room.id,
+        sourceAgentId: source.row.id,
+        actorUserId,
+      });
+      return;
+    }
+    this.startIntegrationRun(
+      room,
+      source,
+      integrator,
+      actorUserId,
       integrationBranch,
-      prUrl: row.integration_pr_url || null,
-    };
+    );
+  }
+
+  private async finishIntegrationJob(
+    room: RoomState,
+    agent: AgentState,
+    outcome: "completed" | "error" | "aborted",
+  ): Promise<void> {
+    try {
+      if (outcome === "completed") {
+        await this.finalizeIntegrationPr(room, agent);
+      }
+    } finally {
+      const lock = getActiveIntegrationLock(room.id);
+      releaseIntegrationLock(room.id, lock?.held_by);
+      this.startNextQueuedIntegration(room);
+    }
   }
 
   private pickIntegratorBackend(
@@ -5221,6 +5426,7 @@ export class RoomManager {
       prUrl: room.row.integration_pr_url || undefined,
       sourceAgentId: ids.sourceAgentId,
       integratorAgentId: ids.integratorAgentId,
+      job: this.integrationJobInfo(room),
     });
   }
 
@@ -5237,11 +5443,18 @@ export class RoomManager {
     if (!parsed) return;
 
     const agents = db.listAgents(room.id);
+    const lock = getActiveIntegrationLock(room.id);
+    const source = lock
+      ? room.agents.get(lock.source_agent_id)
+      : undefined;
+    const notes = this.latestIntegratorNotes(room, agent);
     const title = `[Steer] Integration — ${room.row.name}`.slice(0, 100);
     const body = buildIntegrationPrBody({
       roomName: room.row.name,
       startingRef: room.row.starting_ref || "main",
       integrationBranch: head,
+      sourceId: source?.row.id,
+      notes,
       agents: featureAgentSnapshots(
         agents.map((a) => ({
           id: a.id,
@@ -5270,14 +5483,88 @@ export class RoomManager {
       room.row.integration_branch = head;
       agent.row.pr_url = pr.url;
       agent.row.branch = head;
+      if (source?.row.branch) {
+        try {
+          await commentOnPullRequest({
+            owner: parsed.owner,
+            repo: parsed.repo,
+            number: pr.number,
+            token,
+            body: buildIntegrationPrComment({
+              sourceLabel: source.row.label,
+              sourceBranch: source.row.branch,
+              integrationBranch: head,
+              notes,
+            }),
+          });
+        } catch (err) {
+          console.warn(
+            "[RoomManager] integration PR comment failed:",
+            err instanceof Error ? err.message : err,
+          );
+        }
+      }
+      this.recordIntegrationMemory(room, agent, source, pr.url, notes);
       this.emitIntegrationUpdated(room, {
-        sourceAgentId: "",
+        sourceAgentId: source?.row.id || "",
         integratorAgentId: agent.row.id,
       });
       this.broadcastAgents(room);
     } catch (err) {
       console.warn(
         "[RoomManager] integration PR failed:",
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+
+  private latestIntegratorNotes(
+    room: RoomState,
+    agent: AgentState,
+  ): string | undefined {
+    const messages = db
+      .getMessages(room.id, 80)
+      .filter(
+        (m) =>
+          m.agentId === agent.row.id &&
+          m.role === "assistant" &&
+          m.status === "done" &&
+          m.content.trim(),
+      );
+    const last = messages[messages.length - 1];
+    return last?.content.trim().slice(0, 2000);
+  }
+
+  private recordIntegrationMemory(
+    room: RoomState,
+    agent: AgentState,
+    source: AgentState | undefined,
+    prUrl: string,
+    notes?: string,
+  ): void {
+    const label = source?.row.label || "agent";
+    const content = [
+      `Merged ${label}${source?.row.branch ? ` (\`${source.row.branch}\`)` : ""} into \`${room.row.integration_branch}\`.`,
+      `PR: ${prUrl}`,
+      notes ? notes : "",
+      "Spot-check that both features survived conflict resolution.",
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+    try {
+      const entry = createSanitizedMemory({
+        roomId: room.id,
+        kind: "discovery",
+        title: `Integration: ${label}`,
+        content,
+        status: "active",
+        createdByAgentId: agent.row.id,
+        source: "auto",
+      });
+      this.broadcastMemoryUpdated(room.id, entry);
+    } catch (err) {
+      console.warn(
+        "[RoomManager] integration memory failed:",
         err instanceof Error ? err.message : err,
       );
     }
@@ -5322,6 +5609,7 @@ export class RoomManager {
       integrationBranch: row.integration_branch || undefined,
       integrationPrUrl: row.integration_pr_url || undefined,
       integrationAgentId: row.integration_agent_id || undefined,
+      integrationJob: room ? this.integrationJobInfo(room) : undefined,
       keyHint: row.key_hint || undefined,
       ownerId: row.owner_id || undefined,
       orgId: row.org_id || undefined,

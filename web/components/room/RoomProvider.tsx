@@ -386,6 +386,7 @@ export default function RoomProvider({
       branch: string;
       prUrl?: string;
       integratorAgentId: string;
+      job?: RoomInfo["integrationJob"];
     }) => {
       if (payload.roomId !== roomId) return;
       onRoomInfo({
@@ -393,6 +394,7 @@ export default function RoomProvider({
         integrationBranch: payload.branch || roomInfo.integrationBranch,
         integrationPrUrl: payload.prUrl || roomInfo.integrationPrUrl,
         integrationAgentId: payload.integratorAgentId || roomInfo.integrationAgentId,
+        integrationJob: payload.job || roomInfo.integrationJob,
       });
     };
     socket.on("control-mode-updated", onControlMode);
@@ -607,7 +609,13 @@ export default function RoomProvider({
             integrationBranch: result.integrationBranch,
             integrationPrUrl: result.prUrl || roomInfo.integrationPrUrl,
             integrationAgentId: result.integratorAgentId,
+            integrationJob: result.job || roomInfo.integrationJob,
           });
+        }
+        if (result.status === "queued" && result.queuedBehind) {
+          setActionError(
+            `Queued behind ${result.queuedBehind.label}’s integration`,
+          );
         }
         setSelectedAgentId(result.integratorAgentId);
         setChatFilterAgentId(result.integratorAgentId);

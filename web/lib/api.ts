@@ -918,10 +918,12 @@ export async function integrateRoomAgent(
   agentId: string,
 ): Promise<{
   ok: true;
-  status: "started";
+  status: "started" | "queued";
   integratorAgentId: string;
   integrationBranch: string;
   prUrl: string | null;
+  queuedBehind?: { agentId: string; label: string };
+  job?: import("../../shared/events").IntegrationJobInfo;
 }> {
   const res = await fetch(
     `${API_BASE}/rooms/${roomId}/agents/${agentId}/integrate`,

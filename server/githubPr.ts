@@ -221,6 +221,39 @@ export async function ensurePullRequest(input: {
   return { ...created, created: true };
 }
 
+export async function commentOnPullRequest(input: {
+  owner: string;
+  repo: string;
+  number: number;
+  body: string;
+  token: string;
+}): Promise<{ url: string } | null> {
+  const res = await fetch(
+    `${GITHUB_API}/repos/${input.owner}/${input.repo}/issues/${input.number}/comments`,
+    {
+      method: "POST",
+      headers: {
+        Accept: "application/vnd.github+json",
+        Authorization: `Bearer ${input.token}`,
+        "X-GitHub-Api-Version": "2022-11-28",
+        "Content-Type": "application/json",
+        "User-Agent": "steer-claude-sandbox",
+      },
+      body: JSON.stringify({ body: input.body }),
+    },
+  );
+  const data = (await res.json().catch(() => ({}))) as {
+    html_url?: string;
+    message?: string;
+  };
+  if (!res.ok) {
+    throw new Error(
+      data.message || `GitHub PR comment failed (${res.status})`,
+    );
+  }
+  return data.html_url ? { url: data.html_url } : null;
+}
+
 /** Sanitize a slug for git branch names. */
 export function slugifyBranchPart(raw: string, max = 32): string {
   const s = raw

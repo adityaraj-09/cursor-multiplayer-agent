@@ -179,6 +179,23 @@ export interface ChatMessage {
   reverted?: boolean;
 }
 
+export interface IntegrationQueueItem {
+  id: string;
+  sourceAgentId: string;
+  sourceLabel?: string;
+  createdAt: number;
+}
+
+/** One room-wide integration merge at a time; extra clicks queue. */
+export interface IntegrationJobInfo {
+  status: "idle" | "running";
+  sourceAgentId?: string;
+  sourceLabel?: string;
+  heldBy?: string;
+  expiresAt?: number;
+  queue: IntegrationQueueItem[];
+}
+
 export interface CloudMeta {
   repoUrl?: string;
   startingRef?: string;
@@ -216,6 +233,8 @@ export interface RoomInfo {
   /** Single PR from the integration branch into startingRef. */
   integrationPrUrl?: string;
   integrationAgentId?: string;
+  /** Current integration lock + queue (one merge at a time per room). */
+  integrationJob?: IntegrationJobInfo;
   keyHint?: string;
   ownerId?: string;
   /** Organization that owns this session (null/undefined = personal). */
@@ -368,13 +387,14 @@ export interface ServerToClientEvents {
     count: number;
     entries: MemoryEntryInfo[];
   }) => void;
-  /** Integration branch / PR changed after an Integrate click. */
+  /** Integration branch / PR / lock queue changed after an Integrate click. */
   "integration-updated": (payload: {
     roomId: string;
     branch: string;
     prUrl?: string;
     sourceAgentId: string;
     integratorAgentId: string;
+    job?: IntegrationJobInfo;
   }) => void;
   /** File changes were reverted. */
   "changes-reverted": (payload: {

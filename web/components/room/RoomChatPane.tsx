@@ -29,8 +29,8 @@ import {
   formatTypingIndicatorAll,
 } from "../../../shared/typing";
 import { useRoomContext } from "./RoomContext";
-import IntegrateButton from "../IntegrateButton";
-import { isFeatureAgent, isIntegratorAgent } from "../../../shared/events";
+import IntegrateButton, { integrateButtonState } from "../IntegrateButton";
+import { isFeatureAgent } from "../../../shared/events";
 
 export default function RoomChatPane() {
   const ctx = useRoomContext();
@@ -121,7 +121,6 @@ export default function RoomChatPane() {
     handleForceRelease,
     handleDecideApproval,
     handleAnswerQuestions,
-    integratingAgentId,
     handleIntegrateAgent,
     conflicts,
     fileLocks,
@@ -172,7 +171,7 @@ export default function RoomChatPane() {
       visibleIds={visibleIds}
       onVisibleIdsChange={setVisibleIds}
       canIntegrate={canManage && Boolean(roomInfo?.repoUrl)}
-      integrating={Boolean(integratingAgentId)}
+      integrationJob={roomInfo?.integrationJob}
       hasIntegrationPr={Boolean(roomInfo?.integrationPrUrl)}
       onIntegrate={(id) => void handleIntegrateAgent(id)}
     />
@@ -355,14 +354,12 @@ export default function RoomChatPane() {
               !splitActive && (
                 <IntegrateButton
                   hasPr={Boolean(roomInfo.integrationPrUrl)}
-                  busy={
-                    Boolean(integratingAgentId) ||
-                    selectedStatus === "running" ||
-                    Boolean(agents.find(isIntegratorAgent)?.status === "running")
-                  }
-                  disabled={
-                    selectedStatus === "running" || Boolean(integratingAgentId)
-                  }
+                  state={integrateButtonState(
+                    selectedAgent.id,
+                    roomInfo.integrationJob,
+                  )}
+                  queuedBehind={roomInfo.integrationJob?.sourceLabel}
+                  disabled={selectedStatus === "running"}
                   onClick={() => void handleIntegrateAgent(selectedAgent.id)}
                 />
               )}
@@ -409,6 +406,35 @@ export default function RoomChatPane() {
           </div>
         </div>
       </header>
+      {roomInfo?.integrationJob &&
+        (roomInfo.integrationJob.status === "running" ||
+          roomInfo.integrationJob.queue.length > 0) && (
+          <div className="relative z-20 shrink-0 px-3 py-1.5 text-[11px] text-[#c8c8c8] border-b border-[#2b2b2b] bg-[#171717]">
+            {roomInfo.integrationJob.status === "running" && (
+              <span>
+                Merging{" "}
+                <span className="text-[#e4e4e4]">
+                  {roomInfo.integrationJob.sourceLabel || "an agent"}
+                </span>{" "}
+                into integration
+                {roomInfo.integrationJob.queue.length
+                  ? ` — ${roomInfo.integrationJob.queue
+                      .map((item) => item.sourceLabel || "agent")
+                      .join(", ")} queued`
+                  : ""}
+              </span>
+            )}
+            {roomInfo.integrationJob.status !== "running" &&
+              roomInfo.integrationJob.queue.length > 0 && (
+                <span>
+                  Queued:{" "}
+                  {roomInfo.integrationJob.queue
+                    .map((item) => item.sourceLabel || "agent")
+                    .join(", ")}
+                </span>
+              )}
+          </div>
+        )}
 
       <LockPanel
         conflicts={conflicts}

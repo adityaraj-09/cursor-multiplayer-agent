@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   authedGithubHttpsUrl,
+  commentOnPullRequest,
   createPullRequest,
   ensurePullRequest,
   githubTokenFromEnv,
@@ -234,5 +235,34 @@ describe("updatePullRequest", () => {
       title: "New title",
       body: "New body",
     });
+  });
+});
+
+describe("commentOnPullRequest", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("posts an issue comment on the PR", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        html_url: "https://github.com/acme/widget/pull/3#issuecomment-1",
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await commentOnPullRequest({
+      owner: "acme",
+      repo: "widget",
+      number: 3,
+      body: "Merged Agent B",
+      token: "tok",
+    });
+
+    expect(result?.url).toContain("issuecomment");
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toContain("/issues/3/comments");
+    expect(init.method).toBe("POST");
   });
 });
