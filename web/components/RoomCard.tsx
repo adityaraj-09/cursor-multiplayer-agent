@@ -6,9 +6,17 @@ import type { RoomInfo } from "../../shared/events";
 
 interface RoomCardProps {
   room: RoomInfo;
+  selectable?: boolean;
+  selected?: boolean;
+  onToggleSelect?: (id: string) => void;
 }
 
-export default function RoomCard({ room }: RoomCardProps) {
+export default function RoomCard({
+  room,
+  selectable,
+  selected,
+  onToggleSelect,
+}: RoomCardProps) {
   const isActive = room.status === "active";
   const timeAgo = getTimeAgo(room.createdAt);
   const target =
@@ -17,14 +25,32 @@ export default function RoomCard({ room }: RoomCardProps) {
       : room.repoPath.replace(/^.*\/Projects\//, "~/Projects/");
 
   return (
-    <Link
-      href={`/room/${room.id}`}
-      className="block p-4 bg-[#1a1a1a] border border-[#2b2b2b] rounded-lg hover:border-[#3c3c3c] hover:bg-[#1e1e1e] transition-colors group"
+    <div
+      className={`p-4 bg-[#1a1a1a] border rounded-lg transition-colors group ${
+        selected
+          ? "border-[#26405d] bg-[#17202a]"
+          : "border-[#2b2b2b] hover:border-[#3c3c3c] hover:bg-[#1e1e1e]"
+      }`}
     >
       <div className="flex items-start justify-between gap-3 mb-2">
-        <h3 className="text-[14px] font-medium text-[#e4e4e4] group-hover:text-white truncate">
-          {room.name}
-        </h3>
+        <div className="flex items-center gap-2 min-w-0">
+          {selectable && (
+            <input
+              type="checkbox"
+              checked={Boolean(selected)}
+              onChange={() => onToggleSelect?.(room.id)}
+              onClick={(e) => e.stopPropagation()}
+              className="h-4 w-4 accent-[#4d9fff] shrink-0"
+              aria-label={`Select ${room.name} for the board`}
+            />
+          )}
+          <Link
+            href={`/room/${room.id}`}
+            className="min-w-0 text-[14px] font-medium text-[#e4e4e4] group-hover:text-white truncate"
+          >
+            {room.name}
+          </Link>
+        </div>
         <span
           className={`shrink-0 mt-0.5 flex items-center gap-1.5 text-[11px] ${
             isActive ? "text-[#3ecf8e]" : "text-[#6e6e6e]"
@@ -39,6 +65,7 @@ export default function RoomCard({ room }: RoomCardProps) {
         </span>
       </div>
 
+      <Link href={`/room/${room.id}`} className="block">
       <div className="flex flex-wrap gap-1.5 mb-2">
         <Badge>{room.runtime === "cloud" ? "Cloud" : "Local"}</Badge>
         <Badge>
@@ -64,7 +91,8 @@ export default function RoomCard({ room }: RoomCardProps) {
         </span>
         <span>{timeAgo}</span>
       </div>
-    </Link>
+      </Link>
+    </div>
   );
 }
 

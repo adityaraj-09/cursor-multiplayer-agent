@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { useAuth as useClerkAuth } from "@clerk/nextjs";
-import { getSocket, disconnectSocket, type AppSocket } from "../lib/socket";
+import { acquireSocket, releaseSocket, type AppSocket } from "../lib/socket";
 import type {
   AgentConflict,
   AgentConflictBlocked,
@@ -110,10 +110,20 @@ function parseAgentStatus(
   return { agentId: statusOrAgentId, status, detail };
 }
 
-export function useSocket(roomId: string, name: string): UseSocketReturn {
+export type UseSocketOptions = {
+  onKicked?: (reason: string) => void;
+};
+
+export function useSocket(
+  roomId: string,
+  name: string,
+  options?: UseSocketOptions,
+): UseSocketReturn {
   const { getToken, isSignedIn } = useClerkAuth();
   const getTokenRef = useRef(getToken);
   getTokenRef.current = getToken;
+  const onKickedRef = useRef(options?.onKicked);
+  onKickedRef.current = options?.onKicked;
 
   const [socket, setSocket] = useState<AppSocket | null>(null);
   const [connected, setConnected] = useState(false);
@@ -376,6 +386,10 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
     };
     const onKicked = (reason: string) => {
       console.warn("Kicked:", reason);
+      if (onKickedRef.current) {
+        onKickedRef.current(reason);
+        return;
+      }
       window.location.href = `/dashboard?notice=${encodeURIComponent(reason || "Left session")}`;
     };
     const onTyping = (payload: TypingUser) => {
@@ -529,7 +543,7 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
       }
       if (cancelled || !token) return;
 
-      const s = getSocket(roomId, name, () => getTokenRef.current());
+      const s = acquireSocket(roomId, name, () => getTokenRef.current());
       attached = s;
       socketRef.current = s;
       setSocket(s);
@@ -617,7 +631,7 @@ export function useSocket(roomId: string, name: string): UseSocketReturn {
         attached.off("context-stale", onContextStale);
         attached.off("auto-memory-saved", onAutoMemorySaved);
       }
-      disconnectSocket();
+      releaseSocket(roomId);
       socketRef.current = null;
       setSocket(null);
       setConnected(false);

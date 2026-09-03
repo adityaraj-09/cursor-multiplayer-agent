@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { LayoutGrid } from "lucide-react";
 import RoomCard from "../../components/RoomCard";
 import UserMenu from "../../components/UserMenu";
 import { useAuth } from "../../components/AuthProvider";
@@ -20,6 +21,11 @@ import {
 } from "../../lib/workspace";
 import type { RoomInfo } from "../../../shared/events";
 import { canManageOrg } from "../../../shared/orgs";
+import {
+  MAX_BOARD_ROOMS,
+  readBoardRoomIds,
+  writeBoardRoomIds,
+} from "../../lib/boardStorage";
 
 export default function SessionsDashboard() {
   const { user, loading: authLoading } = useAuth();
@@ -35,6 +41,7 @@ export default function SessionsDashboard() {
   const [newOrgName, setNewOrgName] = useState("");
   const [orgError, setOrgError] = useState("");
   const [busyOrg, setBusyOrg] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -51,6 +58,7 @@ export default function SessionsDashboard() {
 
   useEffect(() => {
     setScope(readSelectedWorkspace());
+    setSelectedIds(readBoardRoomIds());
   }, []);
 
   useEffect(() => {
@@ -195,6 +203,13 @@ export default function SessionsDashboard() {
             </span>
           </div>
           <div className="flex items-center gap-1.5 sm:gap-3 shrink-0">
+            <Link
+              href="/board"
+              className="h-7 px-2 sm:px-2.5 rounded-md text-[12px] text-[#a0a0a0] hover:text-[#e4e4e4] border border-[#2b2b2b] hover:border-[#3c3c3c] transition-colors flex items-center gap-1.5"
+            >
+              <LayoutGrid className="h-3.5 w-3.5" strokeWidth={1.75} />
+              Board
+            </Link>
             <Link
               href="/cli-pair"
               className="h-7 px-2 sm:px-2.5 rounded-md text-[12px] text-[#a0a0a0] hover:text-[#e4e4e4] border border-[#2b2b2b] hover:border-[#3c3c3c] transition-colors flex items-center"
@@ -380,11 +395,56 @@ export default function SessionsDashboard() {
             </Link>
           </div>
         ) : (
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {rooms.map((room) => (
-              <RoomCard key={room.id} room={room} />
-            ))}
-          </div>
+          <>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {rooms.map((room) => (
+                <RoomCard
+                  key={room.id}
+                  room={room}
+                  selectable
+                  selected={selectedIds.includes(room.id)}
+                  onToggleSelect={(id) => {
+                    setSelectedIds((prev) => {
+                      const has = prev.includes(id);
+                      const next = has
+                        ? prev.filter((item) => item !== id)
+                        : prev.length >= MAX_BOARD_ROOMS
+                          ? prev
+                          : [...prev, id];
+                      writeBoardRoomIds(next);
+                      return next;
+                    });
+                  }}
+                />
+              ))}
+            </div>
+            {selectedIds.length > 0 && (
+              <div className="sticky bottom-4 mt-4 flex items-center justify-between gap-3 rounded-lg border border-[#26405d] bg-[#17202a] px-3 py-2.5">
+                <p className="text-[12px] text-[#8ec5ff]">
+                  {selectedIds.length} selected for the board
+                  {selectedIds.length >= MAX_BOARD_ROOMS ? " (max)" : ""}
+                </p>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedIds([]);
+                      writeBoardRoomIds([]);
+                    }}
+                    className="h-8 px-2.5 rounded-md text-[12px] text-[#a0a0a0] hover:text-[#e4e4e4]"
+                  >
+                    Clear
+                  </button>
+                  <Link
+                    href="/board"
+                    className="h-8 px-3 rounded-md bg-[#e4e4e4] text-[#141414] text-[12px] font-medium hover:bg-white inline-flex items-center"
+                  >
+                    Open board
+                  </Link>
+                </div>
+              </div>
+            )}
+          </>
         )}
       </main>
     </div>
