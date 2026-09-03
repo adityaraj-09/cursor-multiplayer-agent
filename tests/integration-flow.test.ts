@@ -12,6 +12,7 @@ import {
   isBaseBranch,
   isUsableIntegrator,
   liveFeatureAgents,
+  resolveIntegratorGitResult,
 } from "../server/integration.js";
 import {
   dequeueNextIntegrationJob,
@@ -90,6 +91,7 @@ describe("integration helpers", () => {
     expect(prompt).toContain("Cursor cloud agent");
     expect(prompt).toContain("steer/claude-*");
     expect(prompt).toContain("Fetch origin");
+    expect(prompt).toContain("sandbox branch");
   });
 
   it("only reuses a live Cursor integrator", () => {
@@ -131,6 +133,24 @@ describe("integration helpers", () => {
     expect(cursorModelForIntegrator("sonnet", "claude-opus-4-8", "auto")).toBe(
       "auto",
     );
+  });
+
+  it("does not adopt a Cursor sandbox branch as the integration head", () => {
+    const kept = resolveIntegratorGitResult({
+      assignedBranch: "steer/integration-launch-abc",
+      reportedBranch: "cursor/sandbox-xyz",
+      reportedPrUrl: "https://github.com/acme/app/pull/99",
+      existingPrUrl: "https://github.com/acme/app/pull/4",
+    });
+    expect(kept.branch).toBe("steer/integration-launch-abc");
+    expect(kept.prUrl).toBe("https://github.com/acme/app/pull/4");
+
+    const matched = resolveIntegratorGitResult({
+      assignedBranch: "steer/integration-launch-abc",
+      reportedBranch: "steer/integration-launch-abc",
+      reportedPrUrl: "https://github.com/acme/app/pull/8",
+    });
+    expect(matched.prUrl).toBe("https://github.com/acme/app/pull/8");
   });
 
   it("lists included branches in the integration PR body", () => {

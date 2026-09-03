@@ -33,6 +33,31 @@ export function isUsableIntegrator(agent: {
   );
 }
 
+/**
+ * Cursor Cloud reports its own sandbox branch/PR. Never let that replace the
+ * room integration branch, or Integrate will lose the feature branches.
+ */
+export function resolveIntegratorGitResult(input: {
+  assignedBranch?: string | null;
+  reportedBranch?: string | null;
+  reportedPrUrl?: string | null;
+  existingPrUrl?: string | null;
+}): { branch: string | null; prUrl: string | null } {
+  const assigned = input.assignedBranch?.trim() || "";
+  const reported = input.reportedBranch?.trim() || "";
+  const sameHead =
+    Boolean(assigned && reported) &&
+    assigned.replace(/^origin\//, "") === reported.replace(/^origin\//, "");
+  const reportedPr = input.reportedPrUrl?.trim() || "";
+  return {
+    branch: assigned || reported || null,
+    prUrl:
+      sameHead && reportedPr
+        ? reportedPr
+        : input.existingPrUrl?.trim() || null,
+  };
+}
+
 /** Cursor SDK rejects Claude model ids — keep the Integrator on a Cursor model. */
 export function cursorModelForIntegrator(
   sourceModel?: string | null,
@@ -133,6 +158,7 @@ export function buildIntegratePrompt(input: BuildIntegratePromptInput): string {
     otherLines,
     ``,
     `Work in this agent’s own dedicated checkout. Do not reuse another agent’s dirty worktree.`,
+    `Cursor Cloud may start you on its own sandbox branch. Immediately checkout \`${input.integrationBranch}\` and stay there. Do not open a PR from the sandbox branch.`,
     `Feature branches (Cursor SDK names and \`steer/claude-*\`) live on origin — they are not in your clone until you fetch.`,
     ``,
     `Required steps:`,

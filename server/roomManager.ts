@@ -29,6 +29,7 @@ import {
   isBaseBranch,
   isUsableIntegrator,
   liveFeatureAgents,
+  resolveIntegratorGitResult,
 } from "./integration.js";
 import {
   dequeueNextIntegrationJob,
@@ -746,9 +747,23 @@ export class RoomManager {
     for (const agentRow of agentRows) {
       let backend: AgentBackend;
       const existing = existingByAgentId?.get(agentRow.id);
+      if (
+        isIntegratorAgent(agentRow) &&
+        agentRow.backend !== "cursor" &&
+        agentRow.status !== "stopped"
+      ) {
+        db.updateAgentStatus(agentRow.id, "stopped");
+        agentRow.status = "stopped";
+      }
 
       if (existing) {
         backend = existing;
+      } else if (
+        isIntegratorAgent(agentRow) &&
+        agentRow.backend !== "cursor"
+      ) {
+        const cwd = resolveAgentCwd(row.repo_path, agentRow.scope_path);
+        backend = new AgentRunner(cwd, null, "auto", "cursor");
       } else if (
         agentRow.backend === "claude-code" &&
         row.runtime === "cloud"
@@ -763,20 +778,22 @@ export class RoomManager {
           agentRow.backend === "claude-code" ? "claude-code" : "cursor",
         );
       } else {
+        const asIntegrator = isUsableIntegrator(agentRow);
+        const useCloud = asIntegrator || row.runtime === "cloud";
         const apiKey = resolveApiKey(row, row.owner_id || undefined);
         const cwd = row.runtime === "local"
           ? resolveAgentCwd(row.repo_path, agentRow.scope_path)
           : "";
         backend = new SdkAgentSession({
-          runtime: row.runtime === "cloud" ? "cloud" : "local",
+          runtime: useCloud ? "cloud" : "local",
           apiKey,
           model: { id: agentRow.model_id || DEFAULT_MODEL },
-          name: row.name,
+          name: asIntegrator ? `${row.name}/Integrator` : row.name,
           agentId: agentRow.sdk_agent_id,
-          localCwd: row.runtime === "local" ? cwd : undefined,
+          localCwd: useCloud ? undefined : cwd,
           repoUrl: row.repo_url || undefined,
           startingRef: row.starting_ref || undefined,
-          autoCreatePR: isIntegratorAgent(agentRow),
+          autoCreatePR: false,
         });
       }
 
@@ -991,7 +1008,7 @@ export class RoomManager {
       name: `${row.name}/${agentRow.label}`,
       repoUrl: row.repo_url?.trim() || "",
       startingRef: row.starting_ref || "main",
-      autoCreatePR: isIntegratorAgent(agentRow),
+      autoCreatePR: false,
       sessionId: agentRow.session_id,
       sandboxId: agentRow.sdk_agent_id,
       branch: agentRow.branch,
@@ -3187,25 +3204,33 @@ export class RoomManager {
             if (git?.branches?.length) {
               const branch = git.branches[0];
               if (isIntegratorAgent(agent.row)) {
-                if (branch.prUrl) {
+                const resolved = resolveIntegratorGitResult({
+                  assignedBranch:
+                    room.row.integration_branch || agent.row.branch,
+                  reportedBranch: branch.branch,
+                  reportedPrUrl: branch.prUrl,
+                  existingPrUrl: room.row.integration_pr_url,
+                });
+                if (resolved.branch && !room.row.integration_branch) {
+                  db.setRoomIntegration(room.id, { branch: resolved.branch });
+                  room.row.integration_branch = resolved.branch;
+                }
+                if (
+                  resolved.prUrl &&
+                  resolved.prUrl !== room.row.integration_pr_url
+                ) {
                   db.setRoomIntegration(room.id, {
-                    prUrl: branch.prUrl,
-                    branch: branch.branch || undefined,
+                    prUrl: resolved.prUrl,
+                    branch: resolved.branch || undefined,
                   });
-                  room.row.integration_pr_url = branch.prUrl;
-                  agent.row.pr_url = branch.prUrl;
+                  room.row.integration_pr_url = resolved.prUrl;
                 }
-                if (branch.branch) {
-                  agent.row.branch = branch.branch;
-                  if (!room.row.integration_branch) {
-                    db.setRoomIntegration(room.id, { branch: branch.branch });
-                    room.row.integration_branch = branch.branch;
-                  }
-                }
+                if (resolved.branch) agent.row.branch = resolved.branch;
+                if (resolved.prUrl) agent.row.pr_url = resolved.prUrl;
                 db.setAgentPr(
                   agent.row.id,
-                  branch.prUrl || agent.row.pr_url || null,
-                  branch.branch || agent.row.branch || null,
+                  agent.row.pr_url || null,
+                  agent.row.branch || null,
                 );
                 this.emitIntegrationUpdated(room, {
                   sourceAgentId: "",
@@ -4122,7 +4147,7 @@ export class RoomManager {
           asIntegrator || row.runtime === "cloud" ? undefined : cwd,
         repoUrl: row.repo_url || undefined,
         startingRef: row.starting_ref || undefined,
-        autoCreatePR: asIntegrator,
+        autoCreatePR: false,
         mode: agentRow.plan_mode ? "plan" : "agent",
       });
     }
