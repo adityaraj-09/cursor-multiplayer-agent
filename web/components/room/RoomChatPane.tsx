@@ -66,9 +66,6 @@ export default function RoomChatPane() {
     ackReview,
     dismissReview,
     dismissDriveRequest,
-    roomContext,
-    contextStale,
-    autoMemoryNotice,
     runtime,
     myRole,
     controlMode,
@@ -79,7 +76,6 @@ export default function RoomChatPane() {
     decidingApprovalId,
     setSettingsOpen,
     setAddAgentOpen,
-    setMemoryOpen,
     cursorSessionError,
     savingCursorSession,
     actionError,
@@ -127,13 +123,6 @@ export default function RoomChatPane() {
     lastBlocked,
     agentError,
   } = ctx;
-
-  const activeMemoryCount = (roomContext?.entries || []).filter(
-    (e) => e.status === "active",
-  ).length;
-  const proposedMemoryCount = (roomContext?.entries || []).filter(
-    (e) => e.status === "proposed",
-  ).length;
 
   const shellClass =
     variant === "page"
@@ -619,24 +608,6 @@ export default function RoomChatPane() {
                     )
                   : ""
             }
-            contextHint={
-              autoMemoryNotice
-                ? `Saved ${autoMemoryNotice.count} auto memor${
-                    autoMemoryNotice.count === 1 ? "y" : "ies"
-                  }`
-                : contextStale &&
-                    selectedAgentId &&
-                    contextStale.agentId === selectedAgentId
-                  ? `Memory stale (v${contextStale.usedVersion} → v${contextStale.currentVersion})`
-                  : proposedMemoryCount
-                    ? `${proposedMemoryCount} memory proposal${proposedMemoryCount === 1 ? "" : "s"} to review`
-                    : activeMemoryCount
-                      ? `Using ${activeMemoryCount} shared memor${activeMemoryCount === 1 ? "y" : "ies"}`
-                      : roomContext?.map?.status === "ready"
-                        ? "Repo map ready"
-                        : "Room memory"
-            }
-            onOpenContext={() => setMemoryOpen(true)}
           />
         </footer>
       )}
