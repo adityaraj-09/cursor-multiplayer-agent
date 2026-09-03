@@ -25,7 +25,7 @@ program
   .description(
     "CLI worker for Steer — run local Cursor and Claude Code agents",
   )
-  .version("0.6.2");
+  .version("1.1.0");
 
 program
   .command("login")

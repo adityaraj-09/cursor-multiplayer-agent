@@ -1,6 +1,6 @@
 {
   "name": "@oblivihon/steer",
-  "version": "0.6.2",
+  "version": "1.1.0",
   "description": "CLI worker for Steer — run local Cursor and Claude Code agents for multiplayer sessions (protocol 4)",
   "type": "module",
   "bin": {
