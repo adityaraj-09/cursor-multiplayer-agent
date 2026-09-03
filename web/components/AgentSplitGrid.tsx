@@ -7,6 +7,7 @@ import {
   Minimize2,
   Radio,
   SendHorizontal,
+  X,
 } from "lucide-react";
 import type {
   AgentInfo,
@@ -26,6 +27,26 @@ import ChatPanel from "./ChatPanel";
 import SteerInput from "./SteerInput";
 
 const MAX_VISIBLE = 4;
+const BROADCAST_KEY = "steer-broadcast-enabled";
+
+function readBroadcastEnabled(): boolean {
+  if (typeof window === "undefined") return true;
+  try {
+    const raw = window.localStorage.getItem(BROADCAST_KEY);
+    if (raw === null) return true;
+    return raw === "1";
+  } catch {
+    return true;
+  }
+}
+
+function writeBroadcastEnabled(enabled: boolean): void {
+  try {
+    window.localStorage.setItem(BROADCAST_KEY, enabled ? "1" : "0");
+  } catch {
+    /* ignore quota / private mode */
+  }
+}
 
 function gridClass(count: number, enlarged: boolean): string {
   if (enlarged || count <= 1) return "grid-cols-1";
@@ -101,6 +122,11 @@ export default function AgentSplitGrid({
   );
   const [enlargedId, setEnlargedId] = useState<string | null>(null);
   const [broadcast, setBroadcast] = useState("");
+  const [broadcastEnabled, setBroadcastEnabled] = useState(true);
+
+  useEffect(() => {
+    queueMicrotask(() => setBroadcastEnabled(readBroadcastEnabled()));
+  }, []);
 
   useEffect(() => {
     setVisibleIds((prev) => {
@@ -108,14 +134,7 @@ export default function AgentSplitGrid({
       if (valid.length === 0) {
         return pool.slice(0, MAX_VISIBLE).map((a) => a.id);
       }
-      if (valid.length >= MAX_VISIBLE || valid.length === pool.length) {
-        return valid.slice(0, MAX_VISIBLE);
-      }
-      const extras = pool
-        .map((a) => a.id)
-        .filter((id) => !valid.includes(id))
-        .slice(0, MAX_VISIBLE - valid.length);
-      return [...valid, ...extras];
+      return valid.slice(0, MAX_VISIBLE);
     });
   }, [pool]);
 
@@ -145,6 +164,22 @@ export default function AgentSplitGrid({
     onFocusAgent?.(id);
   };
 
+  const closePane = (id: string) => {
+    setVisibleIds((prev) => {
+      if (prev.length <= 1) return prev;
+      return prev.filter((item) => item !== id);
+    });
+    setEnlargedId((cur) => (cur === id ? null : cur));
+  };
+
+  const toggleBroadcast = () => {
+    setBroadcastEnabled((prev) => {
+      const next = !prev;
+      writeBroadcastEnabled(next);
+      return next;
+    });
+  };
+
   const sendBroadcast = () => {
     const text = broadcast.replace(/^\s+|\s+$/g, "");
     if (!text) return;
@@ -163,7 +198,7 @@ export default function AgentSplitGrid({
 
   return (
     <div className="flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden">
-      {pool.length > MAX_VISIBLE && (
+      {pool.length > visibleIds.length && (
         <div className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 border-b border-[#2b2b2b] bg-[#151515] overflow-x-auto">
           <span className="text-[10px] uppercase tracking-[0.08em] text-[#6e6e6e] shrink-0">
             Visible
@@ -171,21 +206,36 @@ export default function AgentSplitGrid({
           {pool.map((agent) => {
             const pinned = visibleIds.includes(agent.id);
             return (
-              <button
+              <div
                 key={agent.id}
-                type="button"
-                onClick={() => (pinned ? onFocusAgent?.(agent.id) : pinAgent(agent.id))}
-                className={`inline-flex items-center gap-1.5 h-7 px-2 rounded-md text-[11px] border shrink-0 ${
+                className={`inline-flex items-center gap-1 h-7 pl-2 pr-1 rounded-md text-[11px] border shrink-0 ${
                   pinned
                     ? "border-[#26405d] bg-[#17202a] text-[#8ec5ff]"
                     : "border-[#2b2b2b] bg-[#1a1a1a] text-[#8a8a8a]"
                 }`}
               >
-                <span
-                  className={`h-1.5 w-1.5 rounded-full ${statusTone(statusByAgent[agent.id] || agent.status)}`}
-                />
-                {agent.label}
-              </button>
+                <button
+                  type="button"
+                  onClick={() => (pinned ? onFocusAgent?.(agent.id) : pinAgent(agent.id))}
+                  className="inline-flex items-center gap-1.5 min-w-0"
+                >
+                  <span
+                    className={`h-1.5 w-1.5 rounded-full ${statusTone(statusByAgent[agent.id] || agent.status)}`}
+                  />
+                  {agent.label}
+                </button>
+                {pinned && visibleIds.length > 1 && (
+                  <button
+                    type="button"
+                    onClick={() => closePane(agent.id)}
+                    className="inline-flex h-5 w-5 items-center justify-center rounded text-[#6e6e6e] hover:text-[#f07070]"
+                    title={`Close ${agent.label}`}
+                    aria-label={`Close ${agent.label}`}
+                  >
+                    <X className="h-3 w-3" strokeWidth={1.75} />
+                  </button>
+                )}
+              </div>
             );
           })}
         </div>
@@ -256,6 +306,17 @@ export default function AgentSplitGrid({
                     <Maximize2 className="h-3.5 w-3.5" strokeWidth={1.75} />
                   )}
                 </button>
+                {visibleAgents.length > 1 && (
+                  <button
+                    type="button"
+                    onClick={() => closePane(agent.id)}
+                    className="inline-flex h-6 w-6 items-center justify-center rounded-md text-[#6e6e6e] hover:text-[#f07070] border border-[#2b2b2b]"
+                    title={`Close ${agent.label}`}
+                    aria-label={`Close ${agent.label}`}
+                  >
+                    <X className="h-3.5 w-3.5" strokeWidth={1.75} />
+                  </button>
+                )}
               </div>
               <ChatPanel
                 messages={messages}
@@ -314,31 +375,49 @@ export default function AgentSplitGrid({
 
       {!enlargedId && visibleAgents.length > 1 && (
         <div className="shrink-0 border-t border-[#2b2b2b] bg-[#171717] px-3 py-2 flex items-center gap-2">
-          <span className="hidden sm:inline-flex items-center gap-1.5 text-[11px] text-[#8ec5ff] shrink-0">
-            <Radio className="h-3.5 w-3.5" strokeWidth={1.75} />
-            All {visibleAgents.length}
-          </span>
-          <input
-            value={broadcast}
-            onChange={(e) => setBroadcast(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                sendBroadcast();
-              }
-            }}
-            placeholder={`Broadcast to ${visibleAgents.length} agents…`}
-            className="flex-1 h-9 min-w-0 rounded-lg bg-[#202020] border border-[#2b2b2b] px-3 text-[13px] text-[#e4e4e4] placeholder:text-[#6e6e6e] outline-none focus:border-[#4d9fff]"
-          />
           <button
             type="button"
-            disabled={!broadcast.trim() || !connected}
-            onClick={sendBroadcast}
-            className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-[#e4e4e4] text-[#141414] hover:bg-white disabled:opacity-30"
-            aria-label="Broadcast message"
+            onClick={toggleBroadcast}
+            aria-pressed={broadcastEnabled}
+            className={`inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg text-[11px] border shrink-0 transition-colors ${
+              broadcastEnabled
+                ? "border-[#26405d] bg-[#17202a] text-[#8ec5ff]"
+                : "border-[#2b2b2b] bg-[#1a1a1a] text-[#8a8a8a]"
+            }`}
+            title={
+              broadcastEnabled
+                ? "Broadcast is on — click to turn off"
+                : "Broadcast is off — click to turn on"
+            }
           >
-            <SendHorizontal className="h-4 w-4" strokeWidth={2} />
+            <Radio className="h-3.5 w-3.5" strokeWidth={1.75} />
+            Broadcast
           </button>
+          {broadcastEnabled && (
+            <>
+              <input
+                value={broadcast}
+                onChange={(e) => setBroadcast(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    sendBroadcast();
+                  }
+                }}
+                placeholder={`Broadcast to ${visibleAgents.length} agents…`}
+                className="flex-1 h-9 min-w-0 rounded-lg bg-[#202020] border border-[#2b2b2b] px-3 text-[13px] text-[#e4e4e4] placeholder:text-[#6e6e6e] outline-none focus:border-[#4d9fff]"
+              />
+              <button
+                type="button"
+                disabled={!broadcast.trim() || !connected}
+                onClick={sendBroadcast}
+                className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-[#e4e4e4] text-[#141414] hover:bg-white disabled:opacity-30"
+                aria-label="Broadcast message"
+              >
+                <SendHorizontal className="h-4 w-4" strokeWidth={2} />
+              </button>
+            </>
+          )}
         </div>
       )}
     </div>
