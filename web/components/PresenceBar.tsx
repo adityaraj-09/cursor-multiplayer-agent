@@ -9,6 +9,8 @@ interface PresenceBarProps {
   /** Current user is the room host (owner). */
   amHost?: boolean;
   onRemoveMember?: (userId: string) => void;
+  /** Show only the local user's avatar. */
+  onlyMe?: boolean;
 }
 
 function roleBadge(p: Participant): RoomRole | null {
@@ -22,9 +24,13 @@ export default function PresenceBar({
   mySocketId,
   amHost = false,
   onRemoveMember,
+  onlyMe = false,
 }: PresenceBarProps) {
-  const visible = participants.slice(0, 5);
-  const overflow = participants.length - visible.length;
+  const mine = onlyMe
+    ? participants.filter((p) => p.socketId === mySocketId).slice(0, 1)
+    : [];
+  const visible = onlyMe ? mine : participants.slice(0, 5);
+  const overflow = onlyMe ? 0 : participants.length - visible.length;
 
   return (
     <div className="flex items-center -space-x-1.5">

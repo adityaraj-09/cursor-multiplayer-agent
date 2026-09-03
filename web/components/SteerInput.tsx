@@ -54,6 +54,8 @@ interface SteerInputProps {
   /** Compact status for shared room memory used on the next send. */
   contextHint?: string;
   onOpenContext?: () => void;
+  /** Tight layout for split panes. */
+  compact?: boolean;
 }
 
 const TYPING_THROTTLE_MS = 1500;
@@ -80,6 +82,7 @@ export default function SteerInput({
   typingIndicator,
   contextHint,
   onOpenContext,
+  compact = false,
 }: SteerInputProps) {
   const [text, setText] = useState("");
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
@@ -259,7 +262,7 @@ export default function SteerInput({
   return (
     <form
       onSubmit={handleSubmit}
-      className="px-3 sm:px-5 pb-3 sm:pb-4 pt-3"
+      className={compact ? "px-2 pb-2 pt-2" : "px-3 sm:px-5 pb-3 sm:pb-4 pt-3"}
     >
       <div
         onDragEnter={(e) => {
@@ -323,7 +326,7 @@ export default function SteerInput({
               {modelReason}
             </span>
           )}
-          {contextHint && (
+          {contextHint && !compact && (
             <button
               type="button"
               onClick={onOpenContext}
@@ -411,7 +414,7 @@ export default function SteerInput({
         </div>
       </div>
 
-      <div className="mt-2 px-1 flex items-center justify-between gap-2 min-h-[1rem]">
+      <div className={`${compact ? "mt-1" : "mt-2"} px-1 flex items-center justify-between gap-2 min-h-[1rem]`}>
         <p className="text-[11px] text-[#6e6e6e] truncate">
           {typingIndicator ? (
             <span className="text-[#4d9fff]">{typingIndicator}</span>

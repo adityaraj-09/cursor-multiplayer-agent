@@ -4,19 +4,11 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import {
-  Activity,
-  Bell,
-  BookOpen,
-  Bot,
-  Cloud,
+  Columns2,
   Home,
-  PanelLeftOpen,
-  PanelRightOpen,
+  LayoutList,
   Settings2,
   Square,
-  Users,
-  Wifi,
-  WifiOff,
 } from "lucide-react";
 import { useSocket } from "../../../hooks/useSocket";
 import { useAuth } from "../../../components/AuthProvider";
@@ -50,6 +42,7 @@ import DriverControls from "../../../components/DriverControls";
 import InvitePanel from "../../../components/InvitePanel";
 import MemberRoster from "../../../components/MemberRoster";
 import AgentTabs from "../../../components/AgentTabs";
+import AgentSplitGrid from "../../../components/AgentSplitGrid";
 import AddAgentDialog from "../../../components/AddAgentDialog";
 import ContextPanel from "../../../components/ContextPanel";
 import ToolDetailPanel from "../../../components/ToolDetailPanel";
@@ -75,13 +68,10 @@ import {
   formatTypingIndicator,
   formatTypingIndicatorAll,
 } from "../../../../shared/typing";
-import { approvalModeLabel } from "../../../../shared/approvals";
 import { parseAutoMemoryMode, type AutoMemoryMode } from "../../../../shared/roomContext";
 import {
   canRequestDrive,
   canSteerWithRole,
-  controlModeLabel,
-  roomRoleLabel,
   steerDeniedReason,
   type RoomRole,
 } from "../../../../shared/roomPermissions";
@@ -180,7 +170,7 @@ export default function RoomPage() {
         <div className="text-center">
           <p className="text-[#a0a0a0] text-[14px] mb-3">{roomError}</p>
           <Link
-            href="/"
+            href="/dashboard"
             className="text-[13px] text-[#4d9fff] hover:underline"
           >
             ← Back to sessions
@@ -343,6 +333,7 @@ function LiveRoom({
   const [chatFilterAgentId, setChatFilterAgentId] = useState<string | null>(
     null,
   );
+  const [viewMode, setViewMode] = useState<"tabs" | "split">("split");
 
   // Auto-select first agent when agents arrive
   useEffect(() => {
@@ -405,6 +396,7 @@ function LiveRoom({
     isDrivingAgent: amDrivingSelected,
   });
   const showDriverControls = canRequestDrive(myRole);
+  const splitActive = viewMode === "split" && agents.length > 1;
 
   useEffect(() => {
     if (!socket || !roomInfo) return;
@@ -447,10 +439,6 @@ function LiveRoom({
     if (user?.id && ping.actorUserId === user.id) return true;
     return canManage;
   });
-  const unackedPingCount = relevantPings.filter(
-    (ping) => !user?.id || !ping.acks.some((a) => a.userId === user.id),
-  ).length;
-
   useEffect(() => {
     if (!socket || !roomInfo) return;
     const onCursorSession = (
@@ -510,17 +498,15 @@ function LiveRoom({
     };
   }, [roomId, modelsCacheKey, selectedBackend, selectedAgent?.id]);
 
-  const handleModelChange = useCallback(
-    async (next: string) => {
-      if (!selectedAgentId || !next || next === selectedModelId) return;
+  const handleModelChangeForAgent = useCallback(
+    async (agentId: string, next: string) => {
+      const current =
+        agents.find((a) => a.id === agentId)?.modelId || selectedModelId;
+      if (!agentId || !next || next === current) return;
       setSavingModel(true);
       setModelError("");
       try {
-        const updated = await updateRoomModel(
-          roomId,
-          next,
-          selectedAgentId,
-        );
+        const updated = await updateRoomModel(roomId, next, agentId);
         onRoomInfo(updated);
       } catch (err) {
         setModelError(
@@ -530,7 +516,15 @@ function LiveRoom({
         setSavingModel(false);
       }
     },
-    [selectedAgentId, selectedModelId, onRoomInfo, roomId],
+    [agents, selectedModelId, onRoomInfo, roomId],
+  );
+
+  const handleModelChange = useCallback(
+    async (next: string) => {
+      if (!selectedAgentId) return;
+      await handleModelChangeForAgent(selectedAgentId, next);
+    },
+    [selectedAgentId, handleModelChangeForAgent],
   );
 
   const handleCursorSessionChange = useCallback(
@@ -763,14 +757,6 @@ function LiveRoom({
     }
   }, [roomId, roomInfo?.name]);
 
-  const fileCount = selectedDiff
-    ? (selectedDiff.match(/^diff --git /gm) || []).length
-    : 0;
-  const visibleMessageCount =
-    agents.length > 1 && chatFilterAgentId
-      ? messages.filter((m) => !m.agentId || m.agentId === chatFilterAgentId)
-          .length
-      : messages.length;
   const activeMemoryCount = (roomContext?.entries || []).filter(
     (e) => e.status === "active",
   ).length;
@@ -783,159 +769,75 @@ function LiveRoom({
       <div className="absolute inset-0 pointer-events-none bg-[radial-gradient(circle_at_20%_0%,rgba(77,159,255,0.07),transparent_28%),radial-gradient(circle_at_84%_12%,rgba(62,207,142,0.045),transparent_26%)]" />
 
       <header className="relative z-20 shrink-0 border-b border-[#2b2b2b]/90 bg-[#171717]/95 backdrop-blur-xl pt-[env(safe-area-inset-top)]">
-        <div className="flex items-center justify-between gap-3 px-3 sm:px-4 h-14">
+        <div className="flex items-center justify-between gap-3 px-3 sm:px-4 h-12">
           <div className="flex items-center gap-2.5 min-w-0 flex-1">
-          <Link
-            href="/"
-            className="flex h-8 w-8 items-center justify-center rounded-lg border border-[#2b2b2b] bg-[#1f1f1f] text-[#a0a0a0] hover:text-[#e4e4e4] hover:border-[#3c3c3c] transition-colors shrink-0"
-            aria-label="Steer home"
-          >
-            <Home className="h-4 w-4" strokeWidth={1.75} />
-          </Link>
-            <div className="min-w-0">
-              <div className="flex items-center gap-2 min-w-0">
-                <h1 className="text-[13px] sm:text-[14px] font-medium text-[#f0f0f0] truncate min-w-0">
-                  {roomInfo?.name || roomId}
-                </h1>
-                <span
-                  className={`hidden sm:inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px] font-medium border ${
-                    connected
-                      ? "border-[#234337] bg-[#17251f] text-[#3ecf8e]"
-                      : "border-[#4a2d2d] bg-[#241818] text-[#f07070]"
+            <Link
+              href="/dashboard"
+              className="flex h-8 w-8 items-center justify-center rounded-lg border border-[#2b2b2b] bg-[#1f1f1f] text-[#a0a0a0] hover:text-[#e4e4e4] hover:border-[#3c3c3c] transition-colors shrink-0"
+              aria-label="Go to dashboard"
+            >
+              <Home className="h-4 w-4" strokeWidth={1.75} />
+            </Link>
+            <h1 className="text-[13px] sm:text-[14px] font-medium text-[#f0f0f0] truncate min-w-0">
+              {roomInfo?.name || roomId}
+            </h1>
+            {agents.length > 1 && (
+              <div className="inline-flex items-center rounded-lg border border-[#2b2b2b] bg-[#1a1a1a] p-0.5 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setViewMode("split")}
+                  className={`inline-flex h-7 items-center gap-1 px-2 rounded-md text-[11px] ${
+                    viewMode === "split"
+                      ? "bg-[#252525] text-[#e4e4e4]"
+                      : "text-[#8a8a8a] hover:text-[#c8c8c8]"
                   }`}
-                  title={connected ? "Connected" : "Disconnected"}
+                  title="Split agents"
                 >
-                  {connected ? (
-                    <Wifi className="h-3 w-3" strokeWidth={1.8} />
-                  ) : (
-                    <WifiOff className="h-3 w-3" strokeWidth={1.8} />
-                  )}
-                  {connected ? "Live" : "Offline"}
-                </span>
+                  <Columns2 className="h-3.5 w-3.5" strokeWidth={1.75} />
+                  Split
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setViewMode("tabs")}
+                  className={`inline-flex h-7 items-center gap-1 px-2 rounded-md text-[11px] ${
+                    viewMode === "tabs"
+                      ? "bg-[#252525] text-[#e4e4e4]"
+                      : "text-[#8a8a8a] hover:text-[#c8c8c8]"
+                  }`}
+                  title="One agent at a time"
+                >
+                  <LayoutList className="h-3.5 w-3.5" strokeWidth={1.75} />
+                  Tabs
+                </button>
               </div>
-              <div className="hidden sm:flex items-center gap-2 mt-0.5 text-[11px] text-[#6e6e6e]">
-                <span className="inline-flex items-center gap-1">
-                  {runtime === "cloud" ? (
-                    <Cloud className="h-3 w-3" strokeWidth={1.75} />
-                  ) : (
-                    <Bot className="h-3 w-3" strokeWidth={1.75} />
-                  )}
-                  {runtime === "cloud" ? "Cloud room" : "Local room"}
-                </span>
-                <span className="text-[#3c3c3c]">•</span>
-                <span>{agents.length || 1} agent{(agents.length || 1) === 1 ? "" : "s"}</span>
-                <span className="text-[#3c3c3c]">•</span>
-                <span>{visibleMessageCount} message{visibleMessageCount === 1 ? "" : "s"}</span>
-                {selectedStatus === "running" && (
-                  <>
-                    <span className="text-[#3c3c3c]">•</span>
-                    <span className="inline-flex items-center gap-1 text-[#4d9fff]">
-                      <Activity className="h-3 w-3 animate-pulse" strokeWidth={1.75} />
-                      Running
-                    </span>
-                  </>
-                )}
-              </div>
-            </div>
+            )}
           </div>
 
           <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
             <button
               type="button"
-              onClick={() => setAgentsOpen(true)}
-              className="lg:hidden inline-flex h-8 items-center gap-1.5 px-2.5 rounded-lg text-[11px] text-[#a0a0a0] hover:text-[#e4e4e4] border border-[#2b2b2b] hover:border-[#3c3c3c] bg-[#1f1f1f] transition-colors"
-            >
-              <PanelLeftOpen className="h-3.5 w-3.5" strokeWidth={1.75} />
-              Agents{agents.length ? ` · ${agents.length}` : ""}
-            </button>
-            <button
-              type="button"
-              onClick={() => setChangesOpen(true)}
-              className="lg:hidden inline-flex h-8 items-center gap-1.5 px-2.5 rounded-lg text-[11px] text-[#a0a0a0] hover:text-[#e4e4e4] border border-[#2b2b2b] hover:border-[#3c3c3c] bg-[#1f1f1f] transition-colors"
-            >
-              <PanelRightOpen className="h-3.5 w-3.5" strokeWidth={1.75} />
-              {runtime === "cloud"
-                ? "Cloud"
-                : `Changes${fileCount > 0 ? ` · ${fileCount}` : ""}`}
-            </button>
-            <button
-              type="button"
-              onClick={() => setMemoryOpen(true)}
-              className="lg:hidden inline-flex h-8 items-center gap-1.5 px-2.5 rounded-lg text-[11px] text-[#a0a0a0] hover:text-[#e4e4e4] border border-[#2b2b2b] hover:border-[#3c3c3c] bg-[#1f1f1f] transition-colors"
-            >
-              <BookOpen className="h-3.5 w-3.5" strokeWidth={1.75} />
-              Memory
-              {activeMemoryCount ? ` · ${activeMemoryCount}` : ""}
-            </button>
-            <button
-              type="button"
-              onClick={() => setRosterOpen(true)}
-              className="inline-flex h-8 items-center gap-1.5 px-2.5 sm:px-3 rounded-lg text-[11px] sm:text-[12px] text-[#a0a0a0] hover:text-[#e4e4e4] border border-[#2b2b2b] hover:border-[#3c3c3c] bg-[#1f1f1f] transition-colors"
-              title="Members"
-            >
-              <Users className="h-3.5 w-3.5" strokeWidth={1.75} />
-              <span className="hidden sm:inline">Members</span>
-            </button>
-            {(canFlag || unackedPingCount > 0) && (
-              <button
-                type="button"
-                onClick={() => {
-                  if (canFlag) setFlagOpen(true);
-                  else {
-                    document
-                      .getElementById("review-pings")
-                      ?.scrollIntoView({ behavior: "smooth", block: "nearest" });
-                  }
-                }}
-                className="relative inline-flex h-8 items-center gap-1.5 px-2.5 sm:px-3 rounded-lg text-[11px] sm:text-[12px] text-[#e8a23a] hover:text-[#f0b85a] border border-[#3c3220] hover:border-[#5a4a30] bg-[#1f1a14] transition-colors"
-                title={
-                  canFlag
-                    ? unackedPingCount > 0
-                      ? `Flag for review · ${unackedPingCount} open`
-                      : "Flag for review"
-                    : `${unackedPingCount} open review ping${unackedPingCount === 1 ? "" : "s"}`
-                }
-              >
-                <Bell className="h-3.5 w-3.5" strokeWidth={1.75} />
-                <span className="hidden sm:inline">
-                  {canFlag ? "Flag" : "Reviews"}
-                </span>
-                {unackedPingCount > 0 && (
-                  <span className="absolute -top-1.5 -right-1.5 min-w-[16px] h-4 px-1 rounded-full bg-[#e8a23a] text-[#1a1208] text-[10px] font-semibold leading-4 text-center">
-                    {unackedPingCount > 9 ? "9+" : unackedPingCount}
-                  </span>
-                )}
-              </button>
-            )}
-            <button
-              type="button"
               onClick={() => setSettingsOpen(true)}
-              className="inline-flex h-8 items-center gap-1.5 px-2.5 sm:px-3 rounded-lg text-[11px] sm:text-[12px] text-[#a0a0a0] hover:text-[#e4e4e4] border border-[#2b2b2b] hover:border-[#3c3c3c] bg-[#1f1f1f] transition-colors"
+              className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-[#a0a0a0] hover:text-[#e4e4e4] border border-[#2b2b2b] hover:border-[#3c3c3c] bg-[#1f1f1f] transition-colors"
               title="Room settings"
             >
               <Settings2 className="h-3.5 w-3.5" strokeWidth={1.75} />
-              <span className="hidden sm:inline">Settings</span>
             </button>
             {selectedStatus === "running" && canSteerSelected && (
               <button
                 type="button"
                 onClick={() => void handleAbortRun()}
                 disabled={aborting}
-                className="inline-flex h-8 items-center gap-1.5 px-2.5 sm:px-3 rounded-lg text-[11px] sm:text-[12px] text-[#f07070] hover:text-[#ff8a8a] border border-[#3c2b2b] hover:border-[#5a3a3a] bg-[#1f1818] transition-colors disabled:opacity-50"
+                className="inline-flex h-8 items-center gap-1.5 px-2.5 rounded-lg text-[11px] text-[#f07070] hover:text-[#ff8a8a] border border-[#3c2b2b] hover:border-[#5a3a3a] bg-[#1f1818] transition-colors disabled:opacity-50"
               >
                 <Square className="h-3 w-3" strokeWidth={2} />
                 <span className="hidden sm:inline">{aborting ? "Stopping…" : "Abort"}</span>
               </button>
             )}
             <PresenceBar
+              onlyMe
               participants={participants}
               mySocketId={mySocketId}
               amHost={canManage}
-              onRemoveMember={(uid) => {
-                if (window.confirm("Remove this member from the session?")) {
-                  removeMember(uid);
-                }
-              }}
             />
             {showDriverControls && (
               <DriverControls
@@ -964,29 +866,6 @@ function LiveRoom({
             )}
           </div>
         </div>
-        <button
-          type="button"
-          onClick={() => setSettingsOpen(true)}
-          className="w-full px-3 sm:px-4 pb-2 -mt-0.5 text-left"
-          title="Open room settings"
-        >
-          <p className="text-[11px] text-[#6e6e6e] truncate">
-            <span className="text-[#a0a0a0]">{roomRoleLabel(myRole)}</span>
-            {" · "}
-            {controlModeLabel(controlMode)}
-            {" · "}
-            {approvalModeLabel(approvalMode)}
-            {selectedAgent?.planMode ? (
-              <span className="text-[#8ec5ff]"> · Plan mode</span>
-            ) : null}
-            {roomInfo?.slackNotifyConfigured ? (
-              <span className="text-[#7ddea8]"> · Slack</span>
-            ) : null}
-            {!canSteerSelected && steerLockReason ? (
-              <span className="text-[#e8a23a]"> · {steerLockReason}</span>
-            ) : null}
-          </p>
-        </button>
       </header>
 
       <LockPanel
@@ -1000,22 +879,24 @@ function LiveRoom({
       />
 
       <main className="relative z-10 flex flex-1 min-h-0 min-w-0 overflow-hidden overscroll-none">
-        <AgentTabs
-          agents={agents}
-          selectedAgentId={selectedAgentId}
-          chatFilterAgentId={chatFilterAgentId}
-          onSelectAgent={(id) => {
-            setSelectedAgentId(id);
-            setChatFilterAgentId(id);
-          }}
-          onSelectAll={() => setChatFilterAgentId(null)}
-          statusByAgent={statusByAgent}
-          participants={participants}
-          models={models}
-          amHost={canManage}
-          onAddAgent={() => setAddAgentOpen(true)}
-          onStopAgent={(id) => void handleStopAgent(id)}
-        />
+        {!splitActive && (
+          <AgentTabs
+            agents={agents}
+            selectedAgentId={selectedAgentId}
+            chatFilterAgentId={chatFilterAgentId}
+            onSelectAgent={(id) => {
+              setSelectedAgentId(id);
+              setChatFilterAgentId(id);
+            }}
+            onSelectAll={() => setChatFilterAgentId(null)}
+            statusByAgent={statusByAgent}
+            participants={participants}
+            models={models}
+            amHost={canManage}
+            onAddAgent={() => setAddAgentOpen(true)}
+            onStopAgent={(id) => void handleStopAgent(id)}
+          />
+        )}
 
         <div className="flex-1 flex flex-col min-h-0 min-w-0 overflow-hidden bg-[#121212]/80">
           {relevantPings.length > 0 && (
@@ -1060,80 +941,116 @@ function LiveRoom({
               })}
             </div>
           )}
-          <ChatPanel
-            messages={messages}
-            agentStatus={selectedStatus}
-            agents={agents}
-            filterAgentId={
-              agents.length > 1 ? chatFilterAgentId : null
-            }
-            roomId={roomId}
-            canApprovePlan={canSteerSelected}
-            onApprovePlan={(messageId, agentId) =>
-              approvePlan(messageId, agentId)
-            }
-            onDismissPlan={(messageId) => dismissPlan(messageId)}
-            selectedToolMessageId={selectedToolMessageId}
-            onSelectToolMessage={(message: ChatMessage) =>
-              setSelectedToolMessageId(message.id)
-            }
-            onAnswerQuestions={(messageId, answers) => {
-              const msg = messages.find((m) => m.id === messageId);
-              if (!msg) return;
-              const lines = Object.entries(answers)
-                .filter(([, v]) => v)
-                .map(([q, a]) => `**${q}**\n${a}`)
-                .join("\n\n");
-              if (lines) {
-                sendSteer(lines, msg.agentId || undefined);
+          {splitActive ? (
+            <AgentSplitGrid
+              agents={agents}
+              messages={messages}
+              roomId={roomId}
+              statusByAgent={statusByAgent}
+              typingByAgent={typingByAgent}
+              drivingAgentIds={drivingAgentIds}
+              myRole={myRole}
+              controlMode={controlMode}
+              connected={connected}
+              models={models}
+              canManage={canManage}
+              savingModel={savingModel}
+              selectedToolMessageId={selectedToolMessageId}
+              onSelectToolMessage={(message: ChatMessage) =>
+                setSelectedToolMessageId(message.id)
               }
-            }}
-            onRevertMessage={(messageId, agentId) => {
-              revertChanges({ messageId, agentId });
-            }}
-          />
+              onSend={(text, agentId, attachmentIds) =>
+                sendSteer(text, agentId, attachmentIds)
+              }
+              onTyping={notifyTyping}
+              onTypingStop={notifyTypingStop}
+              onModelChange={(agentId, modelId) =>
+                void handleModelChangeForAgent(agentId, modelId)
+              }
+              onApprovePlan={(messageId, agentId) =>
+                approvePlan(messageId, agentId)
+              }
+              onDismissPlan={(messageId) => dismissPlan(messageId)}
+              onAnswerQuestions={(messageId, answers) => {
+                const msg = messages.find((m) => m.id === messageId);
+                if (!msg) return;
+                const lines = Object.entries(answers)
+                  .filter(([, v]) => v)
+                  .map(([q, a]) => `**${q}**\n${a}`)
+                  .join("\n\n");
+                if (lines) {
+                  sendSteer(lines, msg.agentId || undefined);
+                }
+              }}
+              onRevertMessage={(messageId, agentId) => {
+                revertChanges({ messageId, agentId });
+              }}
+              onFocusAgent={(id) => {
+                setSelectedAgentId(id);
+                setChatFilterAgentId(id);
+              }}
+            />
+          ) : (
+            <ChatPanel
+              messages={messages}
+              agentStatus={selectedStatus}
+              agents={agents}
+              filterAgentId={
+                agents.length > 1 ? chatFilterAgentId : null
+              }
+              roomId={roomId}
+              canApprovePlan={canSteerSelected}
+              onApprovePlan={(messageId, agentId) =>
+                approvePlan(messageId, agentId)
+              }
+              onDismissPlan={(messageId) => dismissPlan(messageId)}
+              selectedToolMessageId={selectedToolMessageId}
+              onSelectToolMessage={(message: ChatMessage) =>
+                setSelectedToolMessageId(message.id)
+              }
+              onAnswerQuestions={(messageId, answers) => {
+                const msg = messages.find((m) => m.id === messageId);
+                if (!msg) return;
+                const lines = Object.entries(answers)
+                  .filter(([, v]) => v)
+                  .map(([q, a]) => `**${q}**\n${a}`)
+                  .join("\n\n");
+                if (lines) {
+                  sendSteer(lines, msg.agentId || undefined);
+                }
+              }}
+              onRevertMessage={(messageId, agentId) => {
+                revertChanges({ messageId, agentId });
+              }}
+            />
+          )}
         </div>
 
-        <ToolDetailPanel
-          message={selectedToolMessage}
-          onClose={() => setSelectedToolMessageId(null)}
-          onRevert={
-            canManage &&
-            selectedToolMessage?.diffPatch &&
-            selectedToolMessage.status === "done" &&
-            !selectedToolMessage.reverted
-              ? () => {
-                  if (
-                    window.confirm(
-                      "Revert this file change? This discards the LLM edits for this tool call.",
-                    )
-                  ) {
-                    revertChanges({
-                      messageId: selectedToolMessage.id,
-                      agentId: selectedToolMessage.agentId,
-                    });
+        {!splitActive && (
+          <ToolDetailPanel
+            message={selectedToolMessage}
+            onClose={() => setSelectedToolMessageId(null)}
+            onRevert={
+              canManage &&
+              selectedToolMessage?.diffPatch &&
+              selectedToolMessage.status === "done" &&
+              !selectedToolMessage.reverted
+                ? () => {
+                    if (
+                      window.confirm(
+                        "Revert this file change? This discards the LLM edits for this tool call.",
+                      )
+                    ) {
+                      revertChanges({
+                        messageId: selectedToolMessage.id,
+                        agentId: selectedToolMessage.agentId,
+                      });
+                    }
                   }
-                }
-              : undefined
-          }
-        />
-        <SidePanel
-          socket={socket}
-          lastDiff={selectedDiff}
-          runtime={runtime}
-          cloudMeta={cloudMeta}
-          prUrl={selectedAgent?.prUrl || roomInfo?.prUrl}
-          agentId={selectedAgentId}
-        />
-        <ContextPanel
-          roomId={roomId}
-          snapshot={roomContext}
-          canEdit={canEditMemory}
-          selectedAgentId={selectedAgentId}
-          selectedAgentLabel={selectedAgent?.label}
-          agentIdle={selectedStatus !== "running"}
-          stale={contextStale}
-        />
+                : undefined
+            }
+          />
+        )}
       </main>
 
       {agentsOpen && (
@@ -1255,6 +1172,30 @@ function LiveRoom({
         onLeave={() => {
           if (window.confirm("Leave this session?")) leaveRoom();
         }}
+        onOpenAgents={() => {
+          setSettingsOpen(false);
+          setAgentsOpen(true);
+        }}
+        onOpenMemory={() => {
+          setSettingsOpen(false);
+          setMemoryOpen(true);
+        }}
+        onOpenChanges={() => {
+          setSettingsOpen(false);
+          setChangesOpen(true);
+        }}
+        onOpenMembers={() => {
+          setSettingsOpen(false);
+          setRosterOpen(true);
+        }}
+        onOpenFlag={
+          canFlag
+            ? () => {
+                setSettingsOpen(false);
+                setFlagOpen(true);
+              }
+            : undefined
+        }
       />
 
       <InvitePanel
@@ -1309,6 +1250,12 @@ function LiveRoom({
         orgId={roomInfo?.orgId}
       />
 
+      {splitActive && (modelError || cursorSessionError || actionError || agentError) && (
+        <p className="relative z-20 shrink-0 px-3 py-2 text-[11px] text-[#f07070] border-t border-[#2b2b2b] bg-[#171717]">
+          {actionError || agentError || modelError || cursorSessionError}
+        </p>
+      )}
+      {!splitActive && (
       <footer className="relative z-20 border-t border-[#2b2b2b]/90 bg-[#171717]/95 backdrop-blur-xl shrink-0 overflow-hidden pb-[env(safe-area-inset-bottom)] shadow-[0_-20px_60px_rgba(0,0,0,0.24)]">
         {(modelError || cursorSessionError || actionError || agentError) && (
           <p className="px-3 pt-2 text-[11px] text-[#f07070]">
@@ -1407,6 +1354,7 @@ function LiveRoom({
           onOpenContext={() => setMemoryOpen(true)}
         />
       </footer>
+      )}
     </div>
   );
 }

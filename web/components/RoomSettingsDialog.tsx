@@ -2,11 +2,17 @@
 
 import { useEffect, useState } from "react";
 import {
+  Bell,
+  BookOpen,
+  Bot,
+  Cloud,
   Download,
+  GitCompare,
   Link2,
   Settings2,
   Share2,
   StopCircle,
+  Users,
 } from "lucide-react";
 import type { AgentInfo, ApprovalMode, ControlMode } from "../../shared/events";
 import type { AutoMemoryMode } from "../../shared/roomContext";
@@ -50,6 +56,11 @@ export default function RoomSettingsDialog({
   onExport,
   onStopSession,
   onLeave,
+  onOpenMemory,
+  onOpenChanges,
+  onOpenMembers,
+  onOpenFlag,
+  onOpenAgents,
 }: {
   open: boolean;
   onClose: () => void;
@@ -79,6 +90,11 @@ export default function RoomSettingsDialog({
   onExport: () => void;
   onStopSession: () => void;
   onLeave: () => void;
+  onOpenMemory?: () => void;
+  onOpenChanges?: () => void;
+  onOpenMembers?: () => void;
+  onOpenFlag?: () => void;
+  onOpenAgents?: () => void;
 }) {
   const [copiedLink, setCopiedLink] = useState(false);
 
@@ -165,6 +181,95 @@ export default function RoomSettingsDialog({
                 Local agents can operate on the host machine. Invite viewers for
                 watch-only access.
               </p>
+            )}
+          </section>
+
+          <section className="space-y-2">
+            <h3 className="text-[11px] uppercase tracking-wide text-[#6e6e6e]">
+              Panels
+            </h3>
+            {onOpenAgents && (
+              <button
+                type="button"
+                onClick={onOpenAgents}
+                className="w-full flex items-center gap-2.5 rounded-md border border-[#2b2b2b] bg-[#141414] px-3 py-2.5 text-left hover:border-[#3c3c3c] transition-colors"
+              >
+                <Bot className="h-4 w-4 text-[#a0a0a0] shrink-0" strokeWidth={1.75} />
+                <div className="min-w-0">
+                  <p className="text-[12px] text-[#e4e4e4]">Agents</p>
+                  <p className="text-[11px] text-[#6e6e6e]">
+                    Add, stop, or switch agents
+                  </p>
+                </div>
+              </button>
+            )}
+            {onOpenMemory && (
+              <button
+                type="button"
+                onClick={onOpenMemory}
+                className="w-full flex items-center gap-2.5 rounded-md border border-[#2b2b2b] bg-[#141414] px-3 py-2.5 text-left hover:border-[#3c3c3c] transition-colors"
+              >
+                <BookOpen className="h-4 w-4 text-[#a0a0a0] shrink-0" strokeWidth={1.75} />
+                <div className="min-w-0">
+                  <p className="text-[12px] text-[#e4e4e4]">Memory</p>
+                  <p className="text-[11px] text-[#6e6e6e]">
+                    Shared notes and repo map
+                  </p>
+                </div>
+              </button>
+            )}
+            {onOpenChanges && (
+              <button
+                type="button"
+                onClick={onOpenChanges}
+                className="w-full flex items-center gap-2.5 rounded-md border border-[#2b2b2b] bg-[#141414] px-3 py-2.5 text-left hover:border-[#3c3c3c] transition-colors"
+              >
+                {runtime === "cloud" ? (
+                  <Cloud className="h-4 w-4 text-[#a0a0a0] shrink-0" strokeWidth={1.75} />
+                ) : (
+                  <GitCompare className="h-4 w-4 text-[#a0a0a0] shrink-0" strokeWidth={1.75} />
+                )}
+                <div className="min-w-0">
+                  <p className="text-[12px] text-[#e4e4e4]">
+                    {runtime === "cloud" ? "Cloud" : "Changes"}
+                  </p>
+                  <p className="text-[11px] text-[#6e6e6e]">
+                    {runtime === "cloud"
+                      ? "Cloud run and pull request"
+                      : "File diffs from the current agent"}
+                  </p>
+                </div>
+              </button>
+            )}
+            {onOpenMembers && (
+              <button
+                type="button"
+                onClick={onOpenMembers}
+                className="w-full flex items-center gap-2.5 rounded-md border border-[#2b2b2b] bg-[#141414] px-3 py-2.5 text-left hover:border-[#3c3c3c] transition-colors"
+              >
+                <Users className="h-4 w-4 text-[#a0a0a0] shrink-0" strokeWidth={1.75} />
+                <div className="min-w-0">
+                  <p className="text-[12px] text-[#e4e4e4]">Members</p>
+                  <p className="text-[11px] text-[#6e6e6e]">
+                    People in this session
+                  </p>
+                </div>
+              </button>
+            )}
+            {onOpenFlag && (
+              <button
+                type="button"
+                onClick={onOpenFlag}
+                className="w-full flex items-center gap-2.5 rounded-md border border-[#2b2b2b] bg-[#141414] px-3 py-2.5 text-left hover:border-[#3c3c3c] transition-colors"
+              >
+                <Bell className="h-4 w-4 text-[#e8a23a] shrink-0" strokeWidth={1.75} />
+                <div className="min-w-0">
+                  <p className="text-[12px] text-[#e4e4e4]">Flag for review</p>
+                  <p className="text-[11px] text-[#6e6e6e]">
+                    Ping the room or Slack
+                  </p>
+                </div>
+              </button>
             )}
           </section>
 
