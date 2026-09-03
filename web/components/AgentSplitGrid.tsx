@@ -16,6 +16,7 @@ import type {
   TypingUser,
 } from "../../shared/events";
 import { isFeatureAgent } from "../../shared/events";
+import { resolveAgentRunStatus } from "../../shared/agentRunStatus";
 import IntegrateButton, { integrateButtonState } from "./IntegrateButton";
 import type { IntegrationJobInfo } from "../../shared/events";
 import { formatTypingIndicator } from "../../shared/typing";
@@ -138,13 +139,7 @@ export default function AgentSplitGrid({
         )}`}
       >
         {shownAgents.map((agent) => {
-          const status =
-            statusByAgent[agent.id] ||
-            (agent.status === "running"
-              ? "running"
-              : agent.status === "error"
-                ? "error"
-                : "idle");
+          const status = resolveAgentRunStatus(agent, statusByAgent);
           const driving = drivingAgentIds.includes(agent.id);
           const canSteer = canSteerWithRole({
             role: myRole,

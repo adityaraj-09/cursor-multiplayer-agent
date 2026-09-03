@@ -16,7 +16,6 @@ import {
   Lock,
   Paperclip,
   SendHorizontal,
-  Sparkles,
   X,
 } from "lucide-react";
 import type { ChatAttachment, ModelInfo } from "../../shared/events";
@@ -51,9 +50,6 @@ interface SteerInputProps {
   onTypingStop?: (agentId?: string) => void;
   /** e.g. "Jae is typing to Agent A…" */
   typingIndicator?: string;
-  /** Compact status for shared room memory used on the next send. */
-  contextHint?: string;
-  onOpenContext?: () => void;
   /** Tight layout for split panes. */
   compact?: boolean;
 }
@@ -80,8 +76,6 @@ export default function SteerInput({
   onTyping,
   onTypingStop,
   typingIndicator,
-  contextHint,
-  onOpenContext,
   compact = false,
 }: SteerInputProps) {
   const [text, setText] = useState("");
@@ -326,15 +320,6 @@ export default function SteerInput({
               {modelReason}
             </span>
           )}
-          {contextHint && !compact && (
-            <button
-              type="button"
-              onClick={onOpenContext}
-              className="hidden sm:inline-flex ml-auto items-center gap-1 text-[11px] text-[#8ec5ff] hover:text-[#b8dcff] truncate"
-            >
-              {contextHint}
-            </button>
-          )}
         </div>
 
         {attachments.length > 0 && (
@@ -390,7 +375,6 @@ export default function SteerInput({
           >
             <Paperclip className="h-4 w-4" strokeWidth={1.75} />
           </button>
-          <Sparkles className="mt-1 h-4 w-4 shrink-0 text-[#6e6e6e]" strokeWidth={1.75} />
           {/* Fixed height — long text / paste scrolls inside, never grows the footer */}
           <textarea
             value={text}
