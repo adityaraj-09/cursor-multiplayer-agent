@@ -12,6 +12,7 @@ import {
   coalesceTodoMessages,
   diffFromToolArgs,
   isTodoTool,
+  mergeAssistantText,
   resolveMessageTodos,
   todosFromToolArgs,
 } from "../shared/backends/cursor.js";
@@ -206,6 +207,68 @@ describe("CursorAgentBackend", () => {
       name: "write",
       path: "a.ts",
     });
+  });
+
+  it("does not duplicate or truncate streamed assistant snapshots", () => {
+    const paragraph =
+      "Movie mode is doing full YOLO-seg, pose, and saliency on every frame — that’s the slow part. I’ll skip the extras locked mode doesn’t need and sample analysis so trailers finish faster.";
+    const ctx = {
+      assistantBuf: { value: "" },
+      gotTerminalEvent: { value: false },
+    };
+
+    const first = backend.parseLine(
+      {
+        type: "assistant",
+        timestamp_ms: 1,
+        message: { content: [{ text: paragraph }] },
+      },
+      ctx,
+    );
+    const repeat = backend.parseLine(
+      {
+        type: "assistant",
+        timestamp_ms: 2,
+        message: { content: [{ text: paragraph }] },
+      },
+      ctx,
+    );
+    const truncated = backend.parseLine(
+      {
+        type: "assistant",
+        timestamp_ms: 3,
+        message: { content: [{ text: paragraph.slice(0, 40) }] },
+      },
+      ctx,
+    );
+    const finalEvt = backend.parseLine(
+      {
+        type: "assistant",
+        message: { content: [{ text: paragraph }] },
+      },
+      ctx,
+    );
+
+    expect(first[0]).toMatchObject({ kind: "assistant_delta", text: paragraph });
+    expect(repeat[0]).toMatchObject({ kind: "assistant_delta", text: paragraph });
+    expect(truncated[0]).toMatchObject({
+      kind: "assistant_delta",
+      text: paragraph,
+    });
+    expect(finalEvt[0]).toMatchObject({
+      kind: "assistant_final",
+      text: paragraph,
+    });
+    expect(ctx.assistantBuf.value).toBe(paragraph);
+    expect(ctx.assistantBuf.value.includes(paragraph + paragraph)).toBe(false);
+  });
+
+  it("mergeAssistantText keeps snapshots, deltas, and longer text", () => {
+    expect(mergeAssistantText("", "Hi")).toBe("Hi");
+    expect(mergeAssistantText("Hi", "Hi there")).toBe("Hi there");
+    expect(mergeAssistantText("Hi there", "Hi")).toBe("Hi there");
+    expect(mergeAssistantText("Hi", " there")).toBe("Hi there");
+    expect(mergeAssistantText("same", "same")).toBe("same");
   });
 
   it("maps nested subagent tools", () => {
