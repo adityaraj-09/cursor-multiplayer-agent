@@ -23,9 +23,11 @@ import {
   buildIntegratePrompt,
   buildIntegrationPrBody,
   buildIntegrationPrComment,
+  cursorModelForIntegrator,
   featureAgentSnapshots,
   integrationBranchName,
   isBaseBranch,
+  isUsableIntegrator,
   liveFeatureAgents,
 } from "./integration.js";
 import {
@@ -379,6 +381,36 @@ function resolveApiKey(row: db.RoomRow, userId?: string): string {
       ? "No Cursor API key configured — set an org shared key in Team settings, or paste a BYOK key"
       : "No Cursor API key configured — paste a Cursor API key (saved from previous sessions) or set CURSOR_API_KEY on the server",
   );
+}
+
+/**
+ * Cursor key lookup that still works on CLI-auth rooms.
+ * The Integrator is always a Cursor cloud agent and needs an API key.
+ */
+function resolveCursorKeyIgnoringCli(
+  row: db.RoomRow,
+  userId?: string,
+): string {
+  if (row.key_ciphertext) {
+    try {
+      const key = decryptApiKey(row.key_ciphertext);
+      if (key) return key;
+    } catch {
+      // fall through
+    }
+  }
+  if (row.org_id) {
+    const orgKey = getOrgCursorKey(row.org_id);
+    if (orgKey) return orgKey;
+  }
+  const serverKey = getServerApiKey();
+  if (serverKey) return serverKey;
+  const uid = userId || row.owner_id || undefined;
+  if (uid) {
+    const userKey = getUserByokKey(uid);
+    if (userKey) return userKey;
+  }
+  return "";
 }
 
 /** Persist a Cursor BYOK key onto the room so later agents / model lists can reuse it. */
@@ -3946,14 +3978,22 @@ export class RoomManager {
     }
     this.assertCanManage(roomId, actorUserId);
 
-    const backendKind: AgentBackendKind =
-      opts.backend === "claude-code" ? "claude-code" : "cursor";
     const asIntegrator = opts.kind === "integrator";
+    if (asIntegrator && !row.repo_url?.trim()) {
+      throw new Error(
+        "Integrate needs a GitHub repo URL so the Cursor cloud Integrator can fetch agent branches",
+      );
+    }
+    const backendKind: AgentBackendKind = asIntegrator
+      ? "cursor"
+      : opts.backend === "claude-code"
+        ? "claude-code"
+        : "cursor";
     const useClaudeSandbox =
+      !asIntegrator &&
       backendKind === "claude-code" &&
       Boolean(row.repo_url?.trim()) &&
-      (row.runtime === "cloud" ||
-        (asIntegrator && isClaudeSandboxConfigured()));
+      row.runtime === "cloud";
 
     let anthropicApiKey = "";
     if (backendKind === "claude-code") {
@@ -3997,7 +4037,7 @@ export class RoomManager {
     }
 
     let cursorApiKey = "";
-    if (backendKind === "cursor" && row.auth_mode !== "cli") {
+    if (backendKind === "cursor" && (row.auth_mode !== "cli" || asIntegrator)) {
       const pasted = opts.apiKey?.trim() || "";
       if (pasted) {
         if (!encryptionConfigured()) {
@@ -4012,11 +4052,13 @@ export class RoomManager {
         try {
           cursorApiKey = resolveApiKey(row, actorUserId);
         } catch {
-          cursorApiKey = "";
+          cursorApiKey = resolveCursorKeyIgnoringCli(row, actorUserId);
         }
         if (!cursorApiKey) {
           throw new Error(
-            "Paste your Cursor API key to add a Cursor agent (or reuse the key saved from a previous session)",
+            asIntegrator
+              ? "Integrate needs a Cursor API key. The Integrator is a Cursor cloud agent so it can fetch every feature branch."
+              : "Paste your Cursor API key to add a Cursor agent (or reuse the key saved from a previous session)",
           );
         }
         // Claude-created rooms have no Cursor key yet — persist the owner's
@@ -4064,16 +4106,20 @@ export class RoomManager {
     let backend: AgentBackend;
     if (useClaudeSandbox) {
       backend = this.createClaudeSandboxBackend(row, agentRow, anthropicApiKey);
-    } else if (row.auth_mode === "cli" || backendKind === "claude-code") {
+    } else if (
+      !asIntegrator &&
+      (row.auth_mode === "cli" || backendKind === "claude-code")
+    ) {
       backend = new AgentRunner(cwd, null, modelId, backendKind);
     } else {
       const apiKey = cursorApiKey || resolveApiKey(row, actorUserId);
       backend = new SdkAgentSession({
-        runtime: row.runtime === "cloud" ? "cloud" : "local",
+        runtime: asIntegrator || row.runtime === "cloud" ? "cloud" : "local",
         apiKey,
         model: { id: modelId },
-        name: row.name,
-        localCwd: row.runtime === "local" ? cwd : undefined,
+        name: asIntegrator ? `${row.name}/Integrator` : row.name,
+        localCwd:
+          asIntegrator || row.runtime === "cloud" ? undefined : cwd,
         repoUrl: row.repo_url || undefined,
         startingRef: row.starting_ref || undefined,
         autoCreatePR: asIntegrator,
@@ -5444,21 +5490,17 @@ export class RoomManager {
     }
   }
 
-  private pickIntegratorBackend(
-    row: db.RoomRow,
-    actorUserId: string,
-  ): AgentBackendKind {
-    if (row.repo_url?.trim() && isClaudeSandboxConfigured()) {
-      const key = resolveAnthropicApiKey(actorUserId, null, row.org_id);
-      if (key) return "claude-code";
+  private retireUnusableIntegrator(room: RoomState, agent: AgentState): void {
+    agent.runGeneration += 1;
+    if (agent.workerRunActive) {
+      this.workerRelay?.detachRun(room.id, agent.row.id);
+      for (const c of agent.workerRunCleanups) c();
+      agent.workerRunCleanups = [];
     }
-    if (row.runtime === "cloud") return "cursor";
-    if (isClaudeSandboxConfigured() && row.repo_url?.trim()) {
-      return "claude-code";
-    }
-    throw new Error(
-      "Integrate needs a cloud agent (Claude Code + E2B, or Cursor cloud) and a GitHub repo",
-    );
+    void agent.backend.abortAndWait().then(() => agent.backend.dispose());
+    db.updateAgentStatus(agent.row.id, "stopped");
+    agent.row.status = "stopped";
+    this.broadcastAgents(room);
   }
 
   private ensureIntegratorAgent(
@@ -5471,32 +5513,34 @@ export class RoomManager {
     const existingId = row.integration_agent_id;
     if (existingId) {
       const live = room.agents.get(existingId);
-      if (live && live.row.status !== "stopped") return live;
+      if (live && isUsableIntegrator(live.row)) return live;
     }
     for (const agent of room.agents.values()) {
-      if (
-        isIntegratorAgent(agent.row) &&
-        agent.row.status !== "stopped"
-      ) {
+      if (isUsableIntegrator(agent.row)) {
         db.setRoomIntegration(row.id, { agentId: agent.row.id });
         row.integration_agent_id = agent.row.id;
         room.row.integration_agent_id = agent.row.id;
         return agent;
       }
     }
+    for (const agent of room.agents.values()) {
+      if (isIntegratorAgent(agent.row) && agent.row.status !== "stopped") {
+        this.retireUnusableIntegrator(room, agent);
+      }
+    }
 
-    const backend = this.pickIntegratorBackend(row, actorUserId);
     const info = this.addAgent(
       row.id,
       {
-        backend,
+        backend: "cursor",
         label: "Integrator",
         kind: "integrator",
         branch: integrationBranch,
-        modelId:
-          backend === "claude-code"
-            ? DEFAULT_CLAUDE_MODEL
-            : source.row.model_id,
+        modelId: cursorModelForIntegrator(
+          source.row.model_id,
+          row.model_id,
+          DEFAULT_MODEL,
+        ),
         planMode: false,
         seedContext: true,
       },

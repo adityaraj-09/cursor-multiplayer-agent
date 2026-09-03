@@ -1,3 +1,4 @@
+import { isClaudeModelId } from "../shared/claudeModels.js";
 import { slugifyBranchPart } from "./githubPr.js";
 
 export interface IntegrateAgentSnapshot {
@@ -17,6 +18,32 @@ export interface BuildIntegratePromptInput {
   existingPrUrl?: string | null;
   source: IntegrateAgentSnapshot;
   agents: IntegrateAgentSnapshot[];
+}
+
+/** Integrator must be a live Cursor agent so it can fetch every feature branch. */
+export function isUsableIntegrator(agent: {
+  kind?: string | null;
+  backend?: string | null;
+  status?: string | null;
+}): boolean {
+  return (
+    agent.kind === "integrator" &&
+    agent.backend === "cursor" &&
+    agent.status !== "stopped"
+  );
+}
+
+/** Cursor SDK rejects Claude model ids — keep the Integrator on a Cursor model. */
+export function cursorModelForIntegrator(
+  sourceModel?: string | null,
+  roomModel?: string | null,
+  fallback = "composer-2.5",
+): string {
+  for (const id of [sourceModel, roomModel]) {
+    const trimmed = id?.trim();
+    if (trimmed && !isClaudeModelId(trimmed)) return trimmed;
+  }
+  return fallback;
 }
 
 export function isBaseBranch(branch: string | null | undefined, startingRef = "main"): boolean {
@@ -90,7 +117,7 @@ export function buildIntegratePrompt(input: BuildIntegratePromptInput): string {
   const existingPr = input.existingPrUrl?.trim() || "none";
 
   return [
-    `You are the room Integrator for “${input.roomName}”.`,
+    `You are the room Integrator for “${input.roomName}”. You run as a Cursor cloud agent with your own checkout.`,
     `Your only job is to combine agent feature branches into ONE shared integration branch and keep ONE pull request up to date.`,
     ``,
     `GitHub repo: ${input.repoUrl}`,
@@ -106,9 +133,10 @@ export function buildIntegratePrompt(input: BuildIntegratePromptInput): string {
     otherLines,
     ``,
     `Work in this agent’s own dedicated checkout. Do not reuse another agent’s dirty worktree.`,
+    `Feature branches (Cursor SDK names and \`steer/claude-*\`) live on origin — they are not in your clone until you fetch.`,
     ``,
     `Required steps:`,
-    `1. Fetch origin. If \`${input.integrationBranch}\` does not exist, create it from origin/${base} (or ${base} if origin is missing) and check it out. If it exists, check it out and fast-forward from origin if possible. Never reset it to discard commits.`,
+    `1. Fetch origin (all remotes). If \`${input.integrationBranch}\` does not exist, create it from origin/${base} (or ${base} if origin is missing) and check it out. If it exists, check it out and fast-forward from origin if possible. Never reset it to discard commits.`,
     `2. Sync with \`${base}\` FIRST: merge origin/${base} into \`${input.integrationBranch}\` (merge, do not rebase). Resolve any main-vs-integration conflicts so existing integrated features and main both survive. This keeps the PR diff current.`,
     `3. Merge \`${input.source.branch}\` into \`${input.integrationBranch}\`.`,
     `4. If there are merge conflicts, resolve them so BOTH sides’ features remain. Never discard a feature to make the merge easy. Prefer combining both changes. If two implementations of the same thing conflict, keep both behind clear names/paths or compose them, and mention the conflict in your summary.`,

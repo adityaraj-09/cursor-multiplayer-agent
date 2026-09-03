@@ -6,9 +6,11 @@ import {
   buildIntegratePrompt,
   buildIntegrationPrBody,
   buildIntegrationPrComment,
+  cursorModelForIntegrator,
   featureAgentSnapshots,
   integrationBranchName,
   isBaseBranch,
+  isUsableIntegrator,
   liveFeatureAgents,
 } from "../server/integration.js";
 import {
@@ -85,6 +87,50 @@ describe("integration helpers", () => {
     expect(prompt).toContain("never force-push");
     expect(prompt).not.toContain("Integrator (ag_int)");
     expect(prompt).toContain("https://github.com/acme/app/pull/4");
+    expect(prompt).toContain("Cursor cloud agent");
+    expect(prompt).toContain("steer/claude-*");
+    expect(prompt).toContain("Fetch origin");
+  });
+
+  it("only reuses a live Cursor integrator", () => {
+    expect(
+      isUsableIntegrator({
+        kind: "integrator",
+        backend: "cursor",
+        status: "idle",
+      }),
+    ).toBe(true);
+    expect(
+      isUsableIntegrator({
+        kind: "integrator",
+        backend: "claude-code",
+        status: "idle",
+      }),
+    ).toBe(false);
+    expect(
+      isUsableIntegrator({
+        kind: "integrator",
+        backend: "cursor",
+        status: "stopped",
+      }),
+    ).toBe(false);
+    expect(
+      isUsableIntegrator({
+        kind: "feature",
+        backend: "cursor",
+        status: "idle",
+      }),
+    ).toBe(false);
+  });
+
+  it("picks a Cursor model for the Integrator", () => {
+    expect(
+      cursorModelForIntegrator("claude-sonnet-4-6", "composer-2.5"),
+    ).toBe("composer-2.5");
+    expect(cursorModelForIntegrator("gpt-5.2", "composer-2.5")).toBe("gpt-5.2");
+    expect(cursorModelForIntegrator("sonnet", "claude-opus-4-8", "auto")).toBe(
+      "auto",
+    );
   });
 
   it("lists included branches in the integration PR body", () => {
