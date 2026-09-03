@@ -205,6 +205,10 @@ export class SdkAgentSession {
     return this.config.mode === "plan" ? "plan" : "agent";
   }
 
+  wantsAutoCreatePR(): boolean {
+    return Boolean(this.config.autoCreatePR);
+  }
+
   isBusy(): boolean {
     return this.processing || this.queue.length > 0;
   }
@@ -254,7 +258,12 @@ export class SdkAgentSession {
         ...base,
         ...(this.config.runtime === "local"
           ? { local: { cwd: this.config.localCwd } }
-          : { cloud: {} }),
+          : {
+              cloud: {
+                autoCreatePR: Boolean(this.config.autoCreatePR),
+                skipReviewerRequest: true,
+              },
+            }),
       });
     } else if (this.config.runtime === "cloud") {
       if (!this.config.repoUrl) {

@@ -116,6 +116,14 @@ export function integrationBranchName(roomId: string, roomName?: string): string
   return `steer/integration-${slug}-${shortId}`;
 }
 
+export function extractGithubPrUrl(text?: string | null): string | null {
+  if (!text) return null;
+  const match = text.match(
+    /https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/pull\/\d+/i,
+  );
+  return match?.[0] ?? null;
+}
+
 export function featureAgentSnapshots(
   agents: IntegrateAgentSnapshot[],
 ): IntegrateAgentSnapshot[] {
@@ -169,14 +177,15 @@ export function buildIntegratePrompt(input: BuildIntegratePromptInput): string {
     `5. Do not revert, reset --hard, or force-push in a way that drops commits already on \`${input.integrationBranch}\`. If the remote moved, fetch and merge again — never force-push.`,
     `6. HARD GATE before push: run the strongest available check (tests, otherwise typecheck / lint). If checks fail, fix breakages caused by the merge without removing features. Do not push, do not open/update the PR, and report the failure if checks still fail.`,
     `7. Only after checks pass: push \`${input.integrationBranch}\` to origin.`,
-    `8. Open a pull request from \`${input.integrationBranch}\` into \`${base}\` if none exists for that head. If a PR already exists for this head branch, update its title/body to list every merged agent/branch. Do not open a second PR from a different head.`,
-    `9. Reply with: integration branch, PR URL, which branches are included, a conflict-resolution summary (what overlapped and how both sides were kept), and the checks you ran.`,
+    `8. REQUIRED: open or update ONE pull request from \`${input.integrationBranch}\` into \`${base}\`. This environment can create PRs — do it now. Do not wait for human approval. Do not say the PR is queued or waiting. If needed run \`gh pr create --head ${input.integrationBranch} --base ${base}\` (or update the existing PR for that head). Never open a PR from any other branch.`,
+    `9. Reply with: integration branch, the live PR URL, which branches are included, a conflict-resolution summary (what overlapped and how both sides were kept), and the checks you ran.`,
     ``,
     `Hard rules:`,
     `- Merging must preserve features from every agent already on the integration branch plus the source you are merging now.`,
     `- Do not work on a new personal feature branch. Stay on \`${input.integrationBranch}\`.`,
     `- Do not close or replace per-agent feature PRs. Those stay as-is.`,
     `- Do not self-certify “both features preserved” without listing the overlapping files and how you kept both sides.`,
+    `- Do not finish without a real GitHub pull request URL whose head is \`${input.integrationBranch}\`.`,
   ]
     .filter((line) => line !== "")
     .join("\n");
