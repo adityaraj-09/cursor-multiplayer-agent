@@ -29,6 +29,8 @@ import {
   formatTypingIndicatorAll,
 } from "../../../shared/typing";
 import { useRoomContext } from "./RoomContext";
+import IntegrateButton from "../IntegrateButton";
+import { isFeatureAgent, isIntegratorAgent } from "../../../shared/events";
 
 export default function RoomChatPane() {
   const ctx = useRoomContext();
@@ -119,6 +121,8 @@ export default function RoomChatPane() {
     handleForceRelease,
     handleDecideApproval,
     handleAnswerQuestions,
+    integratingAgentId,
+    handleIntegrateAgent,
     conflicts,
     fileLocks,
     lastBlocked,
@@ -167,6 +171,10 @@ export default function RoomChatPane() {
       }}
       visibleIds={visibleIds}
       onVisibleIdsChange={setVisibleIds}
+      canIntegrate={canManage && Boolean(roomInfo?.repoUrl)}
+      integrating={Boolean(integratingAgentId)}
+      hasIntegrationPr={Boolean(roomInfo?.integrationPrUrl)}
+      onIntegrate={(id) => void handleIntegrateAgent(id)}
     />
   ) : (
     <ChatPanel
@@ -255,7 +263,18 @@ export default function RoomChatPane() {
               {roomInfo?.name || roomId}
             </h1>
             <AttentionBadge attention={attention} />
-            {agents.length > 1 && (
+            {roomInfo?.integrationPrUrl && (
+              <a
+                href={roomInfo.integrationPrUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="hidden sm:inline-flex h-7 items-center px-2 rounded-md border border-[#26405d] bg-[#17202a] text-[10px] text-[#8ec5ff] hover:underline shrink-0"
+                title="Shared integration pull request"
+              >
+                Integration PR
+              </a>
+            )}
+            {agents.filter(isFeatureAgent).length > 1 && (
               <div className="inline-flex items-center gap-1.5 shrink-0">
                 <div className="inline-flex items-center rounded-lg border border-[#2b2b2b] bg-[#1a1a1a] p-0.5">
                   <button
@@ -328,6 +347,25 @@ export default function RoomChatPane() {
             >
               <Settings2 className="h-3.5 w-3.5" strokeWidth={1.75} />
             </button>
+            {canManage &&
+              roomInfo?.repoUrl &&
+              selectedAgent &&
+              isFeatureAgent(selectedAgent) &&
+              selectedAgent.branch &&
+              !splitActive && (
+                <IntegrateButton
+                  hasPr={Boolean(roomInfo.integrationPrUrl)}
+                  busy={
+                    Boolean(integratingAgentId) ||
+                    selectedStatus === "running" ||
+                    Boolean(agents.find(isIntegratorAgent)?.status === "running")
+                  }
+                  disabled={
+                    selectedStatus === "running" || Boolean(integratingAgentId)
+                  }
+                  onClick={() => void handleIntegrateAgent(selectedAgent.id)}
+                />
+              )}
             {selectedStatus === "running" && canSteerSelected && (
               <button
                 type="button"

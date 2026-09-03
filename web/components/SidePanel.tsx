@@ -21,6 +21,8 @@ interface SidePanelProps {
   runtime: AgentRuntime;
   cloudMeta: CloudMeta | null;
   prUrl?: string;
+  integrationBranch?: string;
+  integrationPrUrl?: string;
   /** Mobile bottom-sheet mode */
   mobile?: boolean;
   onClose?: () => void;
@@ -33,6 +35,8 @@ export default function SidePanel({
   runtime,
   cloudMeta,
   prUrl,
+  integrationBranch,
+  integrationPrUrl,
   mobile = false,
   onClose,
   agentId = null,
@@ -164,6 +168,24 @@ export default function SidePanel({
           <MetaRow label="Repository" value={meta.repoUrl} mono />
           <MetaRow label="Starting ref" value={meta.startingRef} mono />
           <MetaRow label="Branch" value={meta.branch} mono />
+          <MetaRow label="Integration branch" value={integrationBranch} mono />
+          <div>
+            <div className="text-[11px] text-[#6e6e6e] mb-1">Integration PR</div>
+            {integrationPrUrl ? (
+              <a
+                href={integrationPrUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="text-[13px] text-[#4d9fff] hover:underline break-all"
+              >
+                {integrationPrUrl}
+              </a>
+            ) : (
+              <p className="text-[13px] text-[#6e6e6e]">
+                Click Integrate on an agent to merge into the shared PR
+              </p>
+            )}
+          </div>
           <div>
             <div className="text-[11px] text-[#6e6e6e] mb-1">Pull request</div>
             {effectivePr ? (

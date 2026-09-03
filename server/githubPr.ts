@@ -25,6 +25,15 @@ export interface CreatePullRequestResult {
   number: number;
 }
 
+export interface UpdatePullRequestInput {
+  owner: string;
+  repo: string;
+  number: number;
+  token: string;
+  title?: string;
+  body?: string;
+}
+
 const GITHUB_API = "https://api.github.com";
 
 export function parseGithubRepoUrl(raw: string): ParsedGithubRepo | null {
@@ -119,7 +128,7 @@ export async function createPullRequest(
   return { url: data.html_url, number: data.number };
 }
 
-async function findOpenPullRequest(
+export async function findOpenPullRequest(
   owner: string,
   repo: string,
   headBranch: string,
@@ -143,6 +152,73 @@ async function findOpenPullRequest(
   const first = list[0];
   if (!first?.html_url || typeof first.number !== "number") return null;
   return { url: first.html_url, number: first.number };
+}
+
+export async function updatePullRequest(
+  input: UpdatePullRequestInput,
+): Promise<CreatePullRequestResult> {
+  const patch: { title?: string; body?: string } = {};
+  if (input.title !== undefined) patch.title = input.title;
+  if (input.body !== undefined) patch.body = input.body;
+  const res = await fetch(
+    `${GITHUB_API}/repos/${input.owner}/${input.repo}/pulls/${input.number}`,
+    {
+      method: "PATCH",
+      headers: {
+        Accept: "application/vnd.github+json",
+        Authorization: `Bearer ${input.token}`,
+        "X-GitHub-Api-Version": "2022-11-28",
+        "Content-Type": "application/json",
+        "User-Agent": "steer-claude-sandbox",
+      },
+      body: JSON.stringify(patch),
+    },
+  );
+  const data = (await res.json().catch(() => ({}))) as {
+    html_url?: string;
+    number?: number;
+    message?: string;
+  };
+  if (!res.ok) {
+    throw new Error(
+      data.message || `GitHub PR update failed (${res.status})`,
+    );
+  }
+  if (!data.html_url || typeof data.number !== "number") {
+    throw new Error("GitHub PR update returned an unexpected payload");
+  }
+  return { url: data.html_url, number: data.number };
+}
+
+/** Create a PR or recover the existing open one for this head, then refresh title/body. */
+export async function ensurePullRequest(input: {
+  owner: string;
+  repo: string;
+  title: string;
+  body: string;
+  head: string;
+  base: string;
+  token: string;
+}): Promise<CreatePullRequestResult & { created: boolean }> {
+  const existing = await findOpenPullRequest(
+    input.owner,
+    input.repo,
+    input.head,
+    input.token,
+  );
+  if (existing) {
+    const updated = await updatePullRequest({
+      owner: input.owner,
+      repo: input.repo,
+      number: existing.number,
+      token: input.token,
+      title: input.title,
+      body: input.body,
+    });
+    return { ...updated, created: false };
+  }
+  const created = await createPullRequest(input);
+  return { ...created, created: true };
 }
 
 /** Sanitize a slug for git branch names. */

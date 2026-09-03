@@ -133,4 +133,43 @@ describe("new db features smoke test", () => {
     const expired = db.getApprovalRequest(ar2.id);
     expect(expired?.status).toBe("expired");
   });
+
+  it("stores an integrator agent and room integration PR", async () => {
+    const db = await import("../server/db/index.js");
+    const roomId = randomUUID();
+    db.createRoom({
+      id: roomId,
+      name: "Integration Room",
+      repoPath: "/tmp",
+      agentCommand: "echo",
+      runtime: "cloud",
+      authMode: "server",
+      modelId: "auto",
+      repoUrl: "https://github.com/acme/app",
+      startingRef: "main",
+    });
+    const feature = db.createAgent({
+      roomId,
+      label: "Agent A",
+      branch: "steer/claude-a",
+    });
+    expect(feature.kind).toBe("feature");
+    const integrator = db.createAgent({
+      roomId,
+      label: "Integrator",
+      kind: "integrator",
+      branch: "steer/integration-x",
+    });
+    expect(integrator.kind).toBe("integrator");
+    db.setRoomIntegration(roomId, {
+      branch: "steer/integration-x",
+      prUrl: "https://github.com/acme/app/pull/4",
+      agentId: integrator.id,
+    });
+    const room = db.getRoom(roomId);
+    expect(room?.integration_branch).toBe("steer/integration-x");
+    expect(room?.integration_pr_url).toBe("https://github.com/acme/app/pull/4");
+    expect(room?.integration_agent_id).toBe(integrator.id);
+    expect(room?.pr_url).toBeNull();
+  });
 });

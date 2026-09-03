@@ -126,6 +126,8 @@ export default function RoomDrawers() {
           runtime={runtime}
           cloudMeta={cloudMeta}
           prUrl={selectedAgent?.prUrl || roomInfo?.prUrl}
+          integrationBranch={roomInfo?.integrationBranch}
+          integrationPrUrl={roomInfo?.integrationPrUrl}
           agentId={selectedAgentId}
           mobile
           onClose={() => setChangesOpen(false)}

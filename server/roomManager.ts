@@ -12,7 +12,17 @@ import {
   ClaudeSandboxSession,
   isClaudeSandboxConfigured,
 } from "./claudeSandbox.js";
-import { githubTokenFromEnv } from "./githubPr.js";
+import {
+  ensurePullRequest,
+  githubTokenFromEnv,
+  parseGithubRepoUrl,
+} from "./githubPr.js";
+import {
+  buildIntegratePrompt,
+  buildIntegrationPrBody,
+  featureAgentSnapshots,
+  integrationBranchName,
+} from "./integration.js";
 import {
   resolveAnthropicApiKey,
   setUserAnthropicByokKey,
@@ -129,7 +139,7 @@ import type {
   ServerToClientEvents,
   ClientToServerEvents,
 } from "../shared/events.js";
-import { AVATAR_COLORS } from "../shared/events.js";
+import { AVATAR_COLORS, isIntegratorAgent } from "../shared/events.js";
 
 const MAX_NAME_LENGTH = 30;
 
@@ -408,7 +418,9 @@ export class RoomManager {
 
     this.workerRelay?.setDefaultAgentResolver((roomId) => {
       const agents = db.listAgents(roomId);
-      return agents[0]?.id ?? null;
+      return (
+        agents.find((a) => !isIntegratorAgent(a))?.id ?? agents[0]?.id ?? null
+      );
     });
   }
 
@@ -711,7 +723,8 @@ export class RoomManager {
           localCwd: row.runtime === "local" ? cwd : undefined,
           repoUrl: row.repo_url || undefined,
           startingRef: row.starting_ref || undefined,
-          autoCreatePR: Boolean(row.auto_create_pr),
+          autoCreatePR:
+            Boolean(row.auto_create_pr) || isIntegratorAgent(agentRow),
         });
       }
 
@@ -793,15 +806,21 @@ export class RoomManager {
   // -----------------------------------------------------------------------
 
   private getDefaultAgent(room: RoomState): AgentState {
-    // First by sort_order (agentRows come sorted from DB)
+    // First by sort_order (agentRows come sorted from DB). Skip the Integrator.
     let first: AgentState | undefined;
+    let fallback: AgentState | undefined;
     for (const a of room.agents.values()) {
+      if (!fallback || a.row.sort_order < fallback.row.sort_order) {
+        fallback = a;
+      }
+      if (isIntegratorAgent(a.row)) continue;
       if (!first || a.row.sort_order < first.row.sort_order) {
         first = a;
       }
     }
-    if (!first) throw new Error("Room has no agents");
-    return first;
+    const pick = first || fallback;
+    if (!pick) throw new Error("Room has no agents");
+    return pick;
   }
 
   private getAgentState(
@@ -828,6 +847,7 @@ export class RoomManager {
       branch: row.branch || undefined,
       prUrl: row.pr_url || undefined,
       planMode: Boolean(row.plan_mode),
+      kind: row.kind === "integrator" ? "integrator" : "feature",
     };
   }
 
@@ -919,7 +939,8 @@ export class RoomManager {
       name: `${row.name}/${agentRow.label}`,
       repoUrl: row.repo_url?.trim() || "",
       startingRef: row.starting_ref || "main",
-      autoCreatePR: Boolean(row.auto_create_pr),
+      autoCreatePR:
+        Boolean(row.auto_create_pr) || isIntegratorAgent(agentRow),
       sessionId: agentRow.session_id,
       sandboxId: agentRow.sdk_agent_id,
       branch: agentRow.branch,
@@ -3103,27 +3124,55 @@ export class RoomManager {
                 : undefined;
             if (git?.branches?.length) {
               const branch = git.branches[0];
-              room.cloudMeta = {
-                ...room.cloudMeta,
-                repoUrl: branch.repoUrl || room.cloudMeta.repoUrl,
-                branch: branch.branch || room.cloudMeta.branch,
-                prUrl: branch.prUrl || room.cloudMeta.prUrl,
-              };
-              if (branch.prUrl || branch.branch) {
+              if (isIntegratorAgent(agent.row)) {
                 if (branch.prUrl) {
-                  db.setPrUrl(room.id, branch.prUrl);
-                  room.row.pr_url = branch.prUrl;
+                  db.setRoomIntegration(room.id, {
+                    prUrl: branch.prUrl,
+                    branch: branch.branch || undefined,
+                  });
+                  room.row.integration_pr_url = branch.prUrl;
                   agent.row.pr_url = branch.prUrl;
+                }
+                if (branch.branch) {
+                  agent.row.branch = branch.branch;
+                  if (!room.row.integration_branch) {
+                    db.setRoomIntegration(room.id, { branch: branch.branch });
+                    room.row.integration_branch = branch.branch;
+                  }
                 }
                 db.setAgentPr(
                   agent.row.id,
                   branch.prUrl || agent.row.pr_url || null,
                   branch.branch || agent.row.branch || null,
                 );
-                if (branch.branch) agent.row.branch = branch.branch;
+                this.emitIntegrationUpdated(room, {
+                  sourceAgentId: "",
+                  integratorAgentId: agent.row.id,
+                });
+                this.broadcastAgents(room);
+              } else {
+                room.cloudMeta = {
+                  ...room.cloudMeta,
+                  repoUrl: branch.repoUrl || room.cloudMeta.repoUrl,
+                  branch: branch.branch || room.cloudMeta.branch,
+                  prUrl: branch.prUrl || room.cloudMeta.prUrl,
+                };
+                if (branch.prUrl || branch.branch) {
+                  if (branch.prUrl) {
+                    db.setPrUrl(room.id, branch.prUrl);
+                    room.row.pr_url = branch.prUrl;
+                    agent.row.pr_url = branch.prUrl;
+                  }
+                  db.setAgentPr(
+                    agent.row.id,
+                    branch.prUrl || agent.row.pr_url || null,
+                    branch.branch || agent.row.branch || null,
+                  );
+                  if (branch.branch) agent.row.branch = branch.branch;
+                }
+                this.io.to(room.id).emit("cloud-meta", room.cloudMeta);
+                this.broadcastAgents(room);
               }
-              this.io.to(room.id).emit("cloud-meta", room.cloudMeta);
-              this.broadcastAgents(room);
             }
             break;
           }
@@ -3204,6 +3253,9 @@ export class RoomManager {
       }
     }
     this.ingestAutoMemory(room, agent, outcome);
+    if (isIntegratorAgent(agent.row) && outcome === "completed") {
+      void this.finalizeIntegrationPr(room, agent);
+    }
   }
 
   private ingestAutoMemory(
@@ -3850,6 +3902,10 @@ export class RoomManager {
       planMode?: boolean;
       /** First run receives the repo map + accepted room memory (default true). */
       seedContext?: boolean;
+      /** Hidden merge agent used by Integrate. */
+      kind?: "feature" | "integrator";
+      /** Pin this agent to an existing git branch (Integrator). */
+      branch?: string;
     },
     actorUserId: string,
   ): AgentInfo {
@@ -3862,10 +3918,16 @@ export class RoomManager {
 
     const backendKind: AgentBackendKind =
       opts.backend === "claude-code" ? "claude-code" : "cursor";
+    const asIntegrator = opts.kind === "integrator";
+    const useClaudeSandbox =
+      backendKind === "claude-code" &&
+      Boolean(row.repo_url?.trim()) &&
+      (row.runtime === "cloud" ||
+        (asIntegrator && isClaudeSandboxConfigured()));
 
     let anthropicApiKey = "";
     if (backendKind === "claude-code") {
-      if (row.runtime === "cloud") {
+      if (useClaudeSandbox) {
         if (!isClaudeSandboxConfigured()) {
           throw new Error(
             "Claude Code cloud agents require E2B_API_KEY on the server",
@@ -3960,6 +4022,9 @@ export class RoomManager {
       modelId,
       createdBy: actorUserId,
       planMode: Boolean(opts.planMode),
+      kind: asIntegrator ? "integrator" : "feature",
+      branch: opts.branch?.trim() || null,
+      sortOrder: asIntegrator ? 1000 : undefined,
     });
 
     const cwd = row.runtime === "local"
@@ -3967,7 +4032,7 @@ export class RoomManager {
       : "";
 
     let backend: AgentBackend;
-    if (backendKind === "claude-code" && row.runtime === "cloud") {
+    if (useClaudeSandbox) {
       backend = this.createClaudeSandboxBackend(row, agentRow, anthropicApiKey);
     } else if (row.auth_mode === "cli" || backendKind === "claude-code") {
       backend = new AgentRunner(cwd, null, modelId, backendKind);
@@ -3981,7 +4046,7 @@ export class RoomManager {
         localCwd: row.runtime === "local" ? cwd : undefined,
         repoUrl: row.repo_url || undefined,
         startingRef: row.starting_ref || undefined,
-        autoCreatePR: Boolean(row.auto_create_pr),
+        autoCreatePR: Boolean(row.auto_create_pr) || asIntegrator,
         mode: agentRow.plan_mode ? "plan" : "agent",
       });
     }
@@ -4934,6 +4999,290 @@ export class RoomManager {
     return this.rooms.get(roomId);
   }
 
+  integrateAgent(
+    roomId: string,
+    sourceAgentId: string,
+    actorUserId: string,
+  ): {
+    ok: true;
+    status: "started";
+    integratorAgentId: string;
+    integrationBranch: string;
+    prUrl: string | null;
+  } {
+    this.assertCanManage(roomId, actorUserId);
+    const room = this.rooms.get(roomId);
+    const row = db.getRoom(roomId);
+    if (!room || !row || row.status !== "active") {
+      throw new Error("Room not found");
+    }
+
+    const source = room.agents.get(sourceAgentId);
+    if (!source || source.row.room_id !== roomId) {
+      throw new Error("Agent not found");
+    }
+    if (isIntegratorAgent(source.row)) {
+      throw new Error("Cannot integrate the Integrator itself");
+    }
+    const sourceBranch = source.row.branch?.trim();
+    if (!sourceBranch) {
+      throw new Error(
+        "This agent has no branch yet. Wait until it pushes work, then Integrate.",
+      );
+    }
+    if (
+      source.workerRunActive ||
+      source.backend.isBusy() ||
+      source.row.status === "running"
+    ) {
+      throw new Error("Wait for this agent to finish before integrating");
+    }
+    if (!row.repo_url?.trim()) {
+      throw new Error("Integrate needs a GitHub repo URL on this room");
+    }
+
+    const integrationBranch =
+      row.integration_branch?.trim() ||
+      integrationBranchName(row.id, row.name);
+    const integrator = this.ensureIntegratorAgent(
+      room,
+      row,
+      source,
+      actorUserId,
+      integrationBranch,
+    );
+    if (
+      integrator.workerRunActive ||
+      integrator.backend.isBusy() ||
+      integrator.row.status === "running"
+    ) {
+      throw new Error(
+        "The Integrator is already merging. Wait for it to finish.",
+      );
+    }
+
+    if (!row.integration_branch || !row.integration_agent_id) {
+      db.setRoomIntegration(roomId, {
+        branch: integrationBranch,
+        agentId: integrator.row.id,
+      });
+      row.integration_branch = integrationBranch;
+      row.integration_agent_id = integrator.row.id;
+      room.row.integration_branch = integrationBranch;
+      room.row.integration_agent_id = integrator.row.id;
+    }
+
+    const actor = actorUserId ? db.getUserById(actorUserId) : undefined;
+    const steeredBy: SteerAuthor | null = actorUserId
+      ? {
+          userId: actorUserId,
+          name: actor?.name || "Host",
+          email: actor?.email,
+        }
+      : null;
+    integrator.lastSteeredBy = steeredBy;
+
+    const prompt = buildIntegratePrompt({
+      roomName: row.name,
+      repoUrl: row.repo_url,
+      startingRef: row.starting_ref || "main",
+      integrationBranch,
+      existingPrUrl: row.integration_pr_url,
+      source: {
+        id: source.row.id,
+        label: source.row.label,
+        branch: source.row.branch,
+        prUrl: source.row.pr_url,
+        kind: source.row.kind,
+        status: source.row.status,
+      },
+      agents: [...room.agents.values()].map((a) => ({
+        id: a.row.id,
+        label: a.row.label,
+        branch: a.row.branch,
+        prUrl: a.row.pr_url,
+        kind: a.row.kind,
+        status: a.row.status,
+      })),
+    });
+
+    const userMsg: ChatMessage = {
+      id: nanoid(12),
+      roomId: room.id,
+      role: "user",
+      content: `Integrate ${source.row.label} (\`${sourceBranch}\`) into \`${integrationBranch}\`. Keep every agent’s features if there are conflicts.`,
+      senderName: steeredBy?.name || "Host",
+      senderUserId: actorUserId,
+      status: "done",
+      ts: Date.now(),
+      agentId: integrator.row.id,
+    };
+    db.insertMessage(userMsg);
+    this.io.to(room.id).emit("chat-message", userMsg);
+    this.emitIntegrationUpdated(room, {
+      sourceAgentId: source.row.id,
+      integratorAgentId: integrator.row.id,
+    });
+
+    integrator.workerRunActive = true;
+    void this.runAgent(
+      room,
+      integrator,
+      prompt + attributionPromptSuffix(steeredBy),
+    );
+
+    return {
+      ok: true,
+      status: "started",
+      integratorAgentId: integrator.row.id,
+      integrationBranch,
+      prUrl: row.integration_pr_url || null,
+    };
+  }
+
+  private pickIntegratorBackend(
+    row: db.RoomRow,
+    actorUserId: string,
+  ): AgentBackendKind {
+    if (row.repo_url?.trim() && isClaudeSandboxConfigured()) {
+      const key = resolveAnthropicApiKey(actorUserId, null, row.org_id);
+      if (key) return "claude-code";
+    }
+    if (row.runtime === "cloud") return "cursor";
+    if (isClaudeSandboxConfigured() && row.repo_url?.trim()) {
+      return "claude-code";
+    }
+    throw new Error(
+      "Integrate needs a cloud agent (Claude Code + E2B, or Cursor cloud) and a GitHub repo",
+    );
+  }
+
+  private ensureIntegratorAgent(
+    room: RoomState,
+    row: db.RoomRow,
+    source: AgentState,
+    actorUserId: string,
+    integrationBranch: string,
+  ): AgentState {
+    const existingId = row.integration_agent_id;
+    if (existingId) {
+      const live = room.agents.get(existingId);
+      if (live && live.row.status !== "stopped") return live;
+    }
+    for (const agent of room.agents.values()) {
+      if (
+        isIntegratorAgent(agent.row) &&
+        agent.row.status !== "stopped"
+      ) {
+        db.setRoomIntegration(row.id, { agentId: agent.row.id });
+        row.integration_agent_id = agent.row.id;
+        room.row.integration_agent_id = agent.row.id;
+        return agent;
+      }
+    }
+
+    const backend = this.pickIntegratorBackend(row, actorUserId);
+    const info = this.addAgent(
+      row.id,
+      {
+        backend,
+        label: "Integrator",
+        kind: "integrator",
+        branch: integrationBranch,
+        modelId:
+          backend === "claude-code"
+            ? DEFAULT_CLAUDE_MODEL
+            : source.row.model_id,
+        planMode: false,
+        seedContext: true,
+      },
+      actorUserId,
+    );
+    const state = room.agents.get(info.id);
+    if (!state) throw new Error("Failed to create Integrator");
+    db.setRoomIntegration(row.id, {
+      agentId: info.id,
+      branch: integrationBranch,
+    });
+    row.integration_agent_id = info.id;
+    row.integration_branch = integrationBranch;
+    room.row.integration_agent_id = info.id;
+    room.row.integration_branch = integrationBranch;
+    return state;
+  }
+
+  private emitIntegrationUpdated(
+    room: RoomState,
+    ids: { sourceAgentId: string; integratorAgentId: string },
+  ): void {
+    this.io.to(room.id).emit("integration-updated", {
+      roomId: room.id,
+      branch: room.row.integration_branch || "",
+      prUrl: room.row.integration_pr_url || undefined,
+      sourceAgentId: ids.sourceAgentId,
+      integratorAgentId: ids.integratorAgentId,
+    });
+  }
+
+  private async finalizeIntegrationPr(
+    room: RoomState,
+    agent: AgentState,
+  ): Promise<void> {
+    const token = githubTokenFromEnv();
+    const repoUrl = room.row.repo_url?.trim();
+    const head =
+      room.row.integration_branch?.trim() || agent.row.branch?.trim();
+    if (!token || !repoUrl || !head) return;
+    const parsed = parseGithubRepoUrl(repoUrl);
+    if (!parsed) return;
+
+    const agents = db.listAgents(room.id);
+    const title = `[Steer] Integration — ${room.row.name}`.slice(0, 100);
+    const body = buildIntegrationPrBody({
+      roomName: room.row.name,
+      startingRef: room.row.starting_ref || "main",
+      integrationBranch: head,
+      agents: featureAgentSnapshots(
+        agents.map((a) => ({
+          id: a.id,
+          label: a.label,
+          branch: a.branch,
+          prUrl: a.pr_url,
+          kind: a.kind,
+          status: a.status,
+        })),
+      ),
+    });
+
+    try {
+      const pr = await ensurePullRequest({
+        owner: parsed.owner,
+        repo: parsed.repo,
+        title,
+        body,
+        head,
+        base: room.row.starting_ref?.trim() || "main",
+        token,
+      });
+      db.setRoomIntegration(room.id, { prUrl: pr.url, branch: head });
+      db.setAgentPr(agent.row.id, pr.url, head);
+      room.row.integration_pr_url = pr.url;
+      room.row.integration_branch = head;
+      agent.row.pr_url = pr.url;
+      agent.row.branch = head;
+      this.emitIntegrationUpdated(room, {
+        sourceAgentId: "",
+        integratorAgentId: agent.row.id,
+      });
+      this.broadcastAgents(room);
+    } catch (err) {
+      console.warn(
+        "[RoomManager] integration PR failed:",
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+
   private toRoomInfo(
     row: db.RoomRow,
     participantCount: number,
@@ -4970,6 +5319,9 @@ export class RoomManager {
       startingRef: row.starting_ref || undefined,
       prUrl: row.pr_url || undefined,
       autoCreatePR: Boolean(row.auto_create_pr),
+      integrationBranch: row.integration_branch || undefined,
+      integrationPrUrl: row.integration_pr_url || undefined,
+      integrationAgentId: row.integration_agent_id || undefined,
       keyHint: row.key_hint || undefined,
       ownerId: row.owner_id || undefined,
       orgId: row.org_id || undefined,

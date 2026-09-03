@@ -2,9 +2,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   authedGithubHttpsUrl,
   createPullRequest,
+  ensurePullRequest,
   githubTokenFromEnv,
   parseGithubRepoUrl,
   slugifyBranchPart,
+  updatePullRequest,
 } from "../server/githubPr.js";
 
 describe("parseGithubRepoUrl", () => {
@@ -118,5 +120,119 @@ describe("createPullRequest", () => {
       number: 9,
     });
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("ensurePullRequest", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("updates an existing open PR instead of opening another", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => [
+          {
+            html_url: "https://github.com/acme/widget/pull/9",
+            number: 9,
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          html_url: "https://github.com/acme/widget/pull/9",
+          number: 9,
+        }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await ensurePullRequest({
+      owner: "acme",
+      repo: "widget",
+      title: "Integration",
+      body: "Updated body",
+      head: "steer/integration-x",
+      base: "main",
+      token: "tok",
+    });
+
+    expect(result).toEqual({
+      url: "https://github.com/acme/widget/pull/9",
+      number: 9,
+      created: false,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const [updateUrl, updateInit] = fetchMock.mock.calls[1] as [
+      string,
+      RequestInit,
+    ];
+    expect(updateUrl).toContain("/pulls/9");
+    expect(updateInit.method).toBe("PATCH");
+  });
+
+  it("creates a PR when none exists", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => [],
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          html_url: "https://github.com/acme/widget/pull/11",
+          number: 11,
+        }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await ensurePullRequest({
+      owner: "acme",
+      repo: "widget",
+      title: "Integration",
+      body: "Body",
+      head: "steer/integration-x",
+      base: "main",
+      token: "tok",
+    });
+
+    expect(result.created).toBe(true);
+    expect(result.number).toBe(11);
+  });
+});
+
+describe("updatePullRequest", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("patches title and body", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        html_url: "https://github.com/acme/widget/pull/3",
+        number: 3,
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await updatePullRequest({
+      owner: "acme",
+      repo: "widget",
+      number: 3,
+      token: "tok",
+      title: "New title",
+      body: "New body",
+    });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(init.method).toBe("PATCH");
+    expect(JSON.parse(String(init.body))).toEqual({
+      title: "New title",
+      body: "New body",
+    });
   });
 });

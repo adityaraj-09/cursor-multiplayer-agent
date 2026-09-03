@@ -165,6 +165,8 @@ export type RoomContextValue = {
   handleGrantDrive: () => void;
   handleStopSession: () => Promise<void>;
   handleAbortRun: () => Promise<void>;
+  integratingAgentId: string | null;
+  handleIntegrateAgent: (agentId: string) => Promise<void>;
   handleAddAgent: (data: {
     label: string;
     backend: "cursor" | "claude-code";

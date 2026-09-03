@@ -1073,6 +1073,23 @@ app.post("/api/rooms/:id/agents/:agentId/stop", requireAuth, async (req, res) =>
   }
 });
 
+app.post("/api/rooms/:id/agents/:agentId/integrate", requireAuth, (req, res) => {
+  const id = routeParam(req.params.id);
+  const agentId = routeParam(req.params.agentId);
+  if (!roomManager.userCanAccessRoom(id, req.user!.id)) {
+    res.status(404).json({ error: "Room not found" });
+    return;
+  }
+  try {
+    const result = roomManager.integrateAgent(id, agentId, req.user!.id);
+    res.json(result);
+  } catch (err) {
+    res.status(400).json({
+      error: err instanceof Error ? err.message : "Failed to integrate agent",
+    });
+  }
+});
+
 app.post("/api/rooms/:id/agents/:agentId/abort", requireAuth, async (req, res) => {
   const id = routeParam(req.params.id);
   const agentId = routeParam(req.params.agentId);

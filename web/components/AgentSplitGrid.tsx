@@ -15,6 +15,8 @@ import type {
   ModelInfo,
   TypingUser,
 } from "../../shared/events";
+import { isFeatureAgent } from "../../shared/events";
+import IntegrateButton from "./IntegrateButton";
 import { formatTypingIndicator } from "../../shared/typing";
 import {
   canSteerWithRole,
@@ -62,6 +64,10 @@ export default function AgentSplitGrid({
   onRevertMessage,
   visibleIds,
   onVisibleIdsChange,
+  canIntegrate,
+  integrating,
+  hasIntegrationPr,
+  onIntegrate,
 }: {
   agents: AgentInfo[];
   messages: ChatMessage[];
@@ -85,6 +91,10 @@ export default function AgentSplitGrid({
   onRevertMessage?: (messageId: string, agentId?: string) => void;
   visibleIds: string[];
   onVisibleIdsChange: (ids: string[]) => void;
+  canIntegrate?: boolean;
+  integrating?: boolean;
+  hasIntegrationPr?: boolean;
+  onIntegrate?: (agentId: string) => void;
 }) {
   const liveAgents = useMemo(
     () => agents.filter((a) => a.status !== "stopped"),
@@ -169,6 +179,18 @@ export default function AgentSplitGrid({
                 <span className="ml-auto text-[10px] text-[#6e6e6e] shrink-0">
                   {status === "running" ? "running" : status}
                 </span>
+                {canIntegrate &&
+                  onIntegrate &&
+                  isFeatureAgent(agent) &&
+                  Boolean(agent.branch) && (
+                    <IntegrateButton
+                      compact
+                      hasPr={Boolean(hasIntegrationPr)}
+                      busy={Boolean(integrating) || status === "running"}
+                      disabled={status === "running" || Boolean(integrating)}
+                      onClick={() => onIntegrate(agent.id)}
+                    />
+                  )}
                 <button
                   type="button"
                   onClick={() =>

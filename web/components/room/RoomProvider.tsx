@@ -11,6 +11,7 @@ import {
   exportRoomTranscript,
   fetchRoomModels,
   forceReleaseFileLock,
+  integrateRoomAgent,
   stopRoom,
   stopRoomAgent,
   updateRoomAgent,
@@ -41,6 +42,7 @@ import type {
   RoomInfo,
   RoomMemberInfo,
 } from "../../../shared/events";
+import { isFeatureAgent, isIntegratorAgent } from "../../../shared/events";
 import {
   CLAUDE_MODELS,
   DEFAULT_CLAUDE_MODEL,
@@ -177,6 +179,9 @@ export default function RoomProvider({
   const [cursorSessionError, setCursorSessionError] = useState("");
   const [savingCursorSession, setSavingCursorSession] = useState(false);
   const [actionError, setActionError] = useState("");
+  const [integratingAgentId, setIntegratingAgentId] = useState<string | null>(
+    null,
+  );
   const [stopping, setStopping] = useState(false);
   const [aborting, setAborting] = useState(false);
   const storedView = readRoomViewPrefs(roomId);
@@ -217,9 +222,11 @@ export default function RoomProvider({
     if (!agents.length) return;
     if (selectedAgentId && agents.some((a) => a.id === selectedAgentId)) return;
     const storedId = readRoomViewPrefs(roomId).selectedAgentId;
+    const features = agents.filter(isFeatureAgent);
+    const pool = features.length ? features : agents;
     const next =
-      (storedId && agents.some((a) => a.id === storedId) && storedId) ||
-      (agents.find((a) => a.status !== "stopped") || agents[0]).id;
+      (storedId && pool.some((a) => a.id === storedId) && storedId) ||
+      (pool.find((a) => a.status !== "stopped") || pool[0]).id;
     const frame = requestAnimationFrame(() => setSelectedAgentId(next));
     return () => cancelAnimationFrame(frame);
   }, [agents, selectedAgentId, roomId]);
@@ -255,11 +262,16 @@ export default function RoomProvider({
     isDrivingAgent: amDrivingSelected,
   });
   const showDriverControls = canRequestDrive(myRole);
-  const splitActive = variant !== "tile" && viewMode === "split" && agents.length > 1;
+  const featureAgents = useMemo(
+    () => agents.filter(isFeatureAgent),
+    [agents],
+  );
+  const splitActive =
+    variant !== "tile" && viewMode === "split" && featureAgents.length > 1;
   const splitPool = useMemo(() => {
-    const live = agents.filter((a) => a.status !== "stopped");
-    return live.length ? live : agents;
-  }, [agents]);
+    const live = featureAgents.filter((a) => a.status !== "stopped");
+    return live.length ? live : featureAgents;
+  }, [featureAgents]);
   const splitPoolIds = useMemo(() => splitPool.map((a) => a.id), [splitPool]);
 
   useEffect(() => {
@@ -369,11 +381,27 @@ export default function RoomProvider({
     const onControlMode = (mode: ControlMode) => {
       onRoomInfo({ ...roomInfo, controlMode: mode });
     };
+    const onIntegration = (payload: {
+      roomId: string;
+      branch: string;
+      prUrl?: string;
+      integratorAgentId: string;
+    }) => {
+      if (payload.roomId !== roomId) return;
+      onRoomInfo({
+        ...roomInfo,
+        integrationBranch: payload.branch || roomInfo.integrationBranch,
+        integrationPrUrl: payload.prUrl || roomInfo.integrationPrUrl,
+        integrationAgentId: payload.integratorAgentId || roomInfo.integrationAgentId,
+      });
+    };
     socket.on("control-mode-updated", onControlMode);
+    socket.on("integration-updated", onIntegration);
     return () => {
       socket.off("control-mode-updated", onControlMode);
+      socket.off("integration-updated", onIntegration);
     };
-  }, [socket, roomInfo, onRoomInfo]);
+  }, [socket, roomInfo, onRoomInfo, roomId]);
 
   useEffect(() => {
     if (typeof window === "undefined" || !user?.id || variant === "tile") return;
@@ -566,6 +594,40 @@ export default function RoomProvider({
       setAborting(false);
     }
   }, [roomId, selectedAgentId]);
+
+  const handleIntegrateAgent = useCallback(
+    async (agentId: string) => {
+      setActionError("");
+      setIntegratingAgentId(agentId);
+      try {
+        const result = await integrateRoomAgent(roomId, agentId);
+        if (roomInfo) {
+          onRoomInfo({
+            ...roomInfo,
+            integrationBranch: result.integrationBranch,
+            integrationPrUrl: result.prUrl || roomInfo.integrationPrUrl,
+            integrationAgentId: result.integratorAgentId,
+          });
+        }
+        setSelectedAgentId(result.integratorAgentId);
+        setChatFilterAgentId(result.integratorAgentId);
+        setVisibleIds((prev) => pinVisibleId(prev, result.integratorAgentId));
+      } catch (err) {
+        setActionError(
+          err instanceof Error ? err.message : "Failed to integrate agent",
+        );
+      } finally {
+        setIntegratingAgentId(null);
+      }
+    },
+    [roomId, roomInfo, onRoomInfo],
+  );
+
+  const integrator = agents.find(isIntegratorAgent);
+  const integratorBusy =
+    Boolean(integrator) &&
+    (statusByAgent[integrator!.id] === "running" ||
+      integrator!.status === "running");
 
   const handleAddAgent = useCallback(
     async (data: {
@@ -881,6 +943,10 @@ export default function RoomProvider({
         handleGrantDrive,
         handleStopSession,
         handleAbortRun,
+        integratingAgentId:
+          integratingAgentId ||
+          (integratorBusy ? integrator?.id || null : null),
+        handleIntegrateAgent,
         handleAddAgent,
         handleStopAgent,
         handleForceRelease,

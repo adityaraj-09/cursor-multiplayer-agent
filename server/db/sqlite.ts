@@ -78,7 +78,10 @@ db.exec(`
     slack_webhook_ciphertext TEXT,
     slack_webhook_hint TEXT,
     memory_version INTEGER NOT NULL DEFAULT 0,
-    auto_memory TEXT NOT NULL DEFAULT 'extract'
+    auto_memory TEXT NOT NULL DEFAULT 'extract',
+    integration_branch TEXT,
+    integration_pr_url TEXT,
+    integration_agent_id TEXT
   );
 
   CREATE TABLE IF NOT EXISTS steer_messages (
@@ -183,7 +186,8 @@ db.exec(`
     created_at INTEGER NOT NULL,
     sort_order INTEGER NOT NULL DEFAULT 0,
     plan_mode INTEGER NOT NULL DEFAULT 0,
-    auto_mem_cursor_ts INTEGER NOT NULL DEFAULT 0
+    auto_mem_cursor_ts INTEGER NOT NULL DEFAULT 0,
+    kind TEXT NOT NULL DEFAULT 'feature'
   );
 
   CREATE TABLE IF NOT EXISTS agent_drivers (
@@ -306,6 +310,10 @@ const migrations = [
   `ALTER TABLE agents ADD COLUMN auto_mem_cursor_ts INTEGER NOT NULL DEFAULT 0`,
   `ALTER TABLE messages ADD COLUMN questions_json TEXT`,
   `ALTER TABLE messages ADD COLUMN reverted INTEGER NOT NULL DEFAULT 0`,
+  `ALTER TABLE rooms ADD COLUMN integration_branch TEXT`,
+  `ALTER TABLE rooms ADD COLUMN integration_pr_url TEXT`,
+  `ALTER TABLE rooms ADD COLUMN integration_agent_id TEXT`,
+  `ALTER TABLE agents ADD COLUMN kind TEXT NOT NULL DEFAULT 'feature'`,
 ];
 
 for (const sql of migrations) {
@@ -560,6 +568,13 @@ const stmts = {
     `UPDATE rooms SET cursor_agent_id = ? WHERE id = ?`,
   ),
   updatePrUrl: db.prepare(`UPDATE rooms SET pr_url = ? WHERE id = ?`),
+  updateIntegration: db.prepare(`
+    UPDATE rooms SET
+      integration_branch = COALESCE(?, integration_branch),
+      integration_pr_url = COALESCE(?, integration_pr_url),
+      integration_agent_id = COALESCE(?, integration_agent_id)
+    WHERE id = ?
+  `),
   updateModelId: db.prepare(`UPDATE rooms SET model_id = ? WHERE id = ?`),
   updateRoomByokKey: db.prepare(
     `UPDATE rooms SET key_ciphertext = ?, key_hint = ? WHERE id = ?`,
@@ -612,8 +627,8 @@ const stmts = {
   insertAgent: db.prepare(`
     INSERT INTO agents (
       id, room_id, backend, label, scope_path, session_id, sdk_agent_id,
-      model_id, status, branch, pr_url, created_by, created_at, sort_order, plan_mode
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      model_id, status, branch, pr_url, created_by, created_at, sort_order, plan_mode, kind
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `),
   getAgent: db.prepare(`SELECT * FROM agents WHERE id = ?`),
   listAgents: db.prepare(`
@@ -996,6 +1011,9 @@ export interface RoomRow {
   slack_webhook_hint: string | null;
   memory_version?: number;
   auto_memory?: string;
+  integration_branch?: string | null;
+  integration_pr_url?: string | null;
+  integration_agent_id?: string | null;
 }
 
 export interface CreateRoomInput {
@@ -1151,6 +1169,7 @@ export interface AgentRow {
   sort_order: number;
   plan_mode: number;
   auto_mem_cursor_ts?: number;
+  kind?: string;
 }
 
 export interface CreateAgentInput {
@@ -1168,6 +1187,7 @@ export interface CreateAgentInput {
   createdBy?: string | null;
   sortOrder?: number;
   planMode?: boolean;
+  kind?: string;
 }
 
 export function createRoom(input: CreateRoomInput): RoomRow {
@@ -1237,6 +1257,9 @@ export function getRoom(id: string): RoomRow | undefined {
   if (row.slack_webhook_hint === undefined) {
     row.slack_webhook_hint = null;
   }
+  if (row.integration_branch === undefined) row.integration_branch = null;
+  if (row.integration_pr_url === undefined) row.integration_pr_url = null;
+  if (row.integration_agent_id === undefined) row.integration_agent_id = null;
   return row;
 }
 
@@ -1267,6 +1290,22 @@ export function setCursorAgentId(roomId: string, agentId: string): void {
 
 export function setPrUrl(roomId: string, prUrl: string): void {
   stmts.updatePrUrl.run(prUrl, roomId);
+}
+
+export function setRoomIntegration(
+  roomId: string,
+  patch: {
+    branch?: string | null;
+    prUrl?: string | null;
+    agentId?: string | null;
+  },
+): void {
+  stmts.updateIntegration.run(
+    patch.branch === undefined ? null : patch.branch,
+    patch.prUrl === undefined ? null : patch.prUrl,
+    patch.agentId === undefined ? null : patch.agentId,
+    roomId,
+  );
 }
 
 export function setModelId(roomId: string, modelId: string): void {
@@ -1857,6 +1896,7 @@ function rowToAgent(r: Record<string, unknown>): AgentRow {
     sort_order: (r.sort_order as number) ?? 0,
     plan_mode: (r.plan_mode as number) ?? 0,
     auto_mem_cursor_ts: Number(r.auto_mem_cursor_ts ?? 0),
+    kind: (r.kind as string) || "feature",
   };
 }
 
@@ -1883,6 +1923,7 @@ export function createAgent(input: CreateAgentInput): AgentRow {
     now,
     sortOrder,
     input.planMode ? 1 : 0,
+    input.kind === "integrator" ? "integrator" : "feature",
   );
   return stmts.getAgent.get(id) as AgentRow;
 }

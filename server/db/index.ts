@@ -33,6 +33,7 @@ export const updateRoomStatus = backend.updateRoomStatus;
 export const setCursorSessionId = backend.setCursorSessionId;
 export const setCursorAgentId = backend.setCursorAgentId;
 export const setPrUrl = backend.setPrUrl;
+export const setRoomIntegration = backend.setRoomIntegration;
 export const setModelId = backend.setModelId;
 export const setRoomByokKey = backend.setRoomByokKey;
 export const insertSteerMessage = backend.insertSteerMessage;

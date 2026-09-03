@@ -22,6 +22,7 @@ import type {
   ModelInfo,
   Participant,
 } from "../../shared/events";
+import { isIntegratorAgent } from "../../shared/events";
 
 interface AgentTabsProps {
   agents: AgentInfo[];
@@ -269,6 +270,14 @@ export default function AgentTabs({
                       active
                     </span>
                   )}
+                  {isIntegratorAgent(agent) && (
+                    <span
+                      className="text-[9px] px-1.5 py-0.5 rounded-md bg-[#1d2418] text-[#a3e635] shrink-0"
+                      title="Merges agent branches into the shared integration PR"
+                    >
+                      integrator
+                    </span>
+                  )}
                   {agent.planMode && (
                     <span
                       className="text-[9px] px-1.5 py-0.5 rounded-md bg-[#17202a] text-[#4d9fff] shrink-0"
@@ -306,7 +315,10 @@ export default function AgentTabs({
                 </span>
               )}
             </button>
-            {amHost && agent.status !== "stopped" && multi && (
+            {amHost &&
+              agent.status !== "stopped" &&
+              multi &&
+              !isIntegratorAgent(agent) && (
               <button
                 type="button"
                 title="Stop agent"

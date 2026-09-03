@@ -913,6 +913,30 @@ export async function stopRoomAgent(
   }
 }
 
+export async function integrateRoomAgent(
+  roomId: string,
+  agentId: string,
+): Promise<{
+  ok: true;
+  status: "started";
+  integratorAgentId: string;
+  integrationBranch: string;
+  prUrl: string | null;
+}> {
+  const res = await fetch(
+    `${API_BASE}/rooms/${roomId}/agents/${agentId}/integrate`,
+    {
+      method: "POST",
+      headers: await authHeaders(),
+    },
+  );
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Failed to integrate agent");
+  }
+  return res.json();
+}
+
 export async function abortRoomAgent(
   roomId: string,
   agentId: string,

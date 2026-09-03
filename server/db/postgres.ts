@@ -51,7 +51,10 @@ async function initSchema() {
       slack_webhook_ciphertext TEXT,
       slack_webhook_hint TEXT,
       memory_version BIGINT NOT NULL DEFAULT 0,
-      auto_memory TEXT NOT NULL DEFAULT 'extract'
+      auto_memory TEXT NOT NULL DEFAULT 'extract',
+      integration_branch TEXT,
+      integration_pr_url TEXT,
+      integration_agent_id TEXT
     );
 
     CREATE TABLE IF NOT EXISTS steer_messages (
@@ -156,7 +159,8 @@ async function initSchema() {
       created_at BIGINT NOT NULL,
       sort_order INTEGER NOT NULL DEFAULT 0,
       plan_mode INTEGER NOT NULL DEFAULT 0,
-      auto_mem_cursor_ts BIGINT NOT NULL DEFAULT 0
+      auto_mem_cursor_ts BIGINT NOT NULL DEFAULT 0,
+      kind TEXT NOT NULL DEFAULT 'feature'
     );
 
     CREATE TABLE IF NOT EXISTS agent_drivers (
@@ -372,6 +376,10 @@ async function initSchema() {
     `ALTER TABLE agents ADD COLUMN IF NOT EXISTS auto_mem_cursor_ts BIGINT NOT NULL DEFAULT 0`,
     `ALTER TABLE messages ADD COLUMN IF NOT EXISTS questions_json TEXT`,
     `ALTER TABLE messages ADD COLUMN IF NOT EXISTS reverted INTEGER NOT NULL DEFAULT 0`,
+    `ALTER TABLE rooms ADD COLUMN IF NOT EXISTS integration_branch TEXT`,
+    `ALTER TABLE rooms ADD COLUMN IF NOT EXISTS integration_pr_url TEXT`,
+    `ALTER TABLE rooms ADD COLUMN IF NOT EXISTS integration_agent_id TEXT`,
+    `ALTER TABLE agents ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'feature'`,
   ];
 
   for (const sql of migrations) {
@@ -439,6 +447,9 @@ export interface RoomRow {
   slack_webhook_hint: string | null;
   memory_version?: number;
   auto_memory?: string;
+  integration_branch?: string | null;
+  integration_pr_url?: string | null;
+  integration_agent_id?: string | null;
 }
 
 export interface CreateRoomInput {
@@ -519,6 +530,9 @@ function pgRowToRoom(r: Record<string, unknown>): RoomRow {
     slack_webhook_ciphertext: (r.slack_webhook_ciphertext as string) ?? null,
     slack_webhook_hint: (r.slack_webhook_hint as string) ?? null,
     auto_memory: String(r.auto_memory || "extract"),
+    integration_branch: (r.integration_branch as string) ?? null,
+    integration_pr_url: (r.integration_pr_url as string) ?? null,
+    integration_agent_id: (r.integration_agent_id as string) ?? null,
   };
 }
 
@@ -642,6 +656,7 @@ export interface AgentRow {
   sort_order: number;
   plan_mode: number;
   auto_mem_cursor_ts?: number;
+  kind?: string;
 }
 
 export interface CreateAgentInput {
@@ -659,6 +674,7 @@ export interface CreateAgentInput {
   createdBy?: string | null;
   sortOrder?: number;
   planMode?: boolean;
+  kind?: string;
 }
 
 // Top-level await ensures schema is initialized before any exports are used
@@ -792,6 +808,29 @@ export function setCursorAgentId(roomId: string, agentId: string): void {
 
 export function setPrUrl(roomId: string, prUrl: string): void {
   syncQuery(`UPDATE rooms SET pr_url = $1 WHERE id = $2`, [prUrl, roomId]);
+}
+
+export function setRoomIntegration(
+  roomId: string,
+  patch: {
+    branch?: string | null;
+    prUrl?: string | null;
+    agentId?: string | null;
+  },
+): void {
+  syncQuery(
+    `UPDATE rooms SET
+      integration_branch = COALESCE($1, integration_branch),
+      integration_pr_url = COALESCE($2, integration_pr_url),
+      integration_agent_id = COALESCE($3, integration_agent_id)
+    WHERE id = $4`,
+    [
+      patch.branch === undefined ? null : patch.branch,
+      patch.prUrl === undefined ? null : patch.prUrl,
+      patch.agentId === undefined ? null : patch.agentId,
+      roomId,
+    ],
+  );
 }
 
 export function setModelId(roomId: string, modelId: string): void {
@@ -1611,6 +1650,7 @@ function rowToAgent(r: Record<string, unknown>): AgentRow {
     sort_order: num(r.sort_order as string) ?? 0,
     plan_mode: num(r.plan_mode as string) ?? 0,
     auto_mem_cursor_ts: num(r.auto_mem_cursor_ts as string | number) ?? 0,
+    kind: (r.kind as string) || "feature",
   };
 }
 
@@ -1624,8 +1664,8 @@ export function createAgent(input: CreateAgentInput): AgentRow {
   const rows = syncQuery<Record<string, unknown>>(
     `INSERT INTO agents (
       id, room_id, backend, label, scope_path, session_id, sdk_agent_id,
-      model_id, status, branch, pr_url, created_by, created_at, sort_order, plan_mode
-    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+      model_id, status, branch, pr_url, created_by, created_at, sort_order, plan_mode, kind
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
     RETURNING *`,
     [
       id,
@@ -1643,6 +1683,7 @@ export function createAgent(input: CreateAgentInput): AgentRow {
       now,
       sortOrder,
       input.planMode ? 1 : 0,
+      input.kind === "integrator" ? "integrator" : "feature",
     ],
   );
   return rowToAgent(rows[0]);

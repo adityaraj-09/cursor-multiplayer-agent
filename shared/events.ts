@@ -62,6 +62,9 @@ export type AgentStatus =
   | "stopped"
   | "error";
 
+/** feature = normal room agent; integrator = hidden merge agent for Integrate. */
+export type AgentKind = "feature" | "integrator";
+
 export interface AgentInfo {
   id: string;
   roomId: string;
@@ -79,6 +82,17 @@ export interface AgentInfo {
   prUrl?: string;
   /** Plan mode = read-only explore/propose (Cursor --mode plan / Claude permission-mode plan). */
   planMode?: boolean;
+  kind?: AgentKind;
+}
+
+export function isIntegratorAgent(agent: {
+  kind?: string | null;
+}): boolean {
+  return agent.kind === "integrator";
+}
+
+export function isFeatureAgent(agent: { kind?: string | null }): boolean {
+  return !isIntegratorAgent(agent);
 }
 
 export interface AgentConflict {
@@ -197,6 +211,11 @@ export interface RoomInfo {
   startingRef?: string;
   prUrl?: string;
   autoCreatePR?: boolean;
+  /** Shared integration branch (steer/integration-…) used by Integrate. */
+  integrationBranch?: string;
+  /** Single PR from the integration branch into startingRef. */
+  integrationPrUrl?: string;
+  integrationAgentId?: string;
   keyHint?: string;
   ownerId?: string;
   /** Organization that owns this session (null/undefined = personal). */
@@ -348,6 +367,14 @@ export interface ServerToClientEvents {
     agentId: string;
     count: number;
     entries: MemoryEntryInfo[];
+  }) => void;
+  /** Integration branch / PR changed after an Integrate click. */
+  "integration-updated": (payload: {
+    roomId: string;
+    branch: string;
+    prUrl?: string;
+    sourceAgentId: string;
+    integratorAgentId: string;
   }) => void;
   /** File changes were reverted. */
   "changes-reverted": (payload: {
