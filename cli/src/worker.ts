@@ -18,6 +18,12 @@ import { listChatSessions } from "./listSessions.js";
 const WORKER_PROTOCOL = 3;
 const MAX_CONCURRENT = Number(process.env.STEER_MAX_CONCURRENT_AGENTS || 4);
 const LOCK_WAIT_MS = 5000;
+/** Match server attachFileDiff — wait for the working tree to flush. */
+const DIFF_WAIT_MS = 120;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 interface LockResultPayload {
   requestId: string;
@@ -121,6 +127,7 @@ export function startWorker(repoPathOverride?: string): void {
   const activeRuns = new Map<string, RunState>();
   let runSeqCounter = 0;
   const offlineQueue: QueuedEmit[] = [];
+  const lastSessionByAgent = new Map<string, string>();
   const MAX_QUEUE = 500;
 
   const socket: Socket = io(`${serverUrl}/worker`, {
@@ -206,7 +213,6 @@ export function startWorker(repoPathOverride?: string): void {
       repoPath: payloadRepoPath,
       cwd: payloadCwd,
       modelId,
-      sessionId,
     } = payload;
     const agentId = payload.agentId || "default";
     const backendKind =
@@ -215,6 +221,8 @@ export function startWorker(repoPathOverride?: string): void {
     const runKey = makeRunKey(roomId, agentId);
     const repoPath = repoPathOverride || payloadCwd || payloadRepoPath;
     const cwd = payloadCwd || repoPath;
+    const sessionId =
+      payload.sessionId || lastSessionByAgent.get(runKey) || null;
 
     if (activeRuns.has(runKey)) {
       console.log(
@@ -286,82 +294,119 @@ export function startWorker(repoPathOverride?: string): void {
       ),
     );
 
+    // Process stream events in order. Fire-and-forget handlers used to race
+    // lock acquisition / git diffs ahead of later tool_done rows, so chat
+    // grouped cards often missed path + patch until the whole run finished.
+    let eventQueue = Promise.resolve();
     const onEvent = (event: AgentStreamEvent) => {
-      void (async () => {
-        const current = activeRuns.get(runKey);
-        if (!current || current.runSeq !== thisRun) return;
+      eventQueue = eventQueue
+        .then(() => handleEvent(event))
+        .catch((err) => {
+          console.error(
+            chalk.red(
+              `  ✗ Event handler: ${(err as Error).message || String(err)}`,
+            ),
+          );
+        });
+    };
 
-        if (
-          event.kind === "tool_start" &&
-          event.path &&
-          event.callId &&
-          event.name &&
-          isEditTool(event.name)
-        ) {
-          const lock = await acquireFileLock(
-            socket,
+    const handleEvent = async (event: AgentStreamEvent) => {
+      const current = activeRuns.get(runKey);
+      if (!current || current.runSeq !== thisRun) return;
+
+      if (
+        event.kind === "tool_start" &&
+        event.path &&
+        event.callId &&
+        event.name &&
+        isEditTool(event.name)
+      ) {
+        const lock = await acquireFileLock(
+          socket,
+          roomId,
+          agentId,
+          event.path,
+          event.callId,
+        );
+        if (!lock.granted) {
+          const holder = lock.holderAgentId || "another agent";
+          const message = `File \`${event.path}\` is locked by ${holder}. Wait for the other agent to finish or ask the host to release the lock.`;
+          console.error(chalk.red(`  ✗ Lock denied: ${message}`));
+          current.abort();
+          abortRun(runKey);
+          emitOrQueue("worker:agent-event", {
             roomId,
             agentId,
-            event.path,
-            event.callId,
-          );
-          if (!lock.granted) {
-            const holder = lock.holderAgentId || "another agent";
-            const message = `File \`${event.path}\` is locked by ${holder}. Wait for the other agent to finish or ask the host to release the lock.`;
-            console.error(chalk.red(`  ✗ Lock denied: ${message}`));
-            current.abort();
-            abortRun(runKey);
-            emitOrQueue("worker:agent-event", {
+            event: { kind: "error", message } satisfies AgentStreamEvent,
+          });
+          finishRun({ kind: "error", message });
+          return;
+        }
+      }
+
+      let outgoing: AgentStreamEvent = event;
+
+      if (event.kind === "tool_start") {
+        console.log(chalk.yellow(`  ▸ ${event.name} ${event.detail}`));
+        if (event.path && event.callId) {
+          current.pendingCallPaths.set(event.callId, event.path);
+        }
+      } else if (event.kind === "tool_done") {
+        const path =
+          event.path ||
+          (event.callId
+            ? current.pendingCallPaths.get(event.callId)
+            : undefined);
+        console.log(
+          chalk.green(
+            `  ✓ ${event.name}${path ? ` ${path}` : ` ${event.detail}`}`,
+          ),
+        );
+        if (path && event.name && isEditTool(event.name)) {
+          emitOrQueue("worker:release-lock", { roomId, agentId, path });
+        }
+        if (isEditTool(event.name) && path && event.callId) {
+          current.editedPaths.set(path, event.callId);
+          await sleep(DIFF_WAIT_MS);
+          if (activeRuns.get(runKey)?.runSeq !== thisRun) return;
+          let patch = event.diffPatch?.trim() || "";
+          try {
+            const git = (await getFileDiff(cwd, path)).trim();
+            if (git) patch = git;
+          } catch {
+            // synthetic parser patch is still useful
+          }
+          outgoing = {
+            ...event,
+            path,
+            diffPatch: patch || event.diffPatch,
+          };
+          if (patch) {
+            emitOrQueue("worker:file-diff", {
               roomId,
               agentId,
-              event: { kind: "error", message } satisfies AgentStreamEvent,
+              callId: event.callId,
+              toolName: event.name || "edit",
+              path,
+              patch,
             });
-            finishRun({ kind: "error", message });
-            return;
           }
         }
+      } else if (event.kind === "assistant_final") {
+        console.log(chalk.white(`  Assistant: ${event.text.slice(0, 120)}…`));
+      } else if (event.kind === "session") {
+        if (event.sessionId) lastSessionByAgent.set(runKey, event.sessionId);
+        console.log(chalk.gray(`  session ${event.sessionId}`));
+      } else if (event.kind === "error") {
+        console.error(chalk.red(`  ✗ Error: ${event.message}`));
+      } else if (event.kind === "done") {
+        console.log(chalk.green("  ✓ Agent finished"));
+      }
 
-        if (event.kind === "done" || event.kind === "error") {
-          current.emittedTerminal = true;
-        }
-        emitOrQueue("worker:agent-event", { roomId, agentId, event });
-
-        if (event.kind === "tool_start") {
-          console.log(chalk.yellow(`  ▸ ${event.name} ${event.detail}`));
-          if (event.path && event.callId) {
-            current.pendingCallPaths.set(event.callId, event.path);
-          }
-        } else if (event.kind === "tool_done") {
-          console.log(chalk.green(`  ✓ ${event.name} ${event.detail}`));
-          const path =
-            event.path ||
-            (event.callId
-              ? current.pendingCallPaths.get(event.callId)
-              : undefined);
-          if (path && event.name && isEditTool(event.name)) {
-            emitOrQueue("worker:release-lock", { roomId, agentId, path });
-          }
-          if (isEditTool(event.name) && path && event.callId) {
-            current.editedPaths.set(path, event.callId);
-            if (event.diffPatch) {
-              emitOrQueue("worker:file-diff", {
-                roomId,
-                agentId,
-                callId: event.callId,
-                toolName: event.name || "edit",
-                path,
-                patch: event.diffPatch,
-              });
-            }
-          }
-        } else if (event.kind === "assistant_final") {
-          console.log(chalk.white(`  Assistant: ${event.text.slice(0, 120)}…`));
-        } else if (event.kind === "error") {
-          console.error(chalk.red(`  ✗ Error: ${event.message}`));
-        } else if (event.kind === "done") {
-          console.log(chalk.green("  ✓ Agent finished"));
-        }
-      })();
+      if (outgoing.kind === "done" || outgoing.kind === "error") {
+        current.emittedTerminal = true;
+      }
+      emitOrQueue("worker:agent-event", { roomId, agentId, event: outgoing });
     };
 
     const finishRun = (terminal?: AgentStreamEvent) => {
@@ -399,6 +444,7 @@ export function startWorker(repoPathOverride?: string): void {
 
     handle.promise
       .then(async () => {
+        await eventQueue;
         const current = activeRuns.get(runKey);
         if (!current || current.runSeq !== thisRun) return;
         for (const [filePath, callId] of current.editedPaths) {
@@ -420,7 +466,8 @@ export function startWorker(repoPathOverride?: string): void {
         }
         finishRun({ kind: "done", result: "" });
       })
-      .catch((err) => {
+      .catch(async (err) => {
+        await eventQueue;
         const current = activeRuns.get(runKey);
         if (!current || current.runSeq !== thisRun) return;
         const message = (err as Error).message || "Agent error";
