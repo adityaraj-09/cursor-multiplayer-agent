@@ -8,6 +8,7 @@ import type {
 } from "../shared/events.js";
 import * as db from "./db.js";
 import type { FileLockRegistry } from "./fileLocks.js";
+import type { WorkerPromptAttachment } from "../shared/uploads.js";
 
 export function makeRunKey(roomId: string, agentId: string): string {
   return `${roomId}:${agentId}`;
@@ -508,6 +509,7 @@ export class WorkerRelay {
     cwd?: string,
     backend?: string,
     mode?: "agent" | "plan",
+    attachments?: WorkerPromptAttachment[],
   ): boolean {
     const worker = this.workers.get(workerId);
     if (!worker) return false;
@@ -532,6 +534,12 @@ export class WorkerRelay {
       );
     }
 
+    if (attachments?.length && worker.protocol < 4) {
+      throw new Error(
+        "Update the Steer CLI (`npm i -g @oblivihon/steer@latest`) to forward images and files to local agents",
+      );
+    }
+
     const runKey = makeRunKey(roomId, resolvedAgentId);
     this.runToWorker.set(runKey, workerId);
     worker.activeRuns.add(runKey);
@@ -546,6 +554,8 @@ export class WorkerRelay {
       sessionId,
       backend: backend === "claude-code" ? "claude-code" : "cursor",
       mode: mode === "plan" ? "plan" : "agent",
+      attachments:
+        attachments && attachments.length > 0 ? attachments : undefined,
     });
 
     return true;

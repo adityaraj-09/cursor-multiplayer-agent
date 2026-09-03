@@ -10,9 +10,14 @@ import {
   getUpload,
   toAttachment,
   toPromptImages,
+  toWorkerAttachments,
   buildAttachmentPromptSuffix,
   materializeUploadsForAgent,
 } from "../server/uploads.js";
+import {
+  attachmentWorkspaceRelPath,
+  isSafeAttachmentRelPath,
+} from "../shared/uploads.js";
 
 describe("looksLikePlan", () => {
   it("rejects short or empty replies", () => {
@@ -118,10 +123,14 @@ describe("upload helpers", () => {
     const cwd = mkdtempSync(join(tmpdir(), "steer-cwd-"));
     const materialized = materializeUploadsForAgent(cwd, [rec]);
     expect(materialized).toHaveLength(1);
-    expect(existsSync(materialized[0].agentPath)).toBe(true);
+    expect(materialized[0].agentPath).toBe(
+      attachmentWorkspaceRelPath(rec.id, rec.name),
+    );
+    expect(existsSync(join(cwd, materialized[0].agentPath))).toBe(true);
     const suffix = buildAttachmentPromptSuffix([rec], materialized);
     expect(suffix).toContain("brief.md");
     expect(suffix).toContain("# Brief");
+    expect(suffix).toContain(".steer-uploads/");
     rmSync(cwd, { recursive: true, force: true });
   });
 
@@ -140,6 +149,28 @@ describe("upload helpers", () => {
       imagesAttachedToMessage: true,
     });
     expect(suffix).toContain("attached as an image on this message");
+    expect(suffix).not.toContain("no workspace path");
+  });
+
+  it("packages attachments for the local CLI worker", () => {
+    const rec = saveUpload({
+      roomId: "room_1",
+      name: "shot.png",
+      mime: "image/png",
+      data: Buffer.from("png-bytes"),
+    });
+    const payload = toWorkerAttachments([rec]);
+    expect(payload).toHaveLength(1);
+    expect(payload[0].relPath).toBe(attachmentWorkspaceRelPath(rec.id, rec.name));
+    expect(payload[0].data).toBe(Buffer.from("png-bytes").toString("base64"));
+    expect(isSafeAttachmentRelPath(payload[0].relPath)).toBe(true);
+    expect(isSafeAttachmentRelPath("../etc/passwd")).toBe(false);
+    const suffix = buildAttachmentPromptSuffix(
+      [rec],
+      payload.map((p) => ({ rec, agentPath: p.relPath })),
+    );
+    expect(suffix).toContain("saved at");
+    expect(suffix).toContain(".steer-uploads/");
     expect(suffix).not.toContain("no workspace path");
   });
 });

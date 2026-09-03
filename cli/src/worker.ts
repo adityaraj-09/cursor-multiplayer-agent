@@ -1,6 +1,8 @@
 import { io, type Socket } from "socket.io-client";
 import { hostname } from "os";
 import { createHash } from "crypto";
+import { mkdirSync, writeFileSync } from "fs";
+import { dirname, resolve } from "path";
 import chalk from "chalk";
 import { loadConfig } from "./config.js";
 import { pickFolder } from "./pickFolder.js";
@@ -14,12 +16,34 @@ import {
   type AgentStreamEvent,
 } from "./agent.js";
 import { listChatSessions } from "./listSessions.js";
+import {
+  isSafeAttachmentRelPath,
+  type WorkerPromptAttachment,
+} from "../../shared/uploads.js";
 
-const WORKER_PROTOCOL = 3;
+const WORKER_PROTOCOL = 4;
 const MAX_CONCURRENT = Number(process.env.STEER_MAX_CONCURRENT_AGENTS || 4);
 const LOCK_WAIT_MS = 5000;
 /** Match server attachFileDiff — wait for the working tree to flush. */
 const DIFF_WAIT_MS = 120;
+
+function writeWorkerAttachments(
+  cwd: string,
+  attachments: WorkerPromptAttachment[],
+): void {
+  const root = resolve(cwd);
+  for (const file of attachments) {
+    if (!file?.relPath || !isSafeAttachmentRelPath(file.relPath)) {
+      throw new Error(`Invalid attachment path: ${file?.relPath || "(empty)"}`);
+    }
+    const abs = resolve(root, file.relPath);
+    if (abs !== root && !abs.startsWith(root + "/") && !abs.startsWith(root + "\\")) {
+      throw new Error(`Attachment escaped workspace: ${file.relPath}`);
+    }
+    mkdirSync(dirname(abs), { recursive: true });
+    writeFileSync(abs, Buffer.from(file.data, "base64"));
+  }
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -82,6 +106,7 @@ interface RunPromptPayload {
   backend?: string;
   /** Plan vs agent mode for this run. */
   mode?: "agent" | "plan";
+  attachments?: WorkerPromptAttachment[];
 }
 
 interface AbortPayload {
@@ -279,6 +304,33 @@ export function startWorker(repoPathOverride?: string): void {
       abort: () => {},
     };
     activeRuns.set(runKey, runState);
+
+    if (payload.attachments?.length) {
+      try {
+        writeWorkerAttachments(cwd, payload.attachments);
+        console.log(
+          chalk.gray(
+            `  Saved ${payload.attachments.length} attachment(s) to ${cwd}/.steer-uploads`,
+          ),
+        );
+      } catch (err) {
+        const message =
+          (err as Error).message || "Failed to save attached files";
+        console.error(chalk.red(`  ✗ ${message}`));
+        activeRuns.delete(runKey);
+        emitOrQueue("worker:agent-event", {
+          roomId,
+          agentId,
+          event: { kind: "error", message } satisfies AgentStreamEvent,
+        });
+        emitOrQueue("worker:agent-event", {
+          roomId,
+          agentId,
+          event: { kind: "done", result: "" } satisfies AgentStreamEvent,
+        });
+        return;
+      }
+    }
 
     console.log(
       chalk.cyan(
