@@ -194,9 +194,7 @@ export default function BoardPage() {
                 className={
                   hidden
                     ? "hidden"
-                    : focusId
-                      ? "h-full min-h-0 rounded-lg overflow-hidden border border-[#2b2b2b]"
-                      : "min-h-0 rounded-lg overflow-hidden border border-[#2b2b2b]"
+                    : "h-full min-h-0 rounded-lg overflow-hidden border border-[#2b2b2b]"
                 }
               >
                 <BoardRoomSlot

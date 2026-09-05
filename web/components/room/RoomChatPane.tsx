@@ -129,6 +129,56 @@ export default function RoomChatPane() {
       ? "room-shell fixed inset-0 h-[100dvh] max-h-[100dvh] w-full flex flex-col bg-[#111111] text-[#e4e4e4] overflow-hidden overscroll-none"
       : "h-full min-h-0 w-full flex flex-col bg-[#111111] text-[#e4e4e4] overflow-hidden";
 
+  const tileAgents = agents.filter(
+    (agent) => isFeatureAgent(agent) && agent.status !== "stopped",
+  );
+  const steerComposer = (compact: boolean) => (
+    <SteerInput
+      compact={compact}
+      onSend={(text, attachmentIds) =>
+        sendSteer(text, selectedAgentId || undefined, attachmentIds)
+      }
+      roomId={roomId}
+      planMode={Boolean(selectedAgent?.planMode)}
+      agentBusy={selectedStatus === "running"}
+      connected={connected}
+      canSteer={canSteerSelected}
+      steerLockReason={steerLockReason || undefined}
+      models={models}
+      modelId={selectedModelId}
+      onModelChange={(id) => void handleModelChange(id)}
+      modelDisabled={!canManage || savingModel}
+      modelLockReason={
+        !canManage
+          ? "Only the host or a team admin can change the model"
+          : savingModel
+            ? "Saving…"
+            : undefined
+      }
+      placeholder={
+        !canSteerSelected
+          ? steerLockReason || "View only"
+          : selectedAgent
+            ? `Message ${selectedAgent.label}…`
+            : "Message the agent…"
+      }
+      agentName={selectedAgent?.label}
+      agentId={selectedAgentId || undefined}
+      onTyping={canSteerSelected ? notifyTyping : undefined}
+      onTypingStop={canSteerSelected ? notifyTypingStop : undefined}
+      typingIndicator={
+        (variant === "tile" || chatFilterAgentId === null) && agents.length > 1
+          ? formatTypingIndicatorAll(typingByAgent, agents)
+          : selectedAgentId
+            ? formatTypingIndicator(
+                (typingByAgent[selectedAgentId] || []).map((t) => t.name),
+                selectedAgent?.label || "Agent",
+              )
+            : ""
+      }
+    />
+  );
+
   const chat = splitActive ? (
     <AgentSplitGrid
       agents={agents}
@@ -191,16 +241,11 @@ export default function RoomChatPane() {
     return (
       <div className={shellClass}>
         <header className="shrink-0 flex items-center gap-2 px-2.5 h-10 border-b border-[#2b2b2b] bg-[#171717]">
-          <button
-            type="button"
-            onClick={onExpand}
-            className="min-w-0 flex-1 text-left"
-            title="Focus this session"
-          >
+          <div className="min-w-0 flex-1">
             <span className="block text-[12px] font-medium text-[#f0f0f0] truncate">
               {roomInfo?.name || roomId}
             </span>
-          </button>
+          </div>
           <AttentionBadge attention={attention} />
           <button
             type="button"
@@ -221,7 +266,49 @@ export default function RoomChatPane() {
             </button>
           )}
         </header>
+        {(actionError || agentError) && (
+          <p className="shrink-0 px-2.5 py-1 text-[11px] text-[#f07070] border-b border-[#2b2b2b] bg-[#171717]">
+            {actionError || agentError}
+          </p>
+        )}
         <div className="flex-1 min-h-0">{chat}</div>
+        {tileAgents.length > 1 && (
+          <div className="shrink-0 flex items-center gap-1 px-2 py-1 border-t border-[#2b2b2b] bg-[#171717] overflow-x-auto">
+            {tileAgents.map((agent) => {
+              const selected = agent.id === selectedAgentId;
+              const status =
+                statusByAgent[agent.id] ||
+                (agent.status === "running" ? "running" : "idle");
+              return (
+                <button
+                  key={agent.id}
+                  type="button"
+                  onClick={() => setSelectedAgentId(agent.id)}
+                  className={`inline-flex items-center gap-1.5 h-6 px-2 rounded-md text-[10px] border shrink-0 ${
+                    selected
+                      ? "border-[#26405d] bg-[#17202a] text-[#8ec5ff]"
+                      : "border-[#2b2b2b] bg-[#1a1a1a] text-[#8a8a8a] hover:text-[#c8c8c8]"
+                  }`}
+                  title={`Message ${agent.label}`}
+                >
+                  <span
+                    className={`h-1.5 w-1.5 rounded-full ${
+                      status === "running"
+                        ? "bg-[#3ecf8e] animate-pulse"
+                        : status === "error"
+                          ? "bg-[#f07070]"
+                          : "bg-[#6e6e6e]"
+                    }`}
+                  />
+                  {agent.label}
+                </button>
+              );
+            })}
+          </div>
+        )}
+        <footer className="shrink-0 border-t border-[#2b2b2b] bg-[#171717]">
+          {steerComposer(true)}
+        </footer>
       </div>
     );
   }
@@ -566,49 +653,7 @@ export default function RoomChatPane() {
                 automatically on the next message.
               </p>
             )}
-          <SteerInput
-            onSend={(text, attachmentIds) =>
-              sendSteer(text, selectedAgentId || undefined, attachmentIds)
-            }
-            roomId={roomId}
-            planMode={Boolean(selectedAgent?.planMode)}
-            agentBusy={selectedStatus === "running"}
-            connected={connected}
-            canSteer={canSteerSelected}
-            steerLockReason={steerLockReason || undefined}
-            models={models}
-            modelId={selectedModelId}
-            onModelChange={(id) => void handleModelChange(id)}
-            modelDisabled={!canManage || savingModel}
-            modelLockReason={
-              !canManage
-                ? "Only the host or a team admin can change the model"
-                : savingModel
-                  ? "Saving…"
-                  : undefined
-            }
-            placeholder={
-              !canSteerSelected
-                ? steerLockReason || "View only"
-                : selectedAgent
-                  ? `Message ${selectedAgent.label}…`
-                  : "Message the agent…"
-            }
-            agentName={selectedAgent?.label}
-            agentId={selectedAgentId || undefined}
-            onTyping={canSteerSelected ? notifyTyping : undefined}
-            onTypingStop={canSteerSelected ? notifyTypingStop : undefined}
-            typingIndicator={
-              chatFilterAgentId === null && agents.length > 1
-                ? formatTypingIndicatorAll(typingByAgent, agents)
-                : selectedAgentId
-                  ? formatTypingIndicator(
-                      (typingByAgent[selectedAgentId] || []).map((t) => t.name),
-                      selectedAgent?.label || "Agent",
-                    )
-                  : ""
-            }
-          />
+          {steerComposer(false)}
         </footer>
       )}
     </div>
