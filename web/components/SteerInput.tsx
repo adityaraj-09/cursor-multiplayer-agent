@@ -384,7 +384,9 @@ export default function SteerInput({
             placeholder={livePlaceholder}
             rows={1}
             // Keep editable while busy/disconnected so users can draft
-            className="flex-1 h-11 min-h-0 resize-none overflow-y-auto bg-transparent text-[16px] sm:text-[13px] text-[#e4e4e4] placeholder:text-[#6e6e6e] outline-none leading-5 py-2.5"
+            className={`flex-1 min-h-0 resize-none overflow-y-auto bg-transparent text-[16px] sm:text-[13px] text-[#e4e4e4] placeholder:text-[#6e6e6e] outline-none leading-5 ${
+              compact ? "h-9 py-1.5" : "h-11 py-2.5"
+            }`}
             aria-label="Message the agent"
           />
           <button
@@ -398,27 +400,36 @@ export default function SteerInput({
         </div>
       </div>
 
-      <div className={`${compact ? "mt-1" : "mt-2"} px-1 flex items-center justify-between gap-2 min-h-[1rem]`}>
-        <p className="text-[11px] text-[#6e6e6e] truncate">
-          {typingIndicator ? (
-            <span className="text-[#4d9fff]">{typingIndicator}</span>
-          ) : statusHint ? (
-            <span className={!connected ? "text-[#f07070]" : "text-[#4d9fff]"}>
-              {statusHint}
-            </span>
-          ) : attachError ? (
-            <span className="text-[#f07070]">{attachError}</span>
-          ) : uploading ? (
-            <span className="text-[#4d9fff]">Uploading…</span>
-          ) : planMode ? (
-            <span>Plan mode — the agent explores and proposes, then you approve</span>
-          ) : (
-            <span className="hidden sm:inline">
-              Enter to send · Shift+Enter for newline · attach images or files
-            </span>
-          )}
-        </p>
-      </div>
+      {(typingIndicator ||
+        statusHint ||
+        attachError ||
+        uploading ||
+        (planMode && !compact) ||
+        !compact) && (
+        <div
+          className={`${compact ? "mt-1" : "mt-2"} px-1 flex items-center justify-between gap-2 min-h-[1rem]`}
+        >
+          <p className="text-[11px] text-[#6e6e6e] truncate">
+            {typingIndicator ? (
+              <span className="text-[#4d9fff]">{typingIndicator}</span>
+            ) : statusHint ? (
+              <span className={!connected ? "text-[#f07070]" : "text-[#4d9fff]"}>
+                {statusHint}
+              </span>
+            ) : attachError ? (
+              <span className="text-[#f07070]">{attachError}</span>
+            ) : uploading ? (
+              <span className="text-[#4d9fff]">Uploading…</span>
+            ) : planMode ? (
+              <span>Plan mode — the agent explores and proposes, then you approve</span>
+            ) : (
+              <span className="hidden sm:inline">
+                Enter to send · Shift+Enter for newline · attach images or files
+              </span>
+            )}
+          </p>
+        </div>
+      )}
     </form>
   );
 }
