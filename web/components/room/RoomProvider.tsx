@@ -224,10 +224,12 @@ export default function RoomProvider({
     if (selectedAgentId && agents.some((a) => a.id === selectedAgentId)) return;
     const storedId = readRoomViewPrefs(roomId).selectedAgentId;
     const features = agents.filter(isFeatureAgent);
-    const pool = features.length ? features : agents;
+    // Prefer feature agents for a fresh default, but honor a stored selection
+    // that points at the integrator (or any live agent).
+    const defaultPool = features.length ? features : agents;
     const next =
-      (storedId && pool.some((a) => a.id === storedId) && storedId) ||
-      (pool.find((a) => a.status !== "stopped") || pool[0]).id;
+      (storedId && agents.some((a) => a.id === storedId) && storedId) ||
+      (defaultPool.find((a) => a.status !== "stopped") || defaultPool[0]).id;
     const frame = requestAnimationFrame(() => setSelectedAgentId(next));
     return () => cancelAnimationFrame(frame);
   }, [agents, selectedAgentId, roomId]);
@@ -261,12 +263,19 @@ export default function RoomProvider({
     () => agents.filter(isFeatureAgent),
     [agents],
   );
+  const integrator = useMemo(
+    () => agents.find(isIntegratorAgent) || null,
+    [agents],
+  );
   const splitActive =
     variant !== "tile" && viewMode === "split" && featureAgents.length > 1;
   const splitPool = useMemo(() => {
-    const live = featureAgents.filter((a) => a.status !== "stopped");
-    return live.length ? live : featureAgents;
-  }, [featureAgents]);
+    const liveFeatures = featureAgents.filter((a) => a.status !== "stopped");
+    const features = liveFeatures.length ? liveFeatures : featureAgents;
+    // Keep integrator selectable in split/visible-agent UI whenever it exists,
+    // so Integrate selection and its chat are not stranded off-list.
+    return integrator ? [...features, integrator] : features;
+  }, [featureAgents, integrator]);
   const splitPoolIds = useMemo(() => splitPool.map((a) => a.id), [splitPool]);
 
   useEffect(() => {
@@ -620,6 +629,7 @@ export default function RoomProvider({
           );
         }
         if (result.status !== "pr_ready") {
+          setViewMode("tabs");
           setSelectedAgentId(result.integratorAgentId);
           setChatFilterAgentId(result.integratorAgentId);
           setVisibleIds((prev) => pinVisibleId(prev, result.integratorAgentId));
@@ -635,7 +645,6 @@ export default function RoomProvider({
     [roomId, roomInfo, onRoomInfo],
   );
 
-  const integrator = agents.find(isIntegratorAgent);
   const integratorBusy =
     Boolean(integrator) &&
     (statusByAgent[integrator!.id] === "running" ||

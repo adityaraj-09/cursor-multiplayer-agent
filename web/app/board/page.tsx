@@ -112,7 +112,7 @@ export default function BoardPage() {
   };
 
   const gridClass = useMemo(() => {
-    const count = roomIds.length + 1;
+    const count = roomIds.length;
     if (count <= 1) return "grid-cols-1";
     if (count === 2) return "grid-cols-1 lg:grid-cols-2";
     return "grid-cols-1 md:grid-cols-2 xl:grid-cols-3";
@@ -153,6 +153,14 @@ export default function BoardPage() {
                 Exit focus
               </button>
             )}
+            {!focusId && (
+              <BoardAddTile
+                pinnedIds={roomIds}
+                disabled={roomIds.length >= MAX_BOARD_ROOMS}
+                onAdd={addRoom}
+                variant="header"
+              />
+            )}
             <UserMenu />
           </div>
         </div>
@@ -178,43 +186,47 @@ export default function BoardPage() {
           </div>
         )}
 
-        <div
-          className={
-            focusId
-              ? "flex-1 min-h-0"
-              : `flex-1 min-h-0 grid gap-2 ${gridClass}`
-          }
-        >
-          {roomIds.map((id) => {
-            const focused = focusId === id;
-            const hidden = Boolean(focusId && !focused);
-            return (
-              <div
-                key={id}
-                className={
-                  hidden
-                    ? "hidden"
-                    : "h-full min-h-0 rounded-lg overflow-hidden border border-[#2b2b2b]"
-                }
-              >
-                <BoardRoomSlot
-                  roomId={id}
-                  userName={userName}
-                  focused={focused}
-                  onFocus={() => setFocusId(focused ? null : id)}
-                  onRemove={() => removeRoom(id)}
-                />
-              </div>
-            );
-          })}
-          {!focusId && (
+        {roomIds.length === 0 && !focusId ? (
+          <div className="flex-1 min-h-0 flex items-center justify-center p-4">
             <BoardAddTile
               pinnedIds={roomIds}
               disabled={roomIds.length >= MAX_BOARD_ROOMS}
               onAdd={addRoom}
+              variant="empty"
             />
-          )}
-        </div>
+          </div>
+        ) : (
+          <div
+            className={
+              focusId
+                ? "flex-1 min-h-0"
+                : `flex-1 min-h-0 grid gap-2 ${gridClass}`
+            }
+          >
+            {roomIds.map((id) => {
+              const focused = focusId === id;
+              const hidden = Boolean(focusId && !focused);
+              return (
+                <div
+                  key={id}
+                  className={
+                    hidden
+                      ? "hidden"
+                      : "h-full min-h-0 rounded-lg overflow-hidden border border-[#2b2b2b]"
+                  }
+                >
+                  <BoardRoomSlot
+                    roomId={id}
+                    userName={userName}
+                    focused={focused}
+                    onFocus={() => setFocusId(focused ? null : id)}
+                    onRemove={() => removeRoom(id)}
+                  />
+                </div>
+              );
+            })}
+          </div>
+        )}
       </main>
     </div>
   );

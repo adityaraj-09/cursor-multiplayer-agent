@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useMemo } from "react";
 import {
   Columns2,
   Eye,
@@ -30,7 +31,7 @@ import {
 } from "../../../shared/typing";
 import { useRoomContext } from "./RoomContext";
 import IntegrateButton, { integrateButtonState } from "../IntegrateButton";
-import { isFeatureAgent } from "../../../shared/events";
+import { isFeatureAgent, isIntegratorAgent } from "../../../shared/events";
 
 export default function RoomChatPane() {
   const ctx = useRoomContext();
@@ -129,9 +130,14 @@ export default function RoomChatPane() {
       ? "room-shell fixed inset-0 h-[100dvh] max-h-[100dvh] w-full flex flex-col bg-[#111111] text-[#e4e4e4] overflow-hidden overscroll-none"
       : "h-full min-h-0 w-full flex flex-col bg-[#111111] text-[#e4e4e4] overflow-hidden";
 
-  const tileAgents = agents.filter(
-    (agent) => isFeatureAgent(agent) && agent.status !== "stopped",
-  );
+  // Board tiles previously hid the integrator while still showing its chat,
+  // which made agent switching feel broken. Include every live agent so the
+  // switcher matches what appears in the timeline.
+  const tileAgents = useMemo(() => {
+    const live = agents.filter((agent) => agent.status !== "stopped");
+    return live.length ? live : agents;
+  }, [agents]);
+  const tileMulti = tileAgents.length > 1;
   const steerComposer = (compact: boolean) => (
     <SteerInput
       compact={compact}
@@ -167,7 +173,9 @@ export default function RoomChatPane() {
       onTyping={canSteerSelected ? notifyTyping : undefined}
       onTypingStop={canSteerSelected ? notifyTypingStop : undefined}
       typingIndicator={
-        (variant === "tile" || chatFilterAgentId === null) && agents.length > 1
+        (variant === "tile"
+          ? chatFilterAgentId === null || !tileMulti
+          : chatFilterAgentId === null) && agents.length > 1
           ? formatTypingIndicatorAll(typingByAgent, agents)
           : selectedAgentId
             ? formatTypingIndicator(
@@ -225,7 +233,7 @@ export default function RoomChatPane() {
       messages={messages}
       agentStatus={selectedStatus}
       agents={agents}
-      filterAgentId={agents.length > 1 && variant !== "tile" ? chatFilterAgentId : null}
+      filterAgentId={agents.length > 1 ? chatFilterAgentId : null}
       roomId={roomId}
       canApprovePlan={canSteerSelected}
       onApprovePlan={(messageId, agentId) => approvePlan(messageId, agentId)}
@@ -272,10 +280,23 @@ export default function RoomChatPane() {
           </p>
         )}
         <div className="flex-1 min-h-0">{chat}</div>
-        {tileAgents.length > 1 && (
+        {tileMulti && (
           <div className="shrink-0 flex items-center gap-1 px-2 py-1 border-t border-[#2b2b2b] bg-[#171717] overflow-x-auto">
+            <button
+              type="button"
+              onClick={() => setChatFilterAgentId(null)}
+              className={`inline-flex items-center h-6 px-2 rounded-md text-[10px] border shrink-0 ${
+                chatFilterAgentId === null
+                  ? "border-[#26405d] bg-[#17202a] text-[#8ec5ff]"
+                  : "border-[#2b2b2b] bg-[#1a1a1a] text-[#8a8a8a] hover:text-[#c8c8c8]"
+              }`}
+              title="Show all agents"
+            >
+              All
+            </button>
             {tileAgents.map((agent) => {
-              const selected = agent.id === selectedAgentId;
+              const filtered = agent.id === chatFilterAgentId;
+              const targeting = agent.id === selectedAgentId;
               const status =
                 statusByAgent[agent.id] ||
                 (agent.status === "running" ? "running" : "idle");
@@ -283,13 +304,20 @@ export default function RoomChatPane() {
                 <button
                   key={agent.id}
                   type="button"
-                  onClick={() => setSelectedAgentId(agent.id)}
+                  onClick={() => {
+                    setSelectedAgentId(agent.id);
+                    setChatFilterAgentId(agent.id);
+                  }}
                   className={`inline-flex items-center gap-1.5 h-6 px-2 rounded-md text-[10px] border shrink-0 ${
-                    selected
+                    filtered || (chatFilterAgentId === null && targeting)
                       ? "border-[#26405d] bg-[#17202a] text-[#8ec5ff]"
                       : "border-[#2b2b2b] bg-[#1a1a1a] text-[#8a8a8a] hover:text-[#c8c8c8]"
                   }`}
-                  title={`Message ${agent.label}`}
+                  title={
+                    isIntegratorAgent(agent)
+                      ? `View and message ${agent.label} (integrator)`
+                      : `Message ${agent.label}`
+                  }
                 >
                   <span
                     className={`h-1.5 w-1.5 rounded-full ${
@@ -301,6 +329,9 @@ export default function RoomChatPane() {
                     }`}
                   />
                   {agent.label}
+                  {isIntegratorAgent(agent) && (
+                    <span className="text-[9px] text-[#a3e635]">int</span>
+                  )}
                 </button>
               );
             })}
