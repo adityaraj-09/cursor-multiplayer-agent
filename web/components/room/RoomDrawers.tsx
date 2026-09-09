@@ -11,6 +11,7 @@ import MemberRoster from "../MemberRoster";
 import AddAgentDialog from "../AddAgentDialog";
 import { fetchOrJoinRoom } from "../../lib/api";
 import { useRoomContext } from "./RoomContext";
+import { isFeatureAgent } from "../../../shared/events";
 
 export default function RoomDrawers() {
   const {
@@ -88,6 +89,8 @@ export default function RoomDrawers() {
     handleStopSession,
     handleAddAgent,
   } = useRoomContext();
+
+  const featureAgentCount = agents.filter(isFeatureAgent).length;
 
   return (
     <>
@@ -209,7 +212,7 @@ export default function RoomDrawers() {
               }
             : undefined
         }
-        splitAvailable={agents.length > 1}
+        splitAvailable={featureAgentCount > 1}
         broadcastEnabled={broadcastEnabled}
         onBroadcastEnabledChange={handleBroadcastEnabledChange}
         splitAgents={splitPool}

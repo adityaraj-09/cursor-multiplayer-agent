@@ -11,10 +11,13 @@ export default function BoardAddTile({
   pinnedIds,
   disabled,
   onAdd,
+  variant = "header",
 }: {
   pinnedIds: string[];
   disabled?: boolean;
   onAdd: (id: string) => void;
+  /** header = compact toolbar control; empty = centered empty-state CTA */
+  variant?: "header" | "empty";
 }) {
   const [open, setOpen] = useState(false);
   const [rooms, setRooms] = useState<RoomInfo[]>([]);
@@ -43,20 +46,42 @@ export default function BoardAddTile({
     [rooms, pinnedIds],
   );
 
-  return (
-    <div className="relative h-full min-h-[220px]">
+  const trigger =
+    variant === "empty" ? (
       <button
         type="button"
         disabled={disabled}
         onClick={() => setOpen(true)}
-        className="h-full w-full min-h-[220px] rounded-lg border border-dashed border-[#2b2b2b] bg-[#151515] text-[#6e6e6e] hover:text-[#e4e4e4] hover:border-[#3c3c3c] transition-colors disabled:opacity-40 flex flex-col items-center justify-center gap-2"
+        className="mx-auto flex min-h-[180px] w-full max-w-sm flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-[#2b2b2b] bg-[#151515] px-6 text-[#6e6e6e] transition-colors hover:border-[#3c3c3c] hover:text-[#e4e4e4] disabled:opacity-40"
       >
         <Plus className="h-6 w-6" strokeWidth={1.75} />
         <span className="text-[13px]">Add session</span>
         <span className="text-[11px] text-[#6e6e6e]">
-          {disabled ? `Board is full (${MAX_BOARD_ROOMS})` : "Pin another room"}
+          {disabled
+            ? `Board is full (${MAX_BOARD_ROOMS})`
+            : "Pin a room to the board"}
         </span>
       </button>
+    ) : (
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => setOpen(true)}
+        className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[#2b2b2b] bg-[#1f1f1f] px-2.5 text-[12px] text-[#a0a0a0] hover:border-[#3c3c3c] hover:text-[#e4e4e4] disabled:opacity-40"
+        title={
+          disabled
+            ? `Board is full (${MAX_BOARD_ROOMS})`
+            : "Add session to board"
+        }
+      >
+        <Plus className="h-3.5 w-3.5" strokeWidth={1.75} />
+        Add session
+      </button>
+    );
+
+  return (
+    <>
+      {trigger}
 
       {open && (
         <div
@@ -119,6 +144,6 @@ export default function BoardAddTile({
           </div>
         </div>
       )}
-    </div>
+    </>
   );
 }
