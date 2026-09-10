@@ -17,7 +17,6 @@ import {
 import UserMenu from "./UserMenu";
 import type { OrgInfo } from "../lib/api";
 import type { WorkspaceScope } from "../lib/workspace";
-import { canManageOrg } from "../../shared/orgs";
 
 export default function DashboardShell({
   children,
@@ -40,7 +39,6 @@ export default function DashboardShell({
 }) {
   const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = useState(false);
-  const activeOrg = orgs.find((org) => org.id === scope) || null;
 
   useEffect(() => {
     setMobileOpen(false);
@@ -98,6 +96,16 @@ export default function DashboardShell({
           Pair CLI
         </NavItem>
         <NavItem
+          href="/settings"
+          active={
+            pathname.startsWith("/settings") ||
+            (pathname.includes("/org/") && pathname.endsWith("/settings"))
+          }
+          icon={Settings2}
+        >
+          Settings
+        </NavItem>
+        <NavItem
           href="/profile"
           active={pathname.startsWith("/profile")}
           icon={UserRound}
@@ -139,15 +147,6 @@ export default function DashboardShell({
           <Plus className="h-3.5 w-3.5" strokeWidth={1.75} />
           New team
         </button>
-        {activeOrg && (
-          <Link
-            href={`/org/${activeOrg.id}/settings`}
-            className="mt-0.5 flex h-8 w-full items-center gap-2 rounded-md px-2 text-[12px] text-[#6e6e6e] hover:bg-[#1e1e1e] hover:text-[#e4e4e4] transition-colors"
-          >
-            <Settings2 className="h-3.5 w-3.5" strokeWidth={1.75} />
-            {canManageOrg(activeOrg.role) ? "Team settings" : "Team"}
-          </Link>
-        )}
       </div>
 
       <div className="shrink-0 border-t border-[#2b2b2b] p-3">

@@ -1538,6 +1538,137 @@ export async function retryIssue(
   return res.json();
 }
 
+export type WorkspaceGithubInfo = {
+  connected: boolean;
+  login: string | null;
+  avatarUrl: string | null;
+  hint: string | null;
+  oauthAvailable: boolean;
+  canManage: boolean;
+};
+
+export type WorkspaceGithubRepo = {
+  url: string;
+  fullName: string;
+  private: boolean;
+  defaultBranch: string;
+};
+
+export type WorkspaceKeyInfo = {
+  id: string;
+  provider: "cursor" | "anthropic";
+  label: string;
+  owner: "you" | "team";
+  configured: boolean;
+  hint: string | null;
+  canManage: boolean;
+};
+
+function workspaceQs(orgId?: string | null): string {
+  const params = new URLSearchParams();
+  if (orgId && orgId !== "personal") params.set("orgId", orgId);
+  const qs = params.toString();
+  return qs ? `?${qs}` : "";
+}
+
+export async function fetchWorkspaceOverview(opts?: {
+  orgId?: string | null;
+}): Promise<{
+  github: WorkspaceGithubInfo;
+  keys: WorkspaceKeyInfo[];
+}> {
+  const res = await fetch(
+    `${API_BASE}/workspace${workspaceQs(opts?.orgId)}`,
+    { headers: await authHeaders() },
+  );
+  if (!res.ok) {
+    throw new Error(await parseApiError(res, "Failed to load workspace"));
+  }
+  return res.json();
+}
+
+export async function fetchWorkspaceGithub(opts?: {
+  orgId?: string | null;
+}): Promise<WorkspaceGithubInfo> {
+  const res = await fetch(
+    `${API_BASE}/workspace/github${workspaceQs(opts?.orgId)}`,
+    { headers: await authHeaders() },
+  );
+  if (!res.ok) {
+    throw new Error(await parseApiError(res, "Failed to load GitHub connection"));
+  }
+  return res.json();
+}
+
+export async function fetchWorkspaceGithubRepos(opts?: {
+  orgId?: string | null;
+}): Promise<WorkspaceGithubRepo[]> {
+  const res = await fetch(
+    `${API_BASE}/workspace/github/repos${workspaceQs(opts?.orgId)}`,
+    { headers: await authHeaders() },
+  );
+  if (!res.ok) {
+    throw new Error(
+      await parseApiError(res, "Connect GitHub to list repositories"),
+    );
+  }
+  const data = await res.json();
+  return data.repositories ?? [];
+}
+
+export async function connectWorkspaceGithubPat(
+  token: string,
+  opts?: { orgId?: string | null },
+): Promise<WorkspaceGithubInfo> {
+  const res = await fetch(`${API_BASE}/workspace/github`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(await authHeaders()),
+    },
+    body: JSON.stringify({ token, orgId: opts?.orgId }),
+  });
+  if (!res.ok) {
+    throw new Error(await parseApiError(res, "Failed to connect GitHub"));
+  }
+  return res.json();
+}
+
+export async function startWorkspaceGithubOAuth(opts?: {
+  orgId?: string | null;
+}): Promise<string> {
+  const res = await fetch(`${API_BASE}/workspace/github/oauth/start`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(await authHeaders()),
+    },
+    body: JSON.stringify({ orgId: opts?.orgId }),
+  });
+  if (!res.ok) {
+    throw new Error(await parseApiError(res, "Failed to start GitHub OAuth"));
+  }
+  const data = await res.json();
+  if (!data.url) throw new Error("GitHub OAuth URL missing");
+  return data.url as string;
+}
+
+export async function disconnectWorkspaceGithub(opts?: {
+  orgId?: string | null;
+}): Promise<WorkspaceGithubInfo> {
+  const res = await fetch(
+    `${API_BASE}/workspace/github${workspaceQs(opts?.orgId)}`,
+    {
+      method: "DELETE",
+      headers: await authHeaders(),
+    },
+  );
+  if (!res.ok) {
+    throw new Error(await parseApiError(res, "Failed to disconnect GitHub"));
+  }
+  return res.json();
+}
+
 export async function fetchIssueSettings(opts?: {
   orgId?: string | null;
 }): Promise<IssueSettingsInfo> {

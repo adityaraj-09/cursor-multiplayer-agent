@@ -14,6 +14,7 @@ import { authMiddleware, hashSessionToken, requireAuth, resolveAuthToken } from 
 import authRoutes from "./authRoutes.js";
 import orgRoutes from "./orgRoutes.js";
 import issueRoutes from "./issueRoutes.js";
+import workspaceRoutes from "./workspaceRoutes.js";
 import { issueRunner } from "./issueRunner.js";
 import * as db from "./db.js";
 import {
@@ -199,6 +200,7 @@ function resolveRequestKey(
 app.use("/api/auth", authRoutes);
 app.use("/api/orgs", orgRoutes);
 app.use("/api/issues", issueRoutes);
+app.use("/api/workspace", workspaceRoutes);
 
 app.get("/api/auth/status", (req, res) => {
   const userId = req.user?.id;
