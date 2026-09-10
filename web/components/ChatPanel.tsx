@@ -33,12 +33,13 @@ import Markdown from "./Markdown";
 import InlineDiff, { countDiffLines } from "./InlineDiff";
 import TodoCard, { coalesceTodoMessages, messageHasTodos } from "./TodoCard";
 import ApprovalCard from "./ApprovalCard";
-import { ThinkingOrb } from "thinking-orbs";
+import { ThinkingOrb, type OrbState } from "thinking-orbs";
 import {
   groupToolMessages,
   normalizeToolName,
   resolveToolPath,
   toolCallTitle,
+  toolCategoryFor,
   type ToolCategoryKey,
 } from "../lib/toolMessages";
 
@@ -65,6 +66,27 @@ interface ChatPanelProps {
     alwaysAllow?: boolean,
   ) => void;
   statusByAgent?: Record<string, AgentRunStatus>;
+}
+
+function busyOrbState(messages: ChatMessage[]): OrbState {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i];
+    if (message.role === "tool" && message.status === "streaming") {
+      const category = toolCategoryFor(message);
+      if (category === "search" || category === "read") return "searching";
+      if (category === "edit") return "shaping";
+      if (category === "terminal") return "solving";
+      return "working";
+    }
+    if (
+      message.role === "assistant" &&
+      message.status === "streaming" &&
+      message.content
+    ) {
+      return "composing";
+    }
+  }
+  return "working";
 }
 
 type ChatItem =
@@ -123,7 +145,6 @@ export default function ChatPanel({
   decidingApprovalId = null,
   canDecideApproval,
   onDecideApproval,
-  statusByAgent = {},
 }: ChatPanelProps) {
   const scrollerRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
@@ -165,10 +186,7 @@ export default function ChatPanel({
       request={request}
       canDecide={Boolean(canDecideApproval?.(request))}
       deciding={decidingApprovalId === request.id}
-      agentRunning={
-        statusByAgent[request.agentId] === "running" ||
-        (!statusByAgent[request.agentId] && agentStatus === "running")
-      }
+      agentName={agentLabel(request.agentId)}
       onDecide={(approved, alwaysAllow) =>
         onDecideApproval?.(request.id, approved, alwaysAllow)
       }
@@ -360,7 +378,7 @@ export default function ChatPanel({
           {agentStatus === "running" && (
             <div className="flex items-center py-1" aria-live="polite">
               <ThinkingOrb
-                state="working"
+                state={busyOrbState(filtered)}
                 size={64}
                 theme="dark"
                 aria-label="Agent is working"
@@ -424,12 +442,7 @@ function ToolCallGroup({
           }`}
         >
           {anyStreaming ? (
-            <ThinkingOrb
-              state="working"
-              size={20}
-              theme="dark"
-              aria-label="Tools running"
-            />
+            <LoaderCircle className="h-3 w-3 animate-spin" strokeWidth={1.8} />
           ) : (
             <CheckCircle2 className="h-3 w-3" strokeWidth={1.8} />
           )}
@@ -518,12 +531,7 @@ function ToolTypeSection({
           }`}
         >
           {anyStreaming ? (
-            <ThinkingOrb
-              state="working"
-              size={20}
-              theme="dark"
-              aria-label="Tools running"
-            />
+            <LoaderCircle className="h-3 w-3 animate-spin" strokeWidth={1.8} />
           ) : (
             <CheckCircle2 className="h-3 w-3" strokeWidth={1.8} />
           )}
@@ -838,12 +846,7 @@ function MessageBubble({
             {formatTime(message.ts)}
           </span>
           {message.status === "streaming" && (
-            <ThinkingOrb
-              state="working"
-              size={20}
-              theme="dark"
-              aria-label="Streaming"
-            />
+            <span className="text-[10px] text-[#4d9fff]">Streaming…</span>
           )}
           {message.status === "error" && (
             <span className="inline-flex items-center gap-1 text-[10px] text-[#f07070]">
@@ -855,12 +858,7 @@ function MessageBubble({
         {message.content ? (
           <Markdown content={message.content} />
         ) : (
-          <ThinkingOrb
-            state="working"
-            size={20}
-            theme="dark"
-            aria-label="Thinking"
-          />
+          <p className="text-[13px] text-[#6e6e6e]">Thinking…</p>
         )}
         {message.questions && message.questions.length > 0 && message.role === "tool" && (
           <ClarifyingQuestionsCard

@@ -5,12 +5,18 @@ import {
   useRef,
   useState,
   type DragEvent,
+  type ReactNode,
 } from "react";
 import {
   Bot,
+  Brain,
   FileText,
+  Gem,
   ImagePlus,
+  Orbit,
+  Sparkles,
   X,
+  Zap,
 } from "lucide-react";
 import type { ChatAttachment, ModelInfo } from "../../shared/events";
 import { uploadRoomFile } from "../lib/api";
@@ -23,6 +29,8 @@ interface SteerInputProps {
   planMode?: boolean;
   /** Agent is mid-run — drafting allowed, send becomes stop */
   agentBusy?: boolean;
+  /** Abort is in flight — stop control shows stopping */
+  stopping?: boolean;
   /** Socket disconnected — drafting allowed, send blocked */
   connected?: boolean;
   /** Collaboration permission — drafting allowed, send blocked when false */
@@ -54,14 +62,37 @@ interface SteerInputProps {
 const TYPING_THROTTLE_MS = 1500;
 const TYPING_IDLE_STOP_MS = 2000;
 
+const IMAGE_ACCEPT = "image/png,image/jpeg,image/gif,image/webp";
 const FILE_ACCEPT =
-  "image/png,image/jpeg,image/gif,image/webp,application/pdf,text/plain,text/markdown,text/csv,application/json";
+  "application/pdf,text/plain,text/markdown,text/csv,application/json,.md,.txt,.csv,.json,.pdf";
+
+function ModelGlyph({ id, name }: { id: string; name: string }) {
+  const key = `${id} ${name}`.toLowerCase();
+  const cls = "size-3.5";
+  if (/gpt|openai/.test(key)) {
+    return <Sparkles className={cls} strokeWidth={1.75} />;
+  }
+  if (/claude|anthropic|fable|sonnet|opus|haiku/.test(key)) {
+    return <Brain className={cls} strokeWidth={1.75} />;
+  }
+  if (/grok|xai/.test(key)) {
+    return <Zap className={cls} strokeWidth={1.75} />;
+  }
+  if (/gemini|google/.test(key)) {
+    return <Gem className={cls} strokeWidth={1.75} />;
+  }
+  if (/auto|composer/.test(key)) {
+    return <Orbit className={cls} strokeWidth={1.75} />;
+  }
+  return <Bot className={cls} strokeWidth={1.75} />;
+}
 
 export default function SteerInput({
   onSend,
   roomId,
   planMode = false,
   agentBusy = false,
+  stopping = false,
   connected = true,
   canSteer = true,
   steerLockReason,
@@ -70,6 +101,7 @@ export default function SteerInput({
   modelId = "",
   onModelChange,
   modelDisabled = false,
+  modelLockReason,
   agentName,
   agentId,
   onTyping,
@@ -84,6 +116,7 @@ export default function SteerInput({
   const [uploading, setUploading] = useState(false);
   const [attachError, setAttachError] = useState("");
   const [dragActive, setDragActive] = useState(false);
+  const imageInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const lastTypingEmitRef = useRef(0);
   const idleStopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -143,8 +176,12 @@ export default function SteerInput({
     : !canSteer
       ? steerLockReason || "You do not have permission to steer"
       : agentBusy
-        ? "Agent is working — stop or draft a follow-up"
-        : null;
+        ? stopping
+          ? "Stopping…"
+          : "Agent is working — stop or draft a follow-up"
+        : modelDisabled && modelLockReason
+          ? modelLockReason
+          : null;
 
   const submit = (prompt: string) => {
     if (!connected || !canSteer || agentBusy || uploading) return;
@@ -181,6 +218,7 @@ export default function SteerInput({
       setAttachError(err instanceof Error ? err.message : "Upload failed");
     } finally {
       setUploading(false);
+      if (imageInputRef.current) imageInputRef.current.value = "";
       if (fileInputRef.current) fileInputRef.current.value = "";
     }
   };
@@ -217,7 +255,6 @@ export default function SteerInput({
         ? [{ id: modelId, displayName: modelId }]
         : [{ id: "auto", displayName: "Auto" }];
 
-  const modelLocked = modelDisabled || agentBusy;
   const livePlaceholder = !connected
     ? "Reconnecting…"
     : agentBusy
@@ -230,21 +267,51 @@ export default function SteerInput({
     {
       value: "image",
       label: "Attach image",
-      description: "Add a screenshot or visual reference.",
+      description: "Screenshots and visual references.",
       icon: <ImagePlus className="size-4" strokeWidth={1.75} />,
       disabled: !roomId || !canSteer || uploading,
     },
     {
       value: "file",
       label: "Add context",
-      description: "Attach a file with supporting details.",
+      description: "PDF, markdown, or other documents.",
       icon: <FileText className="size-4" strokeWidth={1.75} />,
       disabled: !roomId || !canSteer || uploading,
     },
   ];
 
+  const hint: ReactNode = typingIndicator ? (
+    <span className="text-[#4d9fff]">{typingIndicator}</span>
+  ) : statusHint ? (
+    <span className={!connected ? "text-[#f07070]" : "text-[#4d9fff]"}>
+      {statusHint}
+    </span>
+  ) : attachError ? (
+    <span className="text-[#f07070]">{attachError}</span>
+  ) : uploading ? (
+    <span className="text-[#4d9fff]">Uploading…</span>
+  ) : planMode ? (
+    <span>Plan mode — the agent explores and proposes, then you approve</span>
+  ) : modelLockReason && !modelDisabled ? (
+    <span>{modelLockReason}</span>
+  ) : compact ? null : (
+    <span className="hidden sm:inline">
+      Enter to send · Shift+Enter for newline
+    </span>
+  );
+
+  const showHint = Boolean(hint);
+
   return (
     <div className={compact ? "px-2 pb-2 pt-2" : "px-3 sm:px-5 pb-3 sm:pb-4 pt-3"}>
+      <input
+        ref={imageInputRef}
+        type="file"
+        accept={IMAGE_ACCEPT}
+        multiple
+        className="hidden"
+        onChange={(e) => void handleFiles(e.target.files)}
+      />
       <input
         ref={fileInputRef}
         type="file"
@@ -277,20 +344,24 @@ export default function SteerInput({
           onValueChange={handleChange}
           onSubmit={submit}
           loading={agentBusy}
+          stopping={stopping}
           onStop={onStop}
           models={modelOptions.map((m) => ({
             value: m.id,
             label: m.displayName,
-            icon: <Bot className="size-3.5" strokeWidth={1.75} />,
-            disabled: modelLocked,
+            icon: <ModelGlyph id={m.id} name={m.displayName} />,
           }))}
           model={modelId || modelOptions[0]?.id}
           onModelChange={onModelChange}
-          modelDisabled={modelLocked}
+          modelDisabled={modelDisabled}
+          modelLockReason={modelLockReason}
           actions={actions}
-          onAction={() => fileInputRef.current?.click()}
+          onAction={(action) => {
+            if (action === "image") imageInputRef.current?.click();
+            else fileInputRef.current?.click();
+          }}
           minRows={compact ? 1 : 2}
-          maxRows={compact ? 4 : 8}
+          maxRows={compact ? 3 : 8}
           placeholder={livePlaceholder}
           aria-label="Message the agent"
           onBlur={() => stopTyping()}
@@ -304,7 +375,7 @@ export default function SteerInput({
                 : undefined
           }
           leadingAction={
-            <span className="hidden sm:inline-flex items-center gap-1.5 px-1.5 text-[11px] text-muted-foreground">
+            <span className="inline-flex min-w-0 items-center gap-1.5 px-1.5 text-[11px] text-[#6e6e6e]">
               <span className="truncate max-w-[7rem]">{agentName || "Agent"}</span>
               {planMode ? (
                 <span className="rounded-md border border-[#4d9fff]/50 bg-[#1a2430] px-1.5 py-0.5 text-[10px] font-medium text-[#8ec5ff]">
@@ -319,7 +390,7 @@ export default function SteerInput({
                 {attachments.map((att) => (
                   <div
                     key={att.id}
-                    className="relative flex items-center gap-1.5 rounded-lg border border-border bg-muted pl-1.5 pr-6 py-1 max-w-[180px]"
+                    className="relative flex items-center gap-1.5 rounded-lg border border-[#2b2b2b] bg-[#151515] pl-1.5 pr-6 py-1 max-w-[180px]"
                   >
                     {previews[att.id] ? (
                       <img
@@ -351,34 +422,11 @@ export default function SteerInput({
         />
       </div>
 
-      {(typingIndicator ||
-        statusHint ||
-        attachError ||
-        uploading ||
-        (planMode && !compact) ||
-        !compact) && (
+      {showHint && (
         <div
           className={`${compact ? "mt-1" : "mt-2"} px-1 flex items-center justify-between gap-2 min-h-[1rem]`}
         >
-          <p className="text-[11px] text-[#6e6e6e] truncate">
-            {typingIndicator ? (
-              <span className="text-[#4d9fff]">{typingIndicator}</span>
-            ) : statusHint ? (
-              <span className={!connected ? "text-[#f07070]" : "text-[#4d9fff]"}>
-                {statusHint}
-              </span>
-            ) : attachError ? (
-              <span className="text-[#f07070]">{attachError}</span>
-            ) : uploading ? (
-              <span className="text-[#4d9fff]">Uploading…</span>
-            ) : planMode ? (
-              <span>Plan mode — the agent explores and proposes, then you approve</span>
-            ) : (
-              <span className="hidden sm:inline">
-                Enter to send · Shift+Enter for newline · attach images or files
-              </span>
-            )}
-          </p>
+          <p className="text-[11px] text-[#6e6e6e] truncate">{hint}</p>
         </div>
       )}
     </div>

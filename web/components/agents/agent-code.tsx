@@ -25,7 +25,7 @@ export function AgentCode({
     <pre
       data-language={language}
       className={cn(
-        "m-0 overflow-x-auto whitespace-pre-wrap break-words font-mono text-xs leading-5 text-foreground/85",
+        "m-0 overflow-x-auto whitespace-pre-wrap break-words font-mono text-xs leading-5 text-[#c8c8c8]",
         className,
       )}
     >

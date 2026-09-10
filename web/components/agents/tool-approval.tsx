@@ -4,6 +4,7 @@ import {
   Check,
   ChevronDown,
   CircleAlert,
+  Clock,
   LoaderCircle,
   ShieldCheck,
   X,
@@ -29,7 +30,8 @@ export type ToolApprovalStatus =
   | "denied"
   | "running"
   | "complete"
-  | "error";
+  | "error"
+  | "expired";
 
 export interface ToolApprovalParameter {
   id: string;
@@ -47,6 +49,8 @@ export interface ToolApprovalProps {
   tool: ReactNode;
   title?: ReactNode;
   description?: ReactNode;
+  agent?: ReactNode;
+  note?: ReactNode;
   parameters?: ToolApprovalParameter[];
   status?: ToolApprovalStatus;
   open?: boolean;
@@ -64,26 +68,33 @@ function getStatusCopy(status: ToolApprovalStatus) {
   if (status === "denied") return "Denied";
   if (status === "running") return "Running";
   if (status === "complete") return "Completed";
+  if (status === "expired") return "Expired";
   if (status === "error") return "Failed";
   return "Approval required";
 }
 
 function getStatusBadgeClass(status: ToolApprovalStatus) {
   if (status === "pending") {
-    return "border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400";
+    return "border-[#3a2a1c] bg-[#14110e] text-[#e8a23a]";
   }
   if (status === "approving" || status === "running") {
-    return "border-blue-500/30 bg-blue-500/10 text-blue-600 dark:text-blue-400";
+    return "border-[#26405d] bg-[#17202a] text-[#4d9fff]";
   }
   if (status === "approved" || status === "complete") {
-    return "border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400";
+    return "border-[#234337] bg-[#17251f] text-[#3ecf8e]";
   }
-  return "border-rose-500/30 bg-rose-500/10 text-rose-600 dark:text-rose-400";
+  if (status === "expired") {
+    return "border-[#2b2b2b] bg-[#1a1a1a] text-[#8a8a8a]";
+  }
+  return "border-[#3c2b2b] bg-[#1f1818] text-[#f07070]";
 }
 
 function StatusIcon({ status }: { status: ToolApprovalStatus }) {
   if (status === "approving" || status === "running") {
     return <LoaderCircle className="size-4 animate-spin" strokeWidth={1.8} />;
+  }
+  if (status === "expired") {
+    return <Clock className="size-4" strokeWidth={1.8} />;
   }
   if (status === "error") {
     return <CircleAlert className="size-4" strokeWidth={1.8} />;
@@ -107,7 +118,7 @@ export function ToolApprovalCode({
       code={code}
       language={language}
       className={cn(
-        "whitespace-pre-wrap break-words rounded-lg border border-border/50 bg-muted/30 px-2.5 py-2",
+        "whitespace-pre-wrap break-words rounded-lg border border-[#2b2b2b] bg-[#121212] px-2.5 py-2",
         className,
       )}
     />
@@ -118,6 +129,8 @@ export function ToolApproval({
   tool,
   title = "Allow this tool to run?",
   description,
+  agent,
+  note,
   parameters = [],
   status = "pending",
   open,
@@ -146,6 +159,9 @@ export function ToolApproval({
   const error = status === "error";
 
   useEffect(() => {
+    // Only collapse when this card itself leaves pending — not when a
+    // historical card mounts already decided, and not when an unrelated
+    // agent-running flag flips the badge.
     if (previousStatus.current === "pending" && status !== "pending") {
       setOpen(false);
     }
@@ -157,7 +173,7 @@ export function ToolApproval({
       data-state={status}
       aria-busy={busy}
       className={cn(
-        "w-full overflow-hidden rounded-2xl border border-border/60 bg-muted/20 text-sm",
+        "w-full overflow-hidden rounded-2xl border border-[#2b2b2b] bg-[#191919] text-sm",
         className,
       )}
     >
@@ -165,8 +181,8 @@ export function ToolApproval({
         <span
           aria-hidden="true"
           className={cn(
-            "mt-0.5 grid size-8 shrink-0 place-items-center rounded-xl border border-border/60 bg-background text-muted-foreground",
-            error && "text-destructive",
+            "mt-0.5 grid size-8 shrink-0 place-items-center rounded-xl border border-[#2b2b2b] bg-[#1f1f1f] text-[#a0a0a0]",
+            error && "text-[#f07070]",
           )}
         >
           <StatusIcon status={status} />
@@ -174,10 +190,15 @@ export function ToolApproval({
 
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
-            <p className="text-sm font-medium text-foreground">{title}</p>
-            <span className="truncate font-mono text-xs text-muted-foreground">
+            <p className="text-sm font-medium text-[#e4e4e4]">{title}</p>
+            <span className="truncate font-mono text-xs text-[#6e6e6e]">
               {tool}
             </span>
+            {agent ? (
+              <span className="truncate rounded-md bg-[#252525] px-1.5 py-0.5 text-[10px] text-[#a0a0a0]">
+                {agent}
+              </span>
+            ) : null}
             <span
               className={cn(
                 "shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-medium transition-colors",
@@ -188,7 +209,7 @@ export function ToolApproval({
             </span>
           </div>
           {description ? (
-            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+            <p className="mt-1 text-xs leading-relaxed text-[#8a8a8a]">
               {description}
             </p>
           ) : null}
@@ -199,7 +220,7 @@ export function ToolApproval({
               aria-expanded={currentOpen}
               aria-controls={detailsId}
               onClick={() => setOpen(!currentOpen)}
-              className="mt-2 inline-flex items-center gap-1 rounded-md text-xs font-medium text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+              className="mt-2 inline-flex items-center gap-1 rounded-md text-xs font-medium text-[#6e6e6e] outline-none transition-colors hover:text-[#e4e4e4] focus-visible:ring-2 focus-visible:ring-[#4d9fff]"
             >
               View details
               <motion.span
@@ -215,18 +236,24 @@ export function ToolApproval({
       </div>
 
       <AgentDisclosure id={detailsId} open={currentOpen}>
-        <div className="space-y-2.5 border-t border-border/60 px-4 py-3">
+        <div className="space-y-2.5 border-t border-[#2b2b2b] px-4 py-3">
           {parameters.map((parameter) => (
             <div
               key={parameter.id}
               className="grid grid-cols-[minmax(0,7rem)_minmax(0,1fr)] items-start gap-3 text-xs"
             >
-              <span className="pt-1 text-muted-foreground">{parameter.label}</span>
-              <div className="min-w-0 text-foreground">{parameter.value}</div>
+              <span className="pt-1 text-[#6e6e6e]">{parameter.label}</span>
+              <div className="min-w-0 text-[#e4e4e4]">{parameter.value}</div>
             </div>
           ))}
         </div>
       </AgentDisclosure>
+
+      {note ? (
+        <p className="border-t border-[#2b2b2b] px-4 py-2.5 text-[11px] leading-relaxed text-[#8a8a8a]">
+          {note}
+        </p>
+      ) : null}
 
       <AnimatePresence>
         {pending && (onApprove || onDeny) ? (
@@ -235,14 +262,14 @@ export function ToolApproval({
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0 }}
             transition={{ duration: reduce ? 0.12 : 0.22, ease: EASE_OUT }}
-            className="flex flex-wrap items-center gap-2 border-t border-border/60 px-4 py-3"
+            className="flex flex-wrap items-center gap-2 border-t border-[#2b2b2b] px-4 py-3"
           >
             <motion.button
               type="button"
               onClick={onApprove}
               whileTap={reduce ? undefined : { scale: 0.97 }}
               transition={SPRING_PRESS}
-              className="rounded-xl bg-foreground px-3 py-1.5 text-xs font-medium text-background outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+              className="rounded-xl bg-[#e4e4e4] px-3 py-1.5 text-xs font-medium text-[#141414] outline-none focus-visible:ring-2 focus-visible:ring-[#4d9fff] focus-visible:ring-offset-2 focus-visible:ring-offset-[#191919]"
             >
               Allow once
             </motion.button>
@@ -252,15 +279,16 @@ export function ToolApproval({
                 onClick={onAlwaysAllow}
                 whileTap={reduce ? undefined : { scale: 0.97 }}
                 transition={SPRING_PRESS}
-                className="rounded-xl border border-border/60 bg-background px-3 py-1.5 text-xs font-medium text-foreground outline-none transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
+                title="Remember this tool for the rest of this session"
+                className="rounded-xl border border-[#2b2b2b] bg-[#1f1f1f] px-3 py-1.5 text-xs font-medium text-[#e4e4e4] outline-none transition-colors hover:bg-[#252525] focus-visible:ring-2 focus-visible:ring-[#4d9fff]"
               >
-                Always allow
+                Always allow this session
               </motion.button>
             ) : null}
             <button
               type="button"
               onClick={onDeny}
-              className="rounded-xl px-3 py-1.5 text-xs font-medium text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+              className="rounded-xl px-3 py-1.5 text-xs font-medium text-[#a0a0a0] outline-none transition-colors hover:bg-[#252525] hover:text-[#e4e4e4] focus-visible:ring-2 focus-visible:ring-[#4d9fff]"
             >
               Deny
             </button>

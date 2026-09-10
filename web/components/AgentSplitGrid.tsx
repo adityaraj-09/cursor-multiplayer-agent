@@ -77,6 +77,7 @@ export default function AgentSplitGrid({
   canDecideApproval,
   onDecideApproval,
   onAbort,
+  stopping,
 }: {
   agents: AgentInfo[];
   messages: ChatMessage[];
@@ -114,6 +115,7 @@ export default function AgentSplitGrid({
     alwaysAllow?: boolean,
   ) => void;
   onAbort?: (agentId: string) => void;
+  stopping?: boolean;
 }) {
   const liveAgents = useMemo(
     () => agents.filter((a) => a.status !== "stopped"),
@@ -249,7 +251,7 @@ export default function AgentSplitGrid({
                 onDecideApproval={onDecideApproval}
                 statusByAgent={statusByAgent}
               />
-              <div className="shrink-0 border-t border-[#2b2b2b] bg-[#171717]">
+              <div className="shrink-0 border-t border-[#2b2b2b] bg-[#171717] overflow-visible">
                 <SteerInput
                   compact
                   onSend={(text, attachmentIds) =>
@@ -258,6 +260,7 @@ export default function AgentSplitGrid({
                   roomId={roomId}
                   planMode={Boolean(agent.planMode)}
                   agentBusy={status === "running"}
+                  stopping={Boolean(stopping) && status === "running"}
                   onStop={
                     status === "running" ? () => onAbort?.(agent.id) : undefined
                   }

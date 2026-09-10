@@ -14,35 +14,38 @@ interface ApprovalCardProps {
   /** False when the current user is the driver (cannot self-approve) or a viewer. */
   canDecide: boolean;
   deciding?: boolean;
-  agentRunning?: boolean;
+  agentName?: string;
   onDecide: (approved: boolean, alwaysAllow?: boolean) => void;
 }
 
 function toCardStatus(
   request: ApprovalRequestInfo,
   deciding: boolean,
-  agentRunning: boolean,
 ): ToolApprovalStatus {
   if (request.status === "denied") return "denied";
-  if (request.status === "expired") return "error";
-  if (request.status === "approved") {
-    if (agentRunning) return "running";
-    return "complete";
-  }
+  if (request.status === "expired") return "expired";
+  if (request.status === "approved") return "complete";
   if (deciding) return "approving";
   return "pending";
+}
+
+function previewLine(text: string, max = 140): string {
+  const compact = text.replace(/\s+/g, " ").trim();
+  if (compact.length <= max) return compact;
+  return `${compact.slice(0, max - 1)}…`;
 }
 
 export default function ApprovalCard({
   request,
   canDecide,
   deciding,
-  agentRunning,
+  agentName,
   onDecide,
 }: ApprovalCardProps) {
   const [detailsOpen, setDetailsOpen] = useState(request.status === "pending");
-  const status = toCardStatus(request, Boolean(deciding), Boolean(agentRunning));
+  const status = toCardStatus(request, Boolean(deciding));
   const shell = isShellTool(request.toolName);
+  const pending = request.status === "pending";
   const parameters = useMemo(() => {
     const rows = [];
     if (request.detail) {
@@ -69,39 +72,41 @@ export default function ApprovalCard({
     return rows;
   }, [request.detail, request.path, shell]);
 
-  const pending = request.status === "pending";
-  const decidedNote =
-    !pending && request.decidedByName
+  const description = pending
+    ? request.detail
+      ? previewLine(request.detail)
+      : request.path
+        ? `The agent wants to use ${request.toolName} on ${request.path}.`
+        : `The agent wants to run ${request.toolName}.`
+    : request.decidedByName
       ? `${request.status} by ${request.decidedByName}`
-      : pending && !canDecide
-        ? "Waiting for another editor (not the current driver) to approve or deny."
-        : undefined;
+      : undefined;
+
+  const viewerNote =
+    pending && !canDecide
+      ? "Waiting for another editor to approve or deny."
+      : undefined;
 
   return (
-    <div className="max-w-lg">
-      <ToolApproval
-        tool={request.toolName}
-        title={
-          pending ? "Allow this tool to run?" : `${request.toolName} access`
-        }
-        description={
-          decidedNote ||
-          (pending
-            ? "The agent wants to run this action in the current workspace."
-            : undefined)
-        }
-        status={status}
-        open={detailsOpen}
-        onOpenChange={setDetailsOpen}
-        parameters={parameters}
-        onApprove={
-          pending && canDecide ? () => onDecide(true, false) : undefined
-        }
-        onAlwaysAllow={
-          pending && canDecide ? () => onDecide(true, true) : undefined
-        }
-        onDeny={pending && canDecide ? () => onDecide(false) : undefined}
-      />
-    </div>
+    <ToolApproval
+      tool={request.toolName}
+      agent={agentName}
+      title={
+        pending ? `Allow ${request.toolName} to run?` : `${request.toolName}`
+      }
+      description={description}
+      note={viewerNote}
+      status={status}
+      open={detailsOpen}
+      onOpenChange={setDetailsOpen}
+      parameters={parameters}
+      onApprove={
+        pending && canDecide ? () => onDecide(true, false) : undefined
+      }
+      onAlwaysAllow={
+        pending && canDecide ? () => onDecide(true, true) : undefined
+      }
+      onDeny={pending && canDecide ? () => onDecide(false) : undefined}
+    />
   );
 }
