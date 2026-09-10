@@ -1720,3 +1720,15 @@ export async function uploadIssueAttachment(
   return res.json();
 }
 
+export async function fetchIssueAttachmentBlob(
+  issueId: string,
+  fileId: string,
+): Promise<Blob> {
+  const res = await fetch(
+    `${API_BASE}/issues/${encodeURIComponent(issueId)}/attachments/${encodeURIComponent(fileId)}`,
+    { headers: await authHeaders() },
+  );
+  if (!res.ok) throw new Error("Failed to load attachment");
+  return res.blob();
+}
+

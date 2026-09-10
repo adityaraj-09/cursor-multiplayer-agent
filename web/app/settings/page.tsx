@@ -139,17 +139,6 @@ function SettingsBody() {
           </p>
         </div>
 
-        {workspace.creatingOrg && (
-          <CreateTeamCard
-            name={workspace.newOrgName}
-            onNameChange={workspace.setNewOrgName}
-            onCreate={() => void workspace.handleCreateOrg()}
-            onCancel={() => workspace.setCreatingOrg(false)}
-            busy={workspace.busyOrg}
-            error={workspace.orgError}
-          />
-        )}
-
         {(error || notice) && (
           <p className={`text-[13px] ${error ? "text-[#f07070]" : "text-[#3ecf8e]"}`}>
             {error || notice}
@@ -185,6 +174,16 @@ function SettingsBody() {
           </>
         )}
       </main>
+      {workspace.creatingOrg && (
+        <CreateTeamCard
+          name={workspace.newOrgName}
+          onNameChange={workspace.setNewOrgName}
+          onCreate={() => void workspace.handleCreateOrg()}
+          onCancel={() => workspace.setCreatingOrg(false)}
+          busy={workspace.busyOrg}
+          error={workspace.orgError}
+        />
+      )}
     </DashboardShell>
   );
 }

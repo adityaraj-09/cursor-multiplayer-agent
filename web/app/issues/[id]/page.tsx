@@ -10,12 +10,12 @@ import {
   cancelIssue,
   deleteIssue,
   fetchIssue,
+  fetchIssueAttachmentBlob,
   fetchOrgs,
   queueIssue,
   retryIssue,
   runIssueNow,
   updateIssue,
-  waitForAuthToken,
   type IssueInfo,
   type OrgInfo,
 } from "../../../lib/api";
@@ -29,12 +29,12 @@ import {
   canQueueIssue,
   canRetryIssue,
   issueStatusLabel,
+  type IssueAttachmentInfo,
 } from "../../../../shared/issues";
 
-function apiBase(): string {
-  const raw = (process.env.NEXT_PUBLIC_API_URL || "").trim().replace(/\/+$/, "");
-  if (raw) return `${raw}/api`;
-  return "/api";
+function isImageAttachment(att: IssueAttachmentInfo): boolean {
+  if (att.mime.toLowerCase().startsWith("image/")) return true;
+  return /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(att.name);
 }
 
 function statusTone(status: IssueInfo["status"]): string {
@@ -106,35 +106,51 @@ export default function IssueDetailPage() {
     };
   }, [id, user, authLoading, editingWriteup]);
 
+  const attachmentKey = issue
+    ? issue.attachments.map((att) => att.id).join(",")
+    : "";
+
   useEffect(() => {
-    if (!issue) return;
+    if (!issue) {
+      setPreviews({});
+      return;
+    }
+    const images = issue.attachments.filter(isImageAttachment);
+    if (images.length === 0) {
+      setPreviews({});
+      return;
+    }
+
     let cancelled = false;
     const urls: string[] = [];
     void (async () => {
-      const token = await waitForAuthToken();
       const next: Record<string, string> = {};
-      for (const att of issue.attachments) {
-        if (!att.mime.startsWith("image/")) continue;
-        try {
-          const res = await fetch(`${apiBase()}${att.url.replace(/^\/api/, "")}`, {
-            headers: token ? { Authorization: `Bearer ${token}` } : {},
-          });
-          if (!res.ok) continue;
-          const blob = await res.blob();
-          const url = URL.createObjectURL(blob);
-          urls.push(url);
-          next[att.id] = url;
-        } catch {
-          // ignore
-        }
-      }
+      await Promise.all(
+        images.map(async (att) => {
+          try {
+            const blob = await fetchIssueAttachmentBlob(issue.id, att.id);
+            const url = URL.createObjectURL(blob);
+            if (cancelled) {
+              URL.revokeObjectURL(url);
+              return;
+            }
+            urls.push(url);
+            next[att.id] = url;
+          } catch {
+            // keep filename fallback
+          }
+        }),
+      );
       if (!cancelled) setPreviews(next);
     })();
+
     return () => {
       cancelled = true;
       for (const url of urls) URL.revokeObjectURL(url);
     };
-  }, [issue]);
+    // Only reload when the issue id or attachment set changes — not on poll ticks.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [issue?.id, attachmentKey]);
 
   const act = async (fn: () => Promise<IssueInfo>) => {
     setBusy(true);
@@ -310,20 +326,40 @@ export default function IssueDetailPage() {
                 {issue.description || "No description"}
               </div>
               {issue.attachments.length > 0 && (
-                <div className="mt-4 grid grid-cols-2 sm:grid-cols-3 gap-2">
+                <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
                   {issue.attachments.map((att) =>
                     previews[att.id] ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img
+                      <a
                         key={att.id}
-                        src={previews[att.id]}
-                        alt={att.name}
-                        className="rounded-md border border-[#2b2b2b] max-h-40 w-full object-cover"
-                      />
+                        href={previews[att.id]}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="block overflow-hidden rounded-md border border-[#2b2b2b] bg-[#141414]"
+                      >
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={previews[att.id]}
+                          alt={att.name}
+                          className="max-h-64 w-full object-contain bg-[#141414]"
+                        />
+                        <p className="truncate px-2 py-1.5 text-[11px] text-[#6e6e6e]">
+                          {att.name}
+                        </p>
+                      </a>
                     ) : (
-                      <p key={att.id} className="text-[12px] text-[#a0a0a0]">
-                        {att.name}
-                      </p>
+                      <div
+                        key={att.id}
+                        className="rounded-md border border-[#2b2b2b] bg-[#141414] px-3 py-2"
+                      >
+                        <p className="text-[12px] text-[#a0a0a0] truncate">
+                          {att.name}
+                        </p>
+                        {isImageAttachment(att) && (
+                          <p className="text-[11px] text-[#6e6e6e] mt-0.5">
+                            Loading preview…
+                          </p>
+                        )}
+                      </div>
                     ),
                   )}
                 </div>
