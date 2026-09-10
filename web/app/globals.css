@@ -55,6 +55,15 @@ body {
   overscroll-behavior: none;
 }
 
+/* Presenting / theater mode — fill the OS fullscreen surface. */
+:fullscreen,
+:-webkit-full-screen {
+  width: 100% !important;
+  height: 100% !important;
+  max-height: none !important;
+  background: #111111;
+}
+
 .room-chat-scroll {
   min-height: 0;
   overflow-y: auto;

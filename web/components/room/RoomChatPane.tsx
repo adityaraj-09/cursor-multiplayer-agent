@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo } from "react";
+import { useMemo, useRef } from "react";
 import {
   Columns2,
   Eye,
@@ -25,6 +25,8 @@ import SplitViewMenu from "../SplitViewMenu";
 import LockPanel from "../LockPanel";
 import ReviewPingBanner from "../ReviewPingBanner";
 import AttentionBadge from "../board/AttentionBadge";
+import FullscreenButton from "../FullscreenButton";
+import { useFullscreen } from "../../hooks/useFullscreen";
 import {
   formatTypingIndicator,
   formatTypingIndicatorAll,
@@ -34,6 +36,12 @@ import IntegrateButton, { integrateButtonState } from "../IntegrateButton";
 import { isFeatureAgent, isIntegratorAgent } from "../../../shared/events";
 
 export default function RoomChatPane() {
+  const shellRef = useRef<HTMLDivElement>(null);
+  const {
+    active: fullscreen,
+    supported: fullscreenSupported,
+    toggle: toggleFullscreen,
+  } = useFullscreen(shellRef);
   const ctx = useRoomContext();
   const {
     variant,
@@ -345,7 +353,7 @@ export default function RoomChatPane() {
   }
 
   return (
-    <div className={shellClass}>
+    <div ref={shellRef} className={shellClass}>
       {variant === "page" && (
         <div className="absolute inset-0 pointer-events-none bg-[radial-gradient(circle_at_20%_0%,rgba(77,159,255,0.07),transparent_28%),radial-gradient(circle_at_84%_12%,rgba(62,207,142,0.045),transparent_26%)]" />
       )}
@@ -457,6 +465,12 @@ export default function RoomChatPane() {
           </div>
 
           <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+            {fullscreenSupported && (
+              <FullscreenButton
+                active={fullscreen}
+                onToggle={() => void toggleFullscreen()}
+              />
+            )}
             <button
               type="button"
               onClick={() => setSettingsOpen(true)}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { LayoutGrid } from "lucide-react";
@@ -8,6 +8,8 @@ import { useAuth } from "../../components/AuthProvider";
 import UserMenu from "../../components/UserMenu";
 import BoardRoomSlot from "../../components/board/BoardRoomSlot";
 import BoardAddTile from "../../components/board/BoardAddTile";
+import FullscreenButton from "../../components/FullscreenButton";
+import { useFullscreen } from "../../hooks/useFullscreen";
 import { fetchRooms } from "../../lib/api";
 import {
   MAX_BOARD_ROOMS,
@@ -26,6 +28,9 @@ export default function BoardPage() {
   const [focusId, setFocusId] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
   const [catalog, setCatalog] = useState<RoomInfo[]>([]);
+  const shellRef = useRef<HTMLDivElement>(null);
+  const { active: fullscreen, supported: fullscreenSupported, toggle: toggleFullscreen } =
+    useFullscreen(shellRef);
 
   const userName =
     (typeof window !== "undefined" &&
@@ -127,7 +132,10 @@ export default function BoardPage() {
   }
 
   return (
-    <div className="fixed inset-0 h-[100dvh] max-h-[100dvh] flex flex-col bg-[#111111] text-[#e4e4e4] overflow-hidden">
+    <div
+      ref={shellRef}
+      className="fixed inset-0 h-[100dvh] max-h-[100dvh] flex flex-col bg-[#111111] text-[#e4e4e4] overflow-hidden"
+    >
       <header className="shrink-0 border-b border-[#2b2b2b] bg-[#171717] pt-[env(safe-area-inset-top)]">
         <div className="flex items-center justify-between gap-3 px-3 sm:px-4 h-12">
           <div className="flex items-center gap-2.5 min-w-0">
@@ -159,6 +167,12 @@ export default function BoardPage() {
                 disabled={roomIds.length >= MAX_BOARD_ROOMS}
                 onAdd={addRoom}
                 variant="header"
+              />
+            )}
+            {fullscreenSupported && (
+              <FullscreenButton
+                active={fullscreen}
+                onToggle={() => void toggleFullscreen()}
               />
             )}
             <UserMenu />
