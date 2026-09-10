@@ -16,7 +16,9 @@ import {
 } from "../server/uploads.js";
 import {
   attachmentWorkspaceRelPath,
+  contentDispositionInline,
   isSafeAttachmentRelPath,
+  safeContentType,
 } from "../shared/uploads.js";
 
 describe("looksLikePlan", () => {
@@ -172,5 +174,21 @@ describe("upload helpers", () => {
     expect(suffix).toContain("saved at");
     expect(suffix).toContain(".steer-uploads/");
     expect(suffix).not.toContain("no workspace path");
+  });
+});
+
+describe("content disposition headers", () => {
+  it("keeps unicode screenshot names out of the filename= token", () => {
+    const name = "Screenshot 2026-09-11 at 3.43.27\u202fAM.png";
+    const header = contentDispositionInline(name);
+    expect(header.startsWith("inline; filename=\"Screenshot_2026-09-11_at_3.43.27_AM.png\"")).toBe(
+      true,
+    );
+    expect(header).toContain("filename*=UTF-8''");
+    expect(header).not.toMatch(/filename="[^"]*\u202f/);
+    expect(safeContentType("image/png; charset=utf-8")).toBe(
+      "application/octet-stream",
+    );
+    expect(safeContentType("image/png")).toBe("image/png");
   });
 });
