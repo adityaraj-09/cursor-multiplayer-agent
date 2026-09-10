@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { Layers3 } from "lucide-react";
 import RoomCard from "../../components/RoomCard";
+import CreateTeamCard from "../../components/CreateTeamCard";
 import DashboardShell from "../../components/DashboardShell";
 import EmptyState from "../../components/EmptyState";
 import { useAuth } from "../../components/AuthProvider";
@@ -290,35 +291,17 @@ export default function SessionsDashboard() {
         </div>
 
         {creatingOrg && (
-          <div className="mb-6 rounded-lg border border-[#2b2b2b] bg-[#1a1a1a] p-4">
-            <p className="text-[13px] text-[#e4e4e4] mb-2">
-              Create a team workspace
-            </p>
-            <p className="text-[11px] text-[#6e6e6e] mb-3">
-              Sessions created in this team are visible to all members. Set a
-              shared Cursor key in Team settings so leads don’t configure
-              billing per room.
-            </p>
-            <div className="flex flex-col sm:flex-row gap-2">
-              <input
-                value={newOrgName}
-                onChange={(e) => setNewOrgName(e.target.value)}
-                placeholder="Acme Engineering"
-                className="flex-1 h-9 px-2.5 rounded-md bg-[#252525] border border-[#2b2b2b] text-[13px] text-[#e4e4e4] outline-none focus:border-[#4d9fff]"
-              />
-              <button
-                type="button"
-                disabled={busyOrg}
-                onClick={() => void handleCreateOrg()}
-                className="h-9 px-3 rounded-md bg-[#e4e4e4] text-[#141414] text-[12px] font-medium hover:bg-white disabled:opacity-50"
-              >
-                {busyOrg ? "Creating…" : "Create team"}
-              </button>
-            </div>
-            {orgError && (
-              <p className="text-[12px] text-[#f07070] mt-2">{orgError}</p>
-            )}
-          </div>
+          <CreateTeamCard
+            name={newOrgName}
+            onNameChange={setNewOrgName}
+            onCreate={() => void handleCreateOrg()}
+            onCancel={() => {
+              setCreatingOrg(false);
+              setOrgError("");
+            }}
+            busy={busyOrg}
+            error={orgError}
+          />
         )}
 
         {joinable.length > 0 && (
