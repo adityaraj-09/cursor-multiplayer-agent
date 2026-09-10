@@ -3,8 +3,10 @@
 import { Suspense, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
+import { CircleDot } from "lucide-react";
 import DashboardShell from "../../components/DashboardShell";
 import CreateTeamCard from "../../components/CreateTeamCard";
+import EmptyState from "../../components/EmptyState";
 import IssueComposeModal from "../../components/issues/IssueComposeModal";
 import { useAuth } from "../../components/AuthProvider";
 import {
@@ -182,21 +184,20 @@ function IssuesBody() {
             ))}
           </div>
         ) : rows.length === 0 ? (
-          <div className="border border-dashed border-[#2b2b2b] rounded-xl py-16 px-6 text-center bg-[#171717]">
-            <p className="text-[#a0a0a0] text-[14px] mb-1">No issues yet</p>
-            <p className="text-[#6e6e6e] text-[13px] mb-5">
-              Add a ticket with a GitHub repo from this workspace. After the
-              delay, a headless Cursor agent opens a PR and writes a markdown
-              note here — not in git, and not in Sessions.
-            </p>
-            <button
-              type="button"
-              onClick={() => setCompose(true)}
-              className="inline-flex h-8 px-3.5 rounded-md bg-[#e4e4e4] text-[#141414] text-[13px] font-medium hover:bg-white transition-colors items-center"
-            >
-              Create issue
-            </button>
-          </div>
+          <EmptyState
+            icon={CircleDot}
+            title="No issues yet"
+            description="Queue a ticket against a GitHub repo in this workspace. After the delay, a headless agent opens a PR and leaves a markdown note here — not in git, and not in Sessions."
+            action={
+              <button
+                type="button"
+                onClick={() => setCompose(true)}
+                className="inline-flex h-9 px-4 rounded-md bg-[#e4e4e4] text-[#141414] text-[13px] font-medium hover:bg-white transition-colors items-center"
+              >
+                Create issue
+              </button>
+            }
+          />
         ) : (
           <div className="overflow-hidden rounded-lg border border-[#2b2b2b] bg-[#141414]">
             <IssuesGroupedList items={rows} />
