@@ -166,17 +166,6 @@ function IssuesBody() {
           </div>
         </div>
 
-        {workspace.creatingOrg && (
-          <CreateTeamCard
-            name={workspace.newOrgName}
-            onNameChange={workspace.setNewOrgName}
-            onCreate={() => void workspace.handleCreateOrg()}
-            onCancel={() => workspace.setCreatingOrg(false)}
-            busy={workspace.busyOrg}
-            error={workspace.orgError}
-          />
-        )}
-
         {loading ? (
           <div className="rounded-lg border border-[#2b2b2b] bg-[#171717] divide-y divide-[#1f1f1f]">
             {[0, 1, 2, 3, 4].map((key) => (
@@ -204,6 +193,17 @@ function IssuesBody() {
           </div>
         )}
       </main>
+
+      {workspace.creatingOrg && (
+        <CreateTeamCard
+          name={workspace.newOrgName}
+          onNameChange={workspace.setNewOrgName}
+          onCreate={() => void workspace.handleCreateOrg()}
+          onCancel={() => workspace.setCreatingOrg(false)}
+          busy={workspace.busyOrg}
+          error={workspace.orgError}
+        />
+      )}
 
       {composeOpen && (
         <IssueComposeModal

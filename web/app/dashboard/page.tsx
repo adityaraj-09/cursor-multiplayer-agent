@@ -290,20 +290,6 @@ export default function SessionsDashboard() {
           </Link>
         </div>
 
-        {creatingOrg && (
-          <CreateTeamCard
-            name={newOrgName}
-            onNameChange={setNewOrgName}
-            onCreate={() => void handleCreateOrg()}
-            onCancel={() => {
-              setCreatingOrg(false);
-              setOrgError("");
-            }}
-            busy={busyOrg}
-            error={orgError}
-          />
-        )}
-
         {joinable.length > 0 && (
           <div className="mb-6 rounded-lg border border-[#2b2b2b] bg-[#1a1a1a] p-4">
             <p className="text-[13px] text-[#e4e4e4] mb-1">
@@ -424,6 +410,19 @@ export default function SessionsDashboard() {
           </>
         )}
       </main>
+      {creatingOrg && (
+        <CreateTeamCard
+          name={newOrgName}
+          onNameChange={setNewOrgName}
+          onCreate={() => void handleCreateOrg()}
+          onCancel={() => {
+            setCreatingOrg(false);
+            setOrgError("");
+          }}
+          busy={busyOrg}
+          error={orgError}
+        />
+      )}
     </DashboardShell>
   );
 }

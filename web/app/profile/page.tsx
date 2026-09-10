@@ -73,17 +73,6 @@ export default function ProfilePage() {
           </p>
         </div>
 
-        {workspace.creatingOrg && (
-          <CreateTeamCard
-            name={workspace.newOrgName}
-            onNameChange={workspace.setNewOrgName}
-            onCreate={() => void workspace.handleCreateOrg()}
-            onCancel={() => workspace.setCreatingOrg(false)}
-            busy={workspace.busyOrg}
-            error={workspace.orgError}
-          />
-        )}
-
         <section className="rounded-xl border border-[#2b2b2b] bg-[#1a1a1a] p-4 sm:p-5">
           <div className="flex items-start gap-4">
             {clerkUser.imageUrl ? (
@@ -181,6 +170,16 @@ export default function ProfilePage() {
           </div>
         </section>
       </main>
+      {workspace.creatingOrg && (
+        <CreateTeamCard
+          name={workspace.newOrgName}
+          onNameChange={workspace.setNewOrgName}
+          onCreate={() => void workspace.handleCreateOrg()}
+          onCancel={() => workspace.setCreatingOrg(false)}
+          busy={workspace.busyOrg}
+          error={workspace.orgError}
+        />
+      )}
     </DashboardShell>
   );
 }
