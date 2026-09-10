@@ -19,43 +19,9 @@ import {
   writeSelectedWorkspace,
   type WorkspaceScope,
 } from "../../lib/workspace";
-import {
-  issueStatusLabel,
-  type IssueStatus,
-} from "../../../shared/issues";
-
-const FILTERS: Array<IssueStatus | "all"> = [
-  "all",
-  "queued",
-  "running",
-  "in_review",
-  "failed",
-  "done",
-];
-
-function statusTone(status: IssueStatus): string {
-  switch (status) {
-    case "running":
-      return "border-[#26405d] bg-[#17202a] text-[#8ec5ff]";
-    case "queued":
-      return "border-[#3c3420] bg-[#1f1b12] text-[#e6c07b]";
-    case "in_review":
-      return "border-[#1f3d2e] bg-[#142019] text-[#3ecf8e]";
-    case "done":
-      return "border-[#2b2b2b] bg-[#1a1a1a] text-[#a0a0a0]";
-    case "failed":
-    case "cancelled":
-      return "border-[#3c2b2b] bg-[#1a1414] text-[#f07070]";
-    case "needs_input":
-      return "border-[#3c3420] bg-[#1f1b12] text-[#e6c07b]";
-    default:
-      return "border-[#2b2b2b] bg-[#1a1a1a] text-[#a0a0a0]";
-  }
-}
-
-function repoLabel(url: string): string {
-  return url.replace(/^https:\/\/github\.com\//i, "");
-}
+import IssuesGroupedList, {
+  issueInfoToRow,
+} from "../../components/issues/IssuesGroupedList";
 
 export default function IssuesPage() {
   const { user, loading: authLoading } = useAuth();
@@ -64,7 +30,6 @@ export default function IssuesPage() {
   const [issues, setIssues] = useState<IssueInfo[]>([]);
   const [settings, setSettings] = useState<IssueSettingsInfo | null>(null);
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState<IssueStatus | "all">("all");
   const [creatingOrg, setCreatingOrg] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [delayMin, setDelayMin] = useState("10");
@@ -137,11 +102,7 @@ export default function IssuesPage() {
     writeSelectedWorkspace(next);
   };
 
-  const filtered = useMemo(
-    () =>
-      filter === "all" ? issues : issues.filter((issue) => issue.status === filter),
-    [issues, filter],
-  );
+  const rows = useMemo(() => issues.map(issueInfoToRow), [issues]);
 
   const counts = useMemo(() => {
     const running = issues.filter((i) => i.status === "running").length;
@@ -217,7 +178,7 @@ export default function IssuesPage() {
       createHref={sessionCreateHref}
       userName={user.name}
     >
-      <main className="mx-auto w-full max-w-6xl px-4 sm:px-6 py-6 sm:py-8">
+      <main className="mx-auto w-full max-w-7xl px-4 sm:px-6 py-6 sm:py-8">
         <div className="mb-6 sm:mb-8 flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
           <div>
             <p className="text-[11px] uppercase tracking-wide text-[#6e6e6e] mb-1">
@@ -315,33 +276,13 @@ export default function IssuesPage() {
           </div>
         )}
 
-        <div className="mb-4 flex flex-wrap gap-1.5">
-          {FILTERS.map((key) => (
-            <button
-              key={key}
-              type="button"
-              onClick={() => setFilter(key)}
-              className={`h-7 px-2.5 rounded-md text-[12px] border ${
-                filter === key
-                  ? "bg-[#252525] border-[#4d9fff] text-[#e4e4e4]"
-                  : "bg-[#1a1a1a] border-[#2b2b2b] text-[#6e6e6e]"
-              }`}
-            >
-              {key === "all" ? "All" : issueStatusLabel(key)}
-            </button>
-          ))}
-        </div>
-
         {loading ? (
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-            {[0, 1, 2].map((key) => (
-              <div
-                key={key}
-                className="h-[148px] rounded-xl border border-[#2b2b2b] bg-[#1a1a1a] animate-pulse"
-              />
+          <div className="rounded-lg border border-[#2b2b2b] bg-[#171717] divide-y divide-[#1f1f1f]">
+            {[0, 1, 2, 3, 4].map((key) => (
+              <div key={key} className="h-9 animate-pulse bg-[#1a1a1a]" />
             ))}
           </div>
-        ) : filtered.length === 0 ? (
+        ) : rows.length === 0 ? (
           <div className="border border-dashed border-[#2b2b2b] rounded-xl py-16 px-6 text-center bg-[#171717]">
             <p className="text-[#a0a0a0] text-[14px] mb-1">No issues yet</p>
             <p className="text-[#6e6e6e] text-[13px] mb-5">
@@ -357,37 +298,8 @@ export default function IssuesPage() {
             </Link>
           </div>
         ) : (
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-            {filtered.map((issue) => (
-              <Link
-                key={issue.id}
-                href={`/issues/${issue.id}`}
-                className="rounded-xl border border-[#2b2b2b] bg-[#1a1a1a] p-4 hover:border-[#3c3c3c] transition-colors"
-              >
-                <div className="flex items-start justify-between gap-2 mb-2">
-                  <h2 className="text-[14px] text-[#e4e4e4] font-medium leading-5 line-clamp-2">
-                    {issue.title}
-                  </h2>
-                  <span
-                    className={`shrink-0 inline-flex h-6 items-center px-2 rounded text-[11px] border ${statusTone(issue.status)}`}
-                  >
-                    {issueStatusLabel(issue.status)}
-                  </span>
-                </div>
-                <p className="text-[12px] text-[#6e6e6e] truncate">
-                  {repoLabel(issue.repoUrl)}
-                </p>
-                <p className="text-[11px] text-[#6e6e6e] mt-2">
-                  {issue.status === "queued"
-                    ? `Picks up ${new Date(issue.runAfter).toLocaleString()}`
-                    : issue.prUrl
-                      ? "Pull request ready"
-                      : issue.error
-                        ? issue.error
-                        : issue.creatorName || "You"}
-                </p>
-              </Link>
-            ))}
+          <div className="overflow-hidden rounded-lg border border-[#2b2b2b] bg-[#141414]">
+            <IssuesGroupedList items={rows} />
           </div>
         )}
       </main>

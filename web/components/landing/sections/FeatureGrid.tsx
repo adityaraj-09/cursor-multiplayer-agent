@@ -1,90 +1,74 @@
-import {
-  Bot,
-  GitCompare,
-  History,
-  MessagesSquare,
-  ShieldCheck,
-  Users,
-  type LucideIcon,
-} from "lucide-react";
-import Image from "next/image";
 import Reveal from "../Reveal";
+import {
+  AgentsDiagram,
+  DiffDiagram,
+  HandoffDiagram,
+  HistoryDiagram,
+  RedirectDiagram,
+  WatchDiagram,
+} from "./FeatureDiagrams";
 
-const FEATURES: { icon: LucideIcon; title: string; body: string }[] = [
+const FEATURES = [
   {
-    icon: Bot,
     title: "Many agents, one room",
-    body: "Run Cursor and Claude Code side by side — each with its own model, scope, and stream in the same session.",
+    body: "Each workstream keeps its own model and chat. They still sit in the same session.",
+    Diagram: AgentsDiagram,
   },
   {
-    icon: Users,
     title: "Watch together",
-    body: "Everyone sees live tool calls, diffs, and chat across every agent — not a screen share of one laptop.",
+    body: "Four people see the same tools, diffs, and replies — not a share of one laptop.",
+    Diagram: WatchDiagram,
   },
   {
-    icon: MessagesSquare,
     title: "Redirect freely",
-    body: "Anyone can message any agent. Steering stays attributed, so the room remains clear about who asked for what.",
+    body: "Anyone can message any agent. The name stays on the steer, so the room stays clear.",
+    Diagram: RedirectDiagram,
   },
   {
-    icon: ShieldCheck,
     title: "Hand off control",
-    body: "Request, grant, or release the driver seat per agent without leaving the session or losing context.",
+    body: "Pass the driver seat without leaving. Context stays. The next person just drives.",
+    Diagram: HandoffDiagram,
   },
   {
-    icon: GitCompare,
     title: "Live diff stream",
-    body: "File changes land in the room as they happen — sandbox git diffs for cloud Claude, watched diffs for local rooms.",
+    body: "File changes land in the room as they happen — red and green, while people watch.",
+    Diagram: DiffDiagram,
   },
   {
-    icon: History,
     title: "Durable history",
-    body: "Chat, decisions, and diffs persist per room, so anyone can join mid-session and see exactly how it got there.",
+    body: "Join mid-session and the thread is already the brief: who asked, what changed, who approved.",
+    Diagram: HistoryDiagram,
   },
 ];
 
 export default function FeatureGrid() {
   return (
-    <section className="border-t border-[#191919]/08 bg-[#FAFAF8]">
-      <div className="mx-auto max-w-6xl px-5 sm:px-8 py-20 sm:py-28">
-        <div className="grid gap-10 md:grid-cols-12 md:gap-14 items-center">
-          <Reveal variant="left" className="md:col-span-5">
-            <p className="text-[11px] sm:text-[12px] font-medium tracking-[0.16em] uppercase text-[#191919]/45">
-              Product
+    <section id="product" className="border-t border-white/[0.06] bg-[#0f0f0f]">
+      <div className="mx-auto max-w-6xl px-5 py-20 sm:px-8 sm:py-28">
+        <Reveal>
+          <div className="max-w-xl">
+            <p className="text-[11px] font-medium uppercase tracking-[0.16em] text-[#6e6e6e] sm:text-[12px]">
+              Rooms
             </p>
-            <h2 className="mt-3 landing-serif text-[32px] sm:text-[40px] leading-[1.12] tracking-tight">
+            <h2 className="landing-serif mt-3 text-[32px] leading-[1.12] tracking-tight text-white sm:text-[40px]">
               Everything the room needs. Nothing it doesn&rsquo;t.
             </h2>
-            <p className="mt-4 text-[15px] leading-relaxed text-[#191919]/65 font-light max-w-md">
-              Every role an agent can play — researching, planning, writing, executing — shares one
-              room instead of four disconnected tabs.
+            <p className="mt-4 max-w-md text-[15px] font-light leading-relaxed text-[#a0a0a0]">
+              Research, plan, write, execute — one shared surface instead of four
+              disconnected tabs.
             </p>
-          </Reveal>
-          <Reveal variant="right" delay={80} className="md:col-span-7">
-            <div className="overflow-hidden rounded-[2rem] border border-[#191919]/10 bg-white shadow-[0_30px_80px_rgba(25,25,25,0.08)]">
-              <Image
-                src="/images/agents-illustration.webp"
-                alt="Illustration of several AI agents — researcher, planner, data analyst, executor — collaborating around a shared board"
-                width={1400}
-                height={933}
-                className="w-full h-auto"
-                priority={false}
-              />
-            </div>
-          </Reveal>
-        </div>
+          </div>
+        </Reveal>
 
-        <div className="mt-14 sm:mt-16 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
-          {FEATURES.map(({ icon: Icon, title, body }, i) => (
+        <div className="mt-14 grid gap-4 sm:mt-16 sm:grid-cols-2 lg:grid-cols-3">
+          {FEATURES.map(({ title, body, Diagram }, i) => (
             <Reveal key={title} delay={(i % 3) * 70}>
-              <div className="landing-card group h-full min-w-0 rounded-[1.5rem] border border-[#191919]/10 bg-white p-7 sm:p-8">
-                <div className="landing-card-icon inline-flex h-11 w-11 items-center justify-center rounded-full bg-[#191919] text-white">
-                  <Icon className="w-5 h-5" strokeWidth={1.75} />
-                </div>
-                <h3 className="mt-6 landing-serif text-[21px] sm:text-[22px] tracking-tight">
+              <div className="landing-card h-full min-w-0 rounded-2xl border border-white/[0.06] bg-[#161616] p-4 sm:p-5">
+                <Diagram />
+                <h3 className="landing-serif text-[20px] tracking-tight text-white sm:text-[21px]">
                   {title}
                 </h3>
-                <p className="mt-3 text-[14px] sm:text-[15px] leading-relaxed text-[#191919]/65 font-light">
+                <p className="mt-2 text-[13px] font-light leading-relaxed text-[#a0a0a0] sm:text-[14px]">
                   {body}
                 </p>
               </div>

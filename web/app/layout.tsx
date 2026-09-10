@@ -5,9 +5,9 @@ import { steerClerkAppearance } from "../lib/clerkAppearance";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Steer — Multiplayer Cursor & Claude Code rooms",
+  title: "Steer — Control room for Cursor & Claude Code",
   description:
-    "Shared live rooms for Cursor and Claude Code. Run multiple agents together — watch, redirect, and hand off control as a team.",
+    "Multiplayer rooms and headless issues for Cursor and Claude Code. Watch, steer, and let agents pick up tickets, open PRs, and write the note.",
 };
 
 export const viewport: Viewport = {
@@ -23,7 +23,7 @@ export default function RootLayout({
 }) {
   return (
     <ClerkProvider appearance={steerClerkAppearance}>
-      <html lang="en" className="dark" style={{ colorScheme: "dark" }}>
+      <html lang="en" className="dark scroll-smooth" style={{ colorScheme: "dark" }}>
         <head>
           <link rel="preconnect" href="https://fonts.googleapis.com" />
           <link
@@ -32,11 +32,7 @@ export default function RootLayout({
             crossOrigin="anonymous"
           />
           <link
-            href="https://db.onlinewebfonts.com/c/9d4d074c9335825a23cce178ee03b498?family=P22+Mackinac+W01+Book"
-            rel="stylesheet"
-          />
-          <link
-            href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap"
+            href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap"
             rel="stylesheet"
           />
           <link
