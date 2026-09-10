@@ -24,6 +24,7 @@ import {
   type IssueSettingsInfo,
 } from "../shared/issues.js";
 import type { IssueRow } from "./db.js";
+import { log, logError, logWarn } from "./logger.js";
 
 function addEvent(issueId: string, kind: string, message = ""): void {
   try {
@@ -34,11 +35,10 @@ function addEvent(issueId: string, kind: string, message = ""): void {
       message,
     });
   } catch (err) {
-    console.warn(
-      "[issues] failed to record event",
+    logWarn("issues", "failed to record event", {
       kind,
-      err instanceof Error ? err.message : err,
-    );
+      err,
+    });
   }
 }
 
@@ -158,6 +158,16 @@ async function executeIssue(issue: IssueRow): Promise<void> {
 
     const apiKey = resolveIssueCursorKey(issue);
     const modelId = issue.model_id?.trim() || "auto";
+    log("issues", "run started", {
+      id: issue.id,
+      orgId: issue.org_id || "personal",
+      repoUrl: issue.repo_url,
+      modelId,
+      attempt: issue.attempt,
+      keySource: issue.org_id
+        ? "org-or-fallback"
+        : "user-or-server",
+    });
     session = new SdkAgentSession({
       runtime: "cloud",
       apiKey,
@@ -287,6 +297,11 @@ async function executeIssue(issue: IssueRow): Promise<void> {
       "finished",
       prUrl ? `Ready for review · ${prUrl}` : "Finished without a pull request URL",
     );
+    log("issues", "run finished", {
+      id: issue.id,
+      prUrl,
+      branch: latest?.branch || git.branch,
+    });
   } catch (err) {
     const message =
       err instanceof Error ? err.message : "Issue run failed";
@@ -309,7 +324,7 @@ async function executeIssue(issue: IssueRow): Promise<void> {
       error: message,
     });
     addEvent(issue.id, "failed", message);
-    console.error(`[issues] ${issue.id} failed:`, message);
+    logError("issues", "run failed", { id: issue.id, err: message });
   } finally {
     clearInterval(heartbeat);
     if (session) {
@@ -333,7 +348,7 @@ export class IssueRunner {
     this.timer = setInterval(() => {
       void this.tick();
     }, ISSUE_POLL_MS);
-    console.log(`[issues] runner polling every ${ISSUE_POLL_MS}ms`);
+    log("issues", "runner started", { pollMs: ISSUE_POLL_MS });
   }
 
   stop(): void {
@@ -367,16 +382,18 @@ export class IssueRunner {
           now + ISSUE_LEASE_MS,
         );
         if (!claimed) continue;
+        log("issues", "claimed", {
+          id: claimed.id,
+          orgId: claimed.org_id || "personal",
+          attempt: claimed.attempt,
+        });
         this.inFlight.add(claimed.id);
         void executeIssue(claimed).finally(() => {
           this.inFlight.delete(claimed.id);
         });
       }
     } catch (err) {
-      console.error(
-        "[issues] poller error:",
-        err instanceof Error ? err.message : err,
-      );
+      logError("issues", "poller error", { err });
     } finally {
       this.ticking = false;
     }

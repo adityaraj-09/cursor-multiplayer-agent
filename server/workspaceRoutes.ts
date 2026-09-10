@@ -24,6 +24,7 @@ import {
   workspaceGithubOAuthAvailable,
 } from "./workspaceGithub.js";
 import { exchangeGithubOAuthCode } from "./githubApi.js";
+import { log, logError, logWarn } from "./logger.js";
 
 const router: RouterType = Router();
 
@@ -122,14 +123,18 @@ function listWorkspaceKeys(input: {
   ];
 }
 
-function sendError(res: import("express").Response, err: unknown): void {
+function sendError(
+  res: import("express").Response,
+  err: unknown,
+  extra?: Record<string, unknown>,
+): void {
   const status =
     err && typeof err === "object" && "status" in err
       ? Number((err as { status: number }).status) || 400
       : 400;
-  res.status(status).json({
-    error: err instanceof Error ? err.message : "Request failed",
-  });
+  const message = err instanceof Error ? err.message : "Request failed";
+  logError("workspace", message, { status, ...extra });
+  res.status(status).json({ error: message });
 }
 
 router.get("/", requireAuth, (req, res) => {
@@ -174,9 +179,15 @@ router.get("/github/repos", requireAuth, async (req, res) => {
       return;
     }
     const repositories = await listWorkspaceGithubRepos(workspace);
+    log("github", "listed repos", {
+      user: workspace.userId,
+      orgId: workspace.orgId || "personal",
+      login: github.login,
+      count: repositories.length,
+    });
     res.json({ repositories, github });
   } catch (err) {
-    sendError(res, err);
+    sendError(res, err, { action: "list-repos" });
   }
 });
 
@@ -197,9 +208,14 @@ router.post("/github", requireAuth, async (req, res) => {
       ...workspace,
       token,
     });
+    log("github", "connected via PAT", {
+      user: workspace.userId,
+      orgId: workspace.orgId || "personal",
+      login: github.login,
+    });
     res.json(github);
   } catch (err) {
-    sendError(res, err);
+    sendError(res, err, { action: "connect-pat" });
   }
 });
 
@@ -216,9 +232,13 @@ router.delete("/github", requireAuth, (req, res) => {
       return;
     }
     clearWorkspaceGithub(workspace);
+    log("github", "disconnected", {
+      user: workspace.userId,
+      orgId: workspace.orgId || "personal",
+    });
     res.json(getWorkspaceGithubInfo(workspace));
   } catch (err) {
-    sendError(res, err);
+    sendError(res, err, { action: "disconnect" });
   }
 });
 
@@ -247,14 +267,20 @@ router.post("/github/oauth/start", requireAuth, (req, res) => {
     url.searchParams.set("redirect_uri", githubRedirectUri());
     url.searchParams.set("scope", "read:user repo");
     url.searchParams.set("state", state);
+    log("github", "oauth start", {
+      user: workspace.userId,
+      orgId: workspace.orgId || "personal",
+      redirect: githubRedirectUri(),
+    });
     res.json({ url: url.toString() });
   } catch (err) {
-    sendError(res, err);
+    sendError(res, err, { action: "oauth-start" });
   }
 });
 
 router.get("/github/oauth/callback", async (req, res) => {
   const fail = (message: string) => {
+    logWarn("github", "oauth callback failed", { message });
     const dest = new URL("/settings", APP_ORIGIN);
     dest.searchParams.set("github", "error");
     dest.searchParams.set("message", message);
@@ -282,6 +308,10 @@ router.get("/github/oauth/callback", async (req, res) => {
       userId: pending.userId,
       orgId: pending.orgId,
       token,
+    });
+    log("github", "oauth connected", {
+      user: pending.userId,
+      orgId: pending.orgId || "personal",
     });
     const dest = new URL("/settings", APP_ORIGIN);
     dest.searchParams.set("github", "connected");

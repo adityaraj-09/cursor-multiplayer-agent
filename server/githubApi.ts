@@ -1,3 +1,5 @@
+import { logError } from "./logger.js";
+
 export interface GithubAccount {
   login: string;
   avatarUrl: string;
@@ -25,7 +27,9 @@ export async function githubRequest<T>(
   });
   if (!res.ok) {
     const body = (await res.json().catch(() => ({}))) as { message?: string };
-    throw new Error(body.message || `GitHub API ${res.status}`);
+    const message = body.message || `GitHub API ${res.status}`;
+    logError("github-api", message, { path, status: res.status });
+    throw new Error(message);
   }
   return (await res.json()) as T;
 }
