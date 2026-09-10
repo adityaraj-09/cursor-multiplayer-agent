@@ -174,12 +174,40 @@ export function canRetryIssue(status: IssueStatus): boolean {
 export function sanitizeIssueWriteup(raw: string): string {
   let text = raw.replace(/\u0000/g, "").trim();
   if (!text) return "";
-  const fenced = text.match(/^```(?:markdown|md)?\s*\n([\s\S]*?)\n```\s*$/i);
+  const fenced = text.match(/^```(?:markdown|md)?\s*\r?\n([\s\S]*?)\r?\n```\s*$/i)
+    || text.match(/^```(?:markdown|md)?\s*([\s\S]*?)```\s*$/i);
   if (fenced?.[1]) text = fenced[1].trim();
   if (text.length > MAX_WRITEUP_CHARS) {
     text = text.slice(0, MAX_WRITEUP_CHARS).trimEnd();
   }
   return text;
+}
+
+export function looksLikeIssueWriteup(text: string): boolean {
+  const trimmed = text.trim();
+  if (trimmed.length >= 80) return true;
+  return /^#{1,3}\s+\S+/m.test(trimmed);
+}
+
+export function buildFallbackIssueWriteup(input: {
+  title: string;
+  description?: string;
+  prUrl?: string | null;
+}): string {
+  const desc = input.description?.trim();
+  const pr = input.prUrl?.trim();
+  return [
+    "## Summary",
+    "",
+    `The agent finished working on **${input.title}** but did not return a markdown writeup.`,
+    "",
+    desc ? `### Issue\n\n${desc}` : null,
+    pr
+      ? `### Pull request\n\n${pr}`
+      : "### Pull request\n\nNo pull request URL was captured.",
+  ]
+    .filter((part) => part !== null)
+    .join("\n");
 }
 
 export function buildIssueFixPrompt(input: {
@@ -223,14 +251,15 @@ export function buildIssueWriteupPrompt(input: {
   return [
     `The code change for Steer issue ${input.issueId} ("${input.title}") is done. ${pr}`,
     "",
-    "Write a markdown note for the issue tracker only. Output markdown text and nothing else.",
-    "Do not create or edit any files. Do not run more implementation work.",
+    "Write a markdown note for the issue tracker only. Your entire reply must be that note.",
+    "Do not create or edit any files. Do not run more implementation work. Do not use tools.",
+    "Do not say you will write it later. Start with a ## heading.",
     "",
     "Cover:",
     "- What the issue was",
     "- The cause",
     "- What you changed",
     "",
-    "Markdown only. No JSON. No tool calls unless you must recall what you already changed.",
+    "Markdown only. No JSON. No tool calls.",
   ].join("\n");
 }

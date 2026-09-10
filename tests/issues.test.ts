@@ -11,6 +11,8 @@ import {
   issueSettingsScopeKey,
   parseGithubHttpsRepo,
   sanitizeIssueWriteup,
+  looksLikeIssueWriteup,
+  buildFallbackIssueWriteup,
 } from "../shared/issues.js";
 
 describe("issue helpers", () => {
@@ -43,7 +45,15 @@ describe("issue helpers", () => {
     expect(sanitizeIssueWriteup("```markdown\n## Cause\nRace\n```")).toBe(
       "## Cause\nRace",
     );
+    expect(sanitizeIssueWriteup("```md ## Cause\nRace```")).toBe(
+      "## Cause\nRace",
+    );
     expect(sanitizeIssueWriteup("plain")).toBe("plain");
+    expect(looksLikeIssueWriteup("## Cause\nRace")).toBe(true);
+    expect(looksLikeIssueWriteup("ok")).toBe(false);
+    expect(buildFallbackIssueWriteup({ title: "Bug", prUrl: "https://x/p/1" })).toContain(
+      "did not return a markdown writeup",
+    );
   });
 
   it("builds unattended prompts that forbid repo writeups", () => {

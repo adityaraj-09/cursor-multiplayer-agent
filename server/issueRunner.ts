@@ -21,6 +21,8 @@ import {
   clampPickupDelayMs,
   issueSettingsScopeKey,
   sanitizeIssueWriteup,
+  looksLikeIssueWriteup,
+  buildFallbackIssueWriteup,
   type IssueSettingsInfo,
 } from "../shared/issues.js";
 import type { IssueRow } from "./db.js";
@@ -126,6 +128,66 @@ async function runPrompt(
     }
   });
   return { text, error, git, askedQuestion };
+}
+
+async function collectIssueWriteup(input: {
+  session: SdkAgentSession;
+  issue: IssueRow;
+  prUrl: string | null;
+  firstTurnText: string;
+}): Promise<string> {
+  const prompt = buildIssueWriteupPrompt({
+    issueId: input.issue.id,
+    title: input.issue.title,
+    prUrl: input.prUrl,
+  });
+  let turn = await runPrompt(input.session, prompt);
+  let writeup = sanitizeIssueWriteup(turn.text);
+
+  if (!writeup) {
+    const fromFix = sanitizeIssueWriteup(input.firstTurnText);
+    if (looksLikeIssueWriteup(fromFix)) writeup = fromFix;
+  }
+
+  if (!writeup) {
+    logWarn("issues", "writeup empty, retrying", {
+      id: input.issue.id,
+      textLen: turn.text.length,
+      error: turn.error,
+    });
+    turn = await runPrompt(
+      input.session,
+      [
+        "Reply with the issue writeup now.",
+        "Start with ## Summary. Markdown only. No tools. No preamble.",
+        `Issue: ${input.issue.title}`,
+        input.prUrl ? `PR: ${input.prUrl}` : "No PR URL.",
+      ].join("\n"),
+    );
+    writeup = sanitizeIssueWriteup(turn.text);
+  }
+
+  if (writeup) {
+    addEvent(input.issue.id, "writeup_saved", "Markdown writeup saved");
+    return writeup;
+  }
+
+  logWarn("issues", "writeup missing after retry", {
+    id: input.issue.id,
+    textLen: turn.text.length,
+    error: turn.error,
+  });
+  const fallback = buildFallbackIssueWriteup({
+    title: input.issue.title,
+    description: input.issue.description,
+    prUrl: input.prUrl,
+  });
+  addEvent(
+    input.issue.id,
+    "writeup_fallback",
+    "Agent returned no writeup; saved a fallback note",
+  );
+  return fallback;
 }
 
 function wasCancelled(issueId: string): boolean {
@@ -265,21 +327,12 @@ async function executeIssue(issue: IssueRow): Promise<void> {
 
     const latest = db.getIssue(issue.id);
     const prUrl = latest?.pr_url || git.prUrl || null;
-    const writeupTurn = await runPrompt(
+    const writeup = await collectIssueWriteup({
       session,
-      buildIssueWriteupPrompt({
-        issueId: issue.id,
-        title: issue.title,
-        prUrl,
-      }),
-    );
-    const writeup = sanitizeIssueWriteup(writeupTurn.text);
-    if (writeup) {
-      db.updateIssue(issue.id, { writeupMd: writeup });
-      addEvent(issue.id, "writeup_saved", "Markdown writeup saved");
-    } else {
-      addEvent(issue.id, "writeup_missing", "Agent finished without a writeup");
-    }
+      issue,
+      prUrl,
+      firstTurnText: first.text,
+    });
 
     db.updateIssue(issue.id, {
       status: "in_review",
