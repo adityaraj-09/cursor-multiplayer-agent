@@ -2,8 +2,10 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { Layers3 } from "lucide-react";
 import RoomCard from "../../components/RoomCard";
 import DashboardShell from "../../components/DashboardShell";
+import EmptyState from "../../components/EmptyState";
 import { useAuth } from "../../components/AuthProvider";
 import {
   archiveRoom,
@@ -368,20 +370,23 @@ export default function SessionsDashboard() {
             ))}
           </div>
         ) : rooms.length === 0 ? (
-          <div className="border border-dashed border-[#2b2b2b] rounded-xl py-16 px-6 text-center bg-[#171717]">
-            <p className="text-[#a0a0a0] text-[14px] mb-1">No sessions yet</p>
-            <p className="text-[#6e6e6e] text-[13px] mb-5">
-              {activeOrg
+          <EmptyState
+            icon={Layers3}
+            title="No sessions yet"
+            description={
+              activeOrg
                 ? "Create a room for your team — every member will see it here."
-                : "Create a room and invite teammates to watch and steer."}
-            </p>
-            <Link
-              href={createHref}
-              className="inline-flex h-8 px-3.5 rounded-md bg-[#e4e4e4] text-[#141414] text-[13px] font-medium hover:bg-white transition-colors items-center"
-            >
-              Create session
-            </Link>
-          </div>
+                : "Create a room and invite teammates to watch and steer."
+            }
+            action={
+              <Link
+                href={createHref}
+                className="inline-flex h-9 px-4 rounded-md bg-[#e4e4e4] text-[#141414] text-[13px] font-medium hover:bg-white transition-colors items-center"
+              >
+                Create session
+              </Link>
+            }
+          />
         ) : (
           <>
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
