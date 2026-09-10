@@ -168,9 +168,6 @@ function IssueRow({
   const body = (
     <>
       <PriorityBars priority={item.priority} />
-      <span className="w-[72px] shrink-0 text-[12px] text-[#6e6e6e]">
-        {item.identifier}
-      </span>
       <StatusGlyph status={item.status} />
       <span className="min-w-0 flex-1 truncate text-[#e4e4e4]">{item.title}</span>
       <span className="hidden items-center gap-2 shrink-0 text-[12px] text-[#6e6e6e] sm:flex">
