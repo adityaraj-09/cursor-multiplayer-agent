@@ -21,6 +21,7 @@ import type {
   IssueSettingsInfo,
   IssueAttachmentInfo,
 } from "../../shared/issues";
+import type { IssueTranscript } from "../../shared/issueTranscript";
 
 export type { OrgInfo, OrgInviteInfo, OrgMemberInfo, OrgRole };
 
@@ -1407,7 +1408,20 @@ export async function captureHandoffDraft(
   return res.json();
 }
 
-export type { IssueInfo, IssueSettingsInfo, IssueAttachmentInfo };
+export type { IssueInfo, IssueSettingsInfo, IssueAttachmentInfo, IssueTranscript };
+
+export async function fetchIssueTranscript(
+  id: string,
+): Promise<IssueTranscript> {
+  const res = await fetch(
+    `${API_BASE}/issues/${encodeURIComponent(id)}/transcript`,
+    { headers: await authHeaders() },
+  );
+  if (!res.ok) {
+    throw new Error(await parseApiError(res, "Failed to load agent transcript"));
+  }
+  return res.json();
+}
 
 export async function fetchIssues(opts?: {
   orgId?: string | null;
