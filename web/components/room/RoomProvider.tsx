@@ -587,11 +587,11 @@ export default function RoomProvider({
     }
   }, [roomId, router, onRemove]);
 
-  const handleAbortRun = useCallback(async () => {
+  const handleAbortRun = useCallback(async (agentId?: string) => {
     setAborting(true);
     setActionError("");
     try {
-      await abortRoomRun(roomId, selectedAgentId || undefined);
+      await abortRoomRun(roomId, agentId || selectedAgentId || undefined);
     } catch (err) {
       setActionError(
         err instanceof Error ? err.message : "Failed to abort run",

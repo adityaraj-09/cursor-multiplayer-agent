@@ -164,7 +164,7 @@ export type RoomContextValue = {
   handleCursorSessionChange: (next: string | null) => Promise<void>;
   handleGrantDrive: () => void;
   handleStopSession: () => Promise<void>;
-  handleAbortRun: () => Promise<void>;
+  handleAbortRun: (agentId?: string) => Promise<void>;
   integratingAgentId: string | null;
   handleIntegrateAgent: (agentId: string) => Promise<void>;
   handleAddAgent: (data: {

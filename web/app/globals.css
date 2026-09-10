@@ -71,12 +71,11 @@ body {
   background: #111111;
 }
 
-.room-chat-scroll {
-  min-height: 0;
-  overflow-y: auto;
-  overscroll-behavior-y: contain;
-  overflow-anchor: none;
-  -webkit-overflow-scrolling: touch;
+.scrollbar-hide {
+  scrollbar-width: none;
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
 }
 
 /* Marketing landing — light surface scoped to .landing */

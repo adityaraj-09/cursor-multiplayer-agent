@@ -169,6 +169,11 @@ export default function RoomChatPane() {
       roomId={roomId}
       planMode={Boolean(selectedAgent?.planMode)}
       agentBusy={selectedStatus === "running"}
+      onStop={
+        selectedStatus === "running"
+          ? () => void handleAbortRun(selectedAgentId || undefined)
+          : undefined
+      }
       connected={connected}
       canSteer={canSteerSelected}
       steerLockReason={steerLockReason || undefined}
@@ -250,6 +255,7 @@ export default function RoomChatPane() {
           .length <= 1
       }
       onIntegrate={(id) => void handleIntegrateAgent(id)}
+      onAbort={(id) => void handleAbortRun(id)}
     />
   ) : (
     <ChatPanel
