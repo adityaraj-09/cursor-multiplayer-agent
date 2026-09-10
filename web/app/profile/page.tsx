@@ -1,16 +1,19 @@
 "use client";
 
 import { useEffect } from "react";
-import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { UserProfile, useUser } from "@clerk/nextjs";
+import DashboardShell from "../../components/DashboardShell";
+import CreateTeamCard from "../../components/CreateTeamCard";
 import { useAuth } from "../../components/AuthProvider";
 import { steerClerkAppearance } from "../../lib/clerkAppearance";
+import { useWorkspaceScope } from "../../lib/useWorkspaceScope";
 
 export default function ProfilePage() {
   const { user, loading } = useAuth();
   const { user: clerkUser, isLoaded } = useUser();
   const router = useRouter();
+  const workspace = useWorkspaceScope();
 
   useEffect(() => {
     if (!loading && !user) {
@@ -18,7 +21,12 @@ export default function ProfilePage() {
     }
   }, [loading, user, router]);
 
-  if (loading || !isLoaded || !clerkUser) {
+  useEffect(() => {
+    if (loading || !user) return;
+    workspace.reloadOrgs().catch(console.error);
+  }, [loading, user, workspace.reloadOrgs]);
+
+  if (loading || !isLoaded || !clerkUser || !user) {
     return (
       <div className="min-h-screen bg-[#141414] flex items-center justify-center">
         <p className="text-[13px] text-[#6e6e6e]">Loading profile…</p>
@@ -42,30 +50,22 @@ export default function ProfilePage() {
     : "—";
 
   return (
-    <div className="min-h-screen bg-[#141414]">
-      <header className="border-b border-[#2b2b2b]">
-        <div className="max-w-3xl mx-auto px-4 sm:px-6 h-14 flex items-center gap-3">
-          <Link
-            href="/"
-            className="flex items-center gap-2 shrink-0 hover:opacity-80 transition-opacity"
-            aria-label="Steer home"
-          >
-            <div className="w-5 h-5 rounded-[4px] bg-[#e4e4e4] flex items-center justify-center">
-              <span className="text-[#141414] text-[9px] font-semibold">S</span>
-            </div>
-            <span className="text-[13px] text-[#a0a0a0] hidden sm:inline">
-              Steer
-            </span>
-          </Link>
-          <span className="text-[#2b2b2b]">/</span>
-          <span className="text-[13px] text-[#e4e4e4]">Profile</span>
-        </div>
-      </header>
-
+    <DashboardShell
+      orgs={workspace.orgs}
+      scope={workspace.scope}
+      onSelectScope={workspace.selectScope}
+      onNewTeam={() => workspace.setCreatingOrg((v) => !v)}
+      creatingTeam={workspace.creatingOrg}
+      createHref={workspace.sessionCreateHref}
+      userName={user.name}
+    >
       <main className="max-w-3xl mx-auto px-4 sm:px-6 py-8 sm:py-10 space-y-6">
         <div>
+          <p className="text-[11px] uppercase tracking-wide text-[#6e6e6e] mb-1">
+            Account
+          </p>
           <h1 className="text-[22px] font-medium text-[#e4e4e4] tracking-tight">
-            Your account
+            Your profile
           </h1>
           <p className="text-[13px] text-[#6e6e6e] mt-1">
             Signed in with Clerk — manage email, password, and connected
@@ -73,7 +73,18 @@ export default function ProfilePage() {
           </p>
         </div>
 
-        <section className="rounded-lg border border-[#2b2b2b] bg-[#1a1a1a] p-4 sm:p-5">
+        {workspace.creatingOrg && (
+          <CreateTeamCard
+            name={workspace.newOrgName}
+            onNameChange={workspace.setNewOrgName}
+            onCreate={() => void workspace.handleCreateOrg()}
+            onCancel={() => workspace.setCreatingOrg(false)}
+            busy={workspace.busyOrg}
+            error={workspace.orgError}
+          />
+        )}
+
+        <section className="rounded-xl border border-[#2b2b2b] bg-[#1a1a1a] p-4 sm:p-5">
           <div className="flex items-start gap-4">
             {clerkUser.imageUrl ? (
               // eslint-disable-next-line @next/next/no-img-element
@@ -111,10 +122,7 @@ export default function ProfilePage() {
 
           <dl className="mt-5 pt-5 border-t border-[#2b2b2b] grid gap-3 sm:grid-cols-2">
             <ProfileField label="Primary email" value={primaryEmail} />
-            <ProfileField
-              label="Username"
-              value={clerkUser.username || "—"}
-            />
+            <ProfileField label="Username" value={clerkUser.username || "—"} />
             <ProfileField label="User ID" value={clerkUser.id} mono />
             <ProfileField
               label="Auth method"
@@ -156,7 +164,7 @@ export default function ProfilePage() {
           <h2 className="text-[13px] font-medium text-[#a0a0a0] mb-3">
             Manage account
           </h2>
-          <div className="rounded-lg border border-[#2b2b2b] overflow-hidden">
+          <div className="rounded-xl border border-[#2b2b2b] overflow-hidden">
             <UserProfile
               routing="hash"
               appearance={{
@@ -173,7 +181,7 @@ export default function ProfilePage() {
           </div>
         </section>
       </main>
-    </div>
+    </DashboardShell>
   );
 }
 
