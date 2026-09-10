@@ -164,7 +164,7 @@ export type RoomContextValue = {
   handleCursorSessionChange: (next: string | null) => Promise<void>;
   handleGrantDrive: () => void;
   handleStopSession: () => Promise<void>;
-  handleAbortRun: () => Promise<void>;
+  handleAbortRun: (agentId?: string) => Promise<void>;
   integratingAgentId: string | null;
   handleIntegrateAgent: (agentId: string) => Promise<void>;
   handleAddAgent: (data: {
@@ -183,7 +183,11 @@ export type RoomContextValue = {
   handleApprovalModeChange: (mode: ApprovalMode) => Promise<void>;
   handleAutoMemoryChange: (mode: AutoMemoryMode) => Promise<void>;
   handleTogglePlanMode: () => Promise<void>;
-  handleDecideApproval: (requestId: string, approved: boolean) => void;
+  handleDecideApproval: (
+    requestId: string,
+    approved: boolean,
+    alwaysAllow?: boolean,
+  ) => void;
   handleExport: () => Promise<void>;
   handleAnswerQuestions: (
     messageId: string,

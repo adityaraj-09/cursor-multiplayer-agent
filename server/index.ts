@@ -1503,8 +1503,13 @@ io.on("connection", (socket) => {
   socket.on("release-drive", (agentId) =>
     roomManager.handleReleaseDrive(socket, agentId),
   );
-  socket.on("tool-approval-decision", (requestId, approved) =>
-    roomManager.handleToolApprovalDecision(socket, requestId, approved),
+  socket.on("tool-approval-decision", (requestId, approved, opts) =>
+    roomManager.handleToolApprovalDecision(
+      socket,
+      requestId,
+      approved,
+      Boolean(opts?.alwaysAllow),
+    ),
   );
   socket.on("flag-review", (payload) =>
     roomManager.handleFlagReview(socket, payload || {}),

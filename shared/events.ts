@@ -437,6 +437,7 @@ export interface ClientToServerEvents {
   "tool-approval-decision": (
     requestId: string,
     approved: boolean,
+    opts?: { alwaysAllow?: boolean },
   ) => void;
   /**
    * Flag the session for review — pings the room + optional Slack webhook.

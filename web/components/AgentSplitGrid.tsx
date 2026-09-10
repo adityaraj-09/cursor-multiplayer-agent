@@ -10,6 +10,7 @@ import {
 import type {
   AgentInfo,
   AgentRunStatus,
+  ApprovalRequestInfo,
   ChatMessage,
   ControlMode,
   ModelInfo,
@@ -71,6 +72,11 @@ export default function AgentSplitGrid({
   hasIntegrationPr,
   singleAgent,
   onIntegrate,
+  pendingApprovals,
+  decidingApprovalId,
+  canDecideApproval,
+  onDecideApproval,
+  onAbort,
 }: {
   agents: AgentInfo[];
   messages: ChatMessage[];
@@ -99,6 +105,15 @@ export default function AgentSplitGrid({
   hasIntegrationPr?: boolean;
   singleAgent?: boolean;
   onIntegrate?: (agentId: string) => void;
+  pendingApprovals?: ApprovalRequestInfo[];
+  decidingApprovalId?: string | null;
+  canDecideApproval?: (request: ApprovalRequestInfo) => boolean;
+  onDecideApproval?: (
+    requestId: string,
+    approved: boolean,
+    alwaysAllow?: boolean,
+  ) => void;
+  onAbort?: (agentId: string) => void;
 }) {
   const liveAgents = useMemo(
     () => agents.filter((a) => a.status !== "stopped"),
@@ -228,6 +243,11 @@ export default function AgentSplitGrid({
                 onDismissPlan={onDismissPlan}
                 onAnswerQuestions={onAnswerQuestions}
                 onRevertMessage={onRevertMessage}
+                pendingApprovals={pendingApprovals}
+                decidingApprovalId={decidingApprovalId}
+                canDecideApproval={canDecideApproval}
+                onDecideApproval={onDecideApproval}
+                statusByAgent={statusByAgent}
               />
               <div className="shrink-0 border-t border-[#2b2b2b] bg-[#171717]">
                 <SteerInput
@@ -238,6 +258,9 @@ export default function AgentSplitGrid({
                   roomId={roomId}
                   planMode={Boolean(agent.planMode)}
                   agentBusy={status === "running"}
+                  onStop={
+                    status === "running" ? () => onAbort?.(agent.id) : undefined
+                  }
                   connected={connected}
                   canSteer={canSteer}
                   steerLockReason={lockReason || undefined}

@@ -4,29 +4,24 @@ import {
   useEffect,
   useRef,
   useState,
-  type FormEvent,
   type DragEvent,
-  type KeyboardEvent,
 } from "react";
 import {
   Bot,
-  ChevronDown,
   FileText,
   ImagePlus,
-  Lock,
-  Paperclip,
-  SendHorizontal,
   X,
 } from "lucide-react";
 import type { ChatAttachment, ModelInfo } from "../../shared/events";
 import { uploadRoomFile } from "../lib/api";
+import { PromptInput, type PromptAction } from "./agents/prompt-input";
 
 interface SteerInputProps {
   onSend: (text: string, attachmentIds?: string[]) => void;
   roomId?: string;
   /** Selected agent is in read-only plan mode. */
   planMode?: boolean;
-  /** Agent is mid-run — drafting allowed, send blocked */
+  /** Agent is mid-run — drafting allowed, send becomes stop */
   agentBusy?: boolean;
   /** Socket disconnected — drafting allowed, send blocked */
   connected?: boolean;
@@ -52,10 +47,15 @@ interface SteerInputProps {
   typingIndicator?: string;
   /** Tight layout for split panes. */
   compact?: boolean;
+  /** Stop the in-flight run (Prompt Input stop state). */
+  onStop?: () => void;
 }
 
 const TYPING_THROTTLE_MS = 1500;
 const TYPING_IDLE_STOP_MS = 2000;
+
+const FILE_ACCEPT =
+  "image/png,image/jpeg,image/gif,image/webp,application/pdf,text/plain,text/markdown,text/csv,application/json";
 
 export default function SteerInput({
   onSend,
@@ -70,13 +70,13 @@ export default function SteerInput({
   modelId = "",
   onModelChange,
   modelDisabled = false,
-  modelLockReason,
   agentName,
   agentId,
   onTyping,
   onTypingStop,
   typingIndicator,
   compact = false,
+  onStop,
 }: SteerInputProps) {
   const [text, setText] = useState("");
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
@@ -126,7 +126,6 @@ export default function SteerInput({
     }, TYPING_IDLE_STOP_MS);
   };
 
-  // Switching agents or unmounting should clear the previous indicator.
   useEffect(() => {
     return () => {
       stopTyping();
@@ -139,26 +138,17 @@ export default function SteerInput({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connected]);
 
-  const canSend =
-    connected &&
-    canSteer &&
-    !agentBusy &&
-    !uploading &&
-    (text.trim().length > 0 || attachments.length > 0);
-
   const statusHint = !connected
     ? "Reconnecting…"
     : !canSteer
       ? steerLockReason || "You do not have permission to steer"
       : agentBusy
-        ? "Agent is working — send unlocks when idle"
+        ? "Agent is working — stop or draft a follow-up"
         : null;
 
-  const submit = () => {
+  const submit = (prompt: string) => {
     if (!connected || !canSteer || agentBusy || uploading) return;
-    // Trim leading/trailing whitespace and newlines so Shift+Enter drafts
-    // don't leave sticky empty lines after send.
-    const trimmed = text.replace(/^\s+|\s+$/g, "");
+    const trimmed = prompt.replace(/^\s+|\s+$/g, "");
     if (!trimmed && attachments.length === 0) return;
     stopTyping();
     onSend(
@@ -199,7 +189,7 @@ export default function SteerInput({
     e.preventDefault();
     e.stopPropagation();
     setDragActive(false);
-    if (!roomId) return;
+    if (!roomId || !canSteer) return;
     await handleFiles(e.dataTransfer.files);
   };
 
@@ -214,19 +204,6 @@ export default function SteerInput({
     });
   };
 
-  const handleSubmit = (e: FormEvent) => {
-    e.preventDefault();
-    submit();
-  };
-
-  const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    // Enter = send · Shift+Enter = newline (default textarea behavior)
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      submit();
-    }
-  };
-
   const handleChange = (value: string) => {
     setText(value);
     if (value.trim()) bumpTyping();
@@ -238,26 +215,44 @@ export default function SteerInput({
       ? models
       : modelId
         ? [{ id: modelId, displayName: modelId }]
-        : [];
+        : [{ id: "auto", displayName: "Auto" }];
 
   const modelLocked = modelDisabled || agentBusy;
-  const modelReason = agentBusy
-    ? "Applies to next run"
-    : modelLockReason;
-
   const livePlaceholder = !connected
     ? "Reconnecting…"
     : agentBusy
-      ? "Draft a follow-up… (send when idle)"
+      ? "Draft a follow-up…"
       : planMode
-        ? "Ask for a plan… (approve it in chat when ready)"
+        ? "Ask for a plan…"
         : placeholder;
 
+  const actions: PromptAction[] = [
+    {
+      value: "image",
+      label: "Attach image",
+      description: "Add a screenshot or visual reference.",
+      icon: <ImagePlus className="size-4" strokeWidth={1.75} />,
+      disabled: !roomId || !canSteer || uploading,
+    },
+    {
+      value: "file",
+      label: "Add context",
+      description: "Attach a file with supporting details.",
+      icon: <FileText className="size-4" strokeWidth={1.75} />,
+      disabled: !roomId || !canSteer || uploading,
+    },
+  ];
+
   return (
-    <form
-      onSubmit={handleSubmit}
-      className={compact ? "px-2 pb-2 pt-2" : "px-3 sm:px-5 pb-3 sm:pb-4 pt-3"}
-    >
+    <div className={compact ? "px-2 pb-2 pt-2" : "px-3 sm:px-5 pb-3 sm:pb-4 pt-3"}>
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept={FILE_ACCEPT}
+        multiple
+        className="hidden"
+        onChange={(e) => void handleFiles(e.target.files)}
+      />
       <div
         onDragEnter={(e) => {
           e.preventDefault();
@@ -276,128 +271,84 @@ export default function SteerInput({
           setDragActive(false);
         }}
         onDrop={(e) => void handleDrop(e)}
-        className={`rounded-2xl border bg-[#181818] transition-all shadow-[0_18px_55px_rgba(0,0,0,0.28)] overflow-hidden ${
-          !connected
-            ? "border-[#5a3a3a]"
-            : dragActive
-              ? "border-[#4d9fff]/70 shadow-[0_18px_70px_rgba(77,159,255,0.12)]"
-              : "border-[#2b2b2b] focus-within:border-[#4d9fff]/60 focus-within:shadow-[0_18px_70px_rgba(77,159,255,0.08)]"
-        }`}
       >
-        <div className="flex items-center gap-2 border-b border-[#2b2b2b]/80 px-3 h-9">
-          <span className="flex items-center gap-1.5 text-[11px] text-[#8a8a8a] shrink-0">
-            <Bot className="h-3.5 w-3.5" strokeWidth={1.75} />
-            {agentName || "Agent"}
-          </span>
-          {planMode && (
-            <span className="inline-flex items-center h-5 px-1.5 rounded-md border border-[#4d9fff]/50 bg-[#1a2430] text-[10px] font-medium text-[#8ec5ff] shrink-0">
-              Plan mode
-            </span>
-          )}
-          <div className="relative min-w-0 flex-1 sm:flex-none sm:w-[min(100%,320px)]">
-            <select
-              value={modelId}
-              onChange={(e) => onModelChange?.(e.target.value)}
-              disabled={modelLocked}
-              title={modelLocked ? modelReason : undefined}
-              className="w-full h-7 appearance-none rounded-lg bg-[#202020] border border-[#2b2b2b] pl-2.5 pr-7 text-[12px] text-[#e4e4e4] outline-none focus:border-[#4d9fff] disabled:opacity-45"
-            >
-              {modelOptions.length === 0 ? (
-                <option value="auto">Auto</option>
-              ) : (
-                modelOptions.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.displayName}
-                  </option>
-                ))
-              )}
-            </select>
-            <ChevronDown className="pointer-events-none absolute right-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[#6e6e6e]" strokeWidth={1.75} />
-          </div>
-          {modelLocked && modelReason && (
-            <span className="hidden sm:inline-flex items-center gap-1 text-[11px] text-[#6e6e6e] truncate">
-              <Lock className="h-3 w-3" strokeWidth={1.75} />
-              {modelReason}
-            </span>
-          )}
-        </div>
-
-        {attachments.length > 0 && (
-          <div className="flex flex-wrap gap-2 px-3 pt-2.5">
-            {attachments.map((att) => (
-              <div
-                key={att.id}
-                className="relative flex items-center gap-1.5 rounded-lg border border-[#2b2b2b] bg-[#141414] pl-1.5 pr-6 py-1 max-w-[180px]"
-              >
-                {previews[att.id] ? (
-                  <img
-                    src={previews[att.id]}
-                    alt=""
-                    className="h-8 w-8 rounded object-cover"
-                  />
-                ) : att.mime.startsWith("image/") ? (
-                  <ImagePlus className="h-4 w-4 text-[#8ec5ff]" strokeWidth={1.75} />
-                ) : (
-                  <FileText className="h-4 w-4 text-[#a0a0a0]" strokeWidth={1.75} />
-                )}
-                <span className="text-[11px] text-[#c8c8c8] truncate">
-                  {att.name}
+        <PromptInput
+          value={text}
+          onValueChange={handleChange}
+          onSubmit={submit}
+          loading={agentBusy}
+          onStop={onStop}
+          models={modelOptions.map((m) => ({
+            value: m.id,
+            label: m.displayName,
+            icon: <Bot className="size-3.5" strokeWidth={1.75} />,
+            disabled: modelLocked,
+          }))}
+          model={modelId || modelOptions[0]?.id}
+          onModelChange={onModelChange}
+          modelDisabled={modelLocked}
+          actions={actions}
+          onAction={() => fileInputRef.current?.click()}
+          minRows={compact ? 1 : 2}
+          maxRows={compact ? 4 : 8}
+          placeholder={livePlaceholder}
+          aria-label="Message the agent"
+          onBlur={() => stopTyping()}
+          allowEmptySubmit={attachments.length > 0}
+          submitDisabled={!connected || !canSteer || uploading}
+          className={
+            !connected
+              ? "border-[#5a3a3a]"
+              : dragActive
+                ? "border-[#4d9fff]/70"
+                : undefined
+          }
+          leadingAction={
+            <span className="hidden sm:inline-flex items-center gap-1.5 px-1.5 text-[11px] text-muted-foreground">
+              <span className="truncate max-w-[7rem]">{agentName || "Agent"}</span>
+              {planMode ? (
+                <span className="rounded-md border border-[#4d9fff]/50 bg-[#1a2430] px-1.5 py-0.5 text-[10px] font-medium text-[#8ec5ff]">
+                  Plan
                 </span>
-                <button
-                  type="button"
-                  onClick={() => removeAttachment(att.id)}
-                  className="absolute right-1 top-1 h-4 w-4 rounded text-[#6e6e6e] hover:text-[#e4e4e4]"
-                  aria-label={`Remove ${att.name}`}
-                >
-                  <X className="h-3.5 w-3.5" strokeWidth={2} />
-                </button>
+              ) : null}
+            </span>
+          }
+          header={
+            attachments.length > 0 ? (
+              <div className="flex flex-wrap gap-2 px-1 pb-2">
+                {attachments.map((att) => (
+                  <div
+                    key={att.id}
+                    className="relative flex items-center gap-1.5 rounded-lg border border-border bg-muted pl-1.5 pr-6 py-1 max-w-[180px]"
+                  >
+                    {previews[att.id] ? (
+                      <img
+                        src={previews[att.id]}
+                        alt=""
+                        className="h-8 w-8 rounded object-cover"
+                      />
+                    ) : att.mime.startsWith("image/") ? (
+                      <ImagePlus className="h-4 w-4 text-[#8ec5ff]" strokeWidth={1.75} />
+                    ) : (
+                      <FileText className="h-4 w-4 text-[#a0a0a0]" strokeWidth={1.75} />
+                    )}
+                    <span className="text-[11px] text-[#c8c8c8] truncate">
+                      {att.name}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => removeAttachment(att.id)}
+                      className="absolute right-1 top-1 h-4 w-4 rounded text-[#6e6e6e] hover:text-[#e4e4e4]"
+                      aria-label={`Remove ${att.name}`}
+                    >
+                      <X className="h-3.5 w-3.5" strokeWidth={2} />
+                    </button>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
-        )}
-
-        <div className="flex items-end gap-2 px-3 py-2.5">
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="image/png,image/jpeg,image/gif,image/webp,application/pdf,text/plain,text/markdown,text/csv,application/json"
-            multiple
-            className="hidden"
-            onChange={(e) => void handleFiles(e.target.files)}
-          />
-          <button
-            type="button"
-            disabled={!roomId || !canSteer || uploading}
-            onClick={() => fileInputRef.current?.click()}
-            className="mb-1 inline-flex h-8 w-8 items-center justify-center rounded-lg text-[#8a8a8a] hover:text-[#e4e4e4] hover:bg-[#222] disabled:opacity-30"
-            aria-label="Attach files"
-            title="Attach images or files"
-          >
-            <Paperclip className="h-4 w-4" strokeWidth={1.75} />
-          </button>
-          {/* Fixed height — long text / paste scrolls inside, never grows the footer */}
-          <textarea
-            value={text}
-            onChange={(e) => handleChange(e.target.value)}
-            onKeyDown={handleKeyDown}
-            onBlur={() => stopTyping()}
-            placeholder={livePlaceholder}
-            rows={1}
-            // Keep editable while busy/disconnected so users can draft
-            className={`flex-1 min-h-0 resize-none overflow-y-auto bg-transparent text-[16px] sm:text-[13px] text-[#e4e4e4] placeholder:text-[#6e6e6e] outline-none leading-5 ${
-              compact ? "h-9 py-1.5" : "h-11 py-2.5"
-            }`}
-            aria-label="Message the agent"
-          />
-          <button
-            type="submit"
-            disabled={!canSend}
-            className="shrink-0 inline-flex h-9 w-9 items-center justify-center rounded-xl bg-[#e4e4e4] text-[#141414] hover:bg-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-            aria-label="Send message"
-          >
-            <SendHorizontal className="h-4 w-4" strokeWidth={2} />
-          </button>
-        </div>
+            ) : null
+          }
+        />
       </div>
 
       {(typingIndicator ||
@@ -430,6 +381,6 @@ export default function SteerInput({
           </p>
         </div>
       )}
-    </form>
+    </div>
   );
 }

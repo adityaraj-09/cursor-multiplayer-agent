@@ -14,7 +14,6 @@ import {
   X,
 } from "lucide-react";
 import ChatPanel from "../ChatPanel";
-import ApprovalCard from "../ApprovalCard";
 import PresenceBar from "../PresenceBar";
 import SteerInput from "../SteerInput";
 import CursorSessionPicker from "../CursorSessionPicker";
@@ -133,6 +132,21 @@ export default function RoomChatPane() {
     agentError,
   } = ctx;
 
+  const canDecideApproval = (agentId: string) => {
+    const drivingThis =
+      drivingAgentIds.includes(agentId) || (agents.length <= 1 && amDriver);
+    return (
+      (myRole === "owner" || myRole === "editor") &&
+      (myRole === "owner" || !drivingThis)
+    );
+  };
+  const approvalChatProps = {
+    pendingApprovals,
+    decidingApprovalId,
+    canDecideApproval: (req: { agentId: string }) => canDecideApproval(req.agentId),
+    onDecideApproval: handleDecideApproval,
+  };
+
   const shellClass =
     variant === "page"
       ? "room-shell fixed inset-0 h-[100dvh] max-h-[100dvh] w-full flex flex-col bg-[#111111] text-[#e4e4e4] overflow-hidden overscroll-none"
@@ -155,6 +169,11 @@ export default function RoomChatPane() {
       roomId={roomId}
       planMode={Boolean(selectedAgent?.planMode)}
       agentBusy={selectedStatus === "running"}
+      onStop={
+        selectedStatus === "running"
+          ? () => void handleAbortRun(selectedAgentId || undefined)
+          : undefined
+      }
       connected={connected}
       canSteer={canSteerSelected}
       steerLockReason={steerLockReason || undefined}
@@ -223,6 +242,7 @@ export default function RoomChatPane() {
       onRevertMessage={(messageId, agentId) => {
         revertChanges({ messageId, agentId });
       }}
+      {...approvalChatProps}
       visibleIds={visibleIds}
       onVisibleIdsChange={setVisibleIds}
       canIntegrate={canManage && Boolean(roomInfo?.repoUrl)}
@@ -235,6 +255,7 @@ export default function RoomChatPane() {
           .length <= 1
       }
       onIntegrate={(id) => void handleIntegrateAgent(id)}
+      onAbort={(id) => void handleAbortRun(id)}
     />
   ) : (
     <ChatPanel
@@ -250,6 +271,8 @@ export default function RoomChatPane() {
       onRevertMessage={(messageId, agentId) => {
         revertChanges({ messageId, agentId });
       }}
+      {...approvalChatProps}
+      statusByAgent={statusByAgent}
     />
   );
 
@@ -626,29 +649,6 @@ export default function RoomChatPane() {
                   onDismiss={() => dismissReview(ping.id)}
                 />
               ))}
-            </div>
-          )}
-          {pendingApprovals.length > 0 && (
-            <div className="shrink-0 border-b border-[#2e2a1c] bg-[#16140f] px-3 py-2 space-y-2 max-h-[40%] overflow-y-auto">
-              {pendingApprovals.map((req) => {
-                const drivingThis =
-                  drivingAgentIds.includes(req.agentId) ||
-                  (agents.length <= 1 && amDriver);
-                const canDecide =
-                  (myRole === "owner" || myRole === "editor") &&
-                  (myRole === "owner" || !drivingThis);
-                return (
-                  <ApprovalCard
-                    key={req.id}
-                    request={req}
-                    canDecide={canDecide}
-                    deciding={decidingApprovalId === req.id}
-                    onDecide={(approved) =>
-                      handleDecideApproval(req.id, approved)
-                    }
-                  />
-                );
-              })}
             </div>
           )}
           {chat}

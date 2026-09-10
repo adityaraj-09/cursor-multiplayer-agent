@@ -239,6 +239,8 @@ interface AgentState {
    * exact same tool call resume without re-prompting on the next turn.
    */
   preApprovedActions: Set<string>;
+  /** Tool names the room chose “Always allow” for this agent this session. */
+  alwaysAllowedTools: Set<string>;
   /** Human who most recently steered this agent (for git attribution). */
   lastSteeredBy: SteerAuthor | null;
   /**
@@ -843,6 +845,7 @@ export class RoomManager {
         touchedPaths: new Set(),
         runGeneration: 0,
         preApprovedActions: new Set(),
+        alwaysAllowedTools: new Set(),
         lastSteeredBy: null,
         seedContext: true,
         runStartedAt: null,
@@ -1701,6 +1704,12 @@ export class RoomManager {
         isEditTool,
       })
     ) {
+      return false;
+    }
+
+    const toolKey = event.name.replace(/ToolCall$/i, "").trim().toLowerCase();
+    agent.alwaysAllowedTools ??= new Set();
+    if (toolKey && agent.alwaysAllowedTools.has(toolKey)) {
       return false;
     }
 
@@ -3632,6 +3641,7 @@ export class RoomManager {
     socket: Socket,
     requestId: string,
     approved: boolean,
+    alwaysAllow = false,
   ): void {
     const room = this.getRoomForSocket(socket.id);
     if (!room) return;
@@ -3698,6 +3708,14 @@ export class RoomManager {
     this.io.to(room.id).emit("chat-message", sysMsg);
 
     if (!agent || !approved) return;
+    if (alwaysAllow) {
+      agent.alwaysAllowedTools ??= new Set();
+      const toolKey = approvalRow.tool_name
+        .replace(/ToolCall$/i, "")
+        .trim()
+        .toLowerCase();
+      if (toolKey) agent.alwaysAllowedTools.add(toolKey);
+    }
     if (agent.workerRunActive || agent.backend.isBusy()) return;
 
     const key = approvalActionKey(
@@ -4193,6 +4211,7 @@ export class RoomManager {
       touchedPaths: new Set(),
       runGeneration: 0,
       preApprovedActions: new Set(),
+      alwaysAllowedTools: new Set(),
       lastSteeredBy: null,
       seedContext: opts.seedContext !== false,
       runStartedAt: null,

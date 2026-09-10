@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import type {
   AgentRunStatus,
+  ApprovalRequestInfo,
   ChatAttachment,
   ChatMessage,
   ClarifyingQuestion,
@@ -31,6 +32,8 @@ import { fetchRoomUploadBlob } from "../lib/api";
 import Markdown from "./Markdown";
 import InlineDiff, { countDiffLines } from "./InlineDiff";
 import TodoCard, { coalesceTodoMessages, messageHasTodos } from "./TodoCard";
+import ApprovalCard from "./ApprovalCard";
+import { ThinkingOrb } from "thinking-orbs";
 import {
   groupToolMessages,
   normalizeToolName,
@@ -53,6 +56,15 @@ interface ChatPanelProps {
   onAnswerQuestions?: (messageId: string, answers: Record<string, string>) => void;
   /** Called when user triggers a revert of LLM changes. */
   onRevertMessage?: (messageId: string, agentId?: string) => void;
+  pendingApprovals?: ApprovalRequestInfo[];
+  decidingApprovalId?: string | null;
+  canDecideApproval?: (request: ApprovalRequestInfo) => boolean;
+  onDecideApproval?: (
+    requestId: string,
+    approved: boolean,
+    alwaysAllow?: boolean,
+  ) => void;
+  statusByAgent?: Record<string, AgentRunStatus>;
 }
 
 type ChatItem =
@@ -107,6 +119,11 @@ export default function ChatPanel({
   onDismissPlan,
   onAnswerQuestions,
   onRevertMessage,
+  pendingApprovals = [],
+  decidingApprovalId = null,
+  canDecideApproval,
+  onDecideApproval,
+  statusByAgent = {},
 }: ChatPanelProps) {
   const scrollerRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
@@ -131,6 +148,32 @@ export default function ChatPanel({
           (m) => !m.agentId || m.agentId === filterAgentId,
         )
       : messages;
+
+  const approvalById = new Map<string, ApprovalRequestInfo>();
+  for (const message of filtered) {
+    if (message.approval) approvalById.set(message.approval.id, message.approval);
+  }
+  const visiblePendings = pendingApprovals.filter(
+    (req) =>
+      !(filterAgentId && agents.length > 1) || req.agentId === filterAgentId,
+  );
+  for (const req of visiblePendings) approvalById.set(req.id, req);
+
+  const renderApproval = (request: ApprovalRequestInfo) => (
+    <ApprovalCard
+      key={request.id}
+      request={request}
+      canDecide={Boolean(canDecideApproval?.(request))}
+      deciding={decidingApprovalId === request.id}
+      agentRunning={
+        statusByAgent[request.agentId] === "running" ||
+        (!statusByAgent[request.agentId] && agentStatus === "running")
+      }
+      onDecide={(approved, alwaysAllow) =>
+        onDecideApproval?.(request.id, approved, alwaysAllow)
+      }
+    />
+  );
 
   const updateStickFromScroll = () => {
     const el = scrollerRef.current;
@@ -260,6 +303,7 @@ export default function ChatPanel({
   }
 
   const items = groupMessages(filtered);
+  const seenApprovals = new Set<string>();
 
   return (
     <div className="flex-1 min-h-0 h-full overflow-hidden flex flex-col">
@@ -288,6 +332,14 @@ export default function ChatPanel({
                 />
               );
             }
+            if (item.message.approval) {
+              const latest =
+                approvalById.get(item.message.approval.id) ??
+                item.message.approval;
+              if (seenApprovals.has(latest.id)) return null;
+              seenApprovals.add(latest.id);
+              return renderApproval(latest);
+            }
             return (
               <MessageBubble
                 key={item.message.id}
@@ -302,10 +354,17 @@ export default function ChatPanel({
               />
             );
           })}
+          {visiblePendings
+            .filter((req) => !seenApprovals.has(req.id))
+            .map((req) => renderApproval(req))}
           {agentStatus === "running" && (
-            <div className="inline-flex items-center gap-2 rounded-full border border-[#2b2b2b] bg-[#181818] px-3 py-1.5 text-[12px] text-[#a0a0a0] shadow-sm">
-              <LoaderCircle className="h-3.5 w-3.5 animate-spin text-[#4d9fff]" strokeWidth={1.75} />
-              Agent is working
+            <div className="flex items-center py-1" aria-live="polite">
+              <ThinkingOrb
+                state="working"
+                size={64}
+                theme="dark"
+                aria-label="Agent is working"
+              />
             </div>
           )}
         </div>
@@ -365,7 +424,12 @@ function ToolCallGroup({
           }`}
         >
           {anyStreaming ? (
-            <LoaderCircle className="h-3 w-3 animate-spin" strokeWidth={1.8} />
+            <ThinkingOrb
+              state="working"
+              size={20}
+              theme="dark"
+              aria-label="Tools running"
+            />
           ) : (
             <CheckCircle2 className="h-3 w-3" strokeWidth={1.8} />
           )}
@@ -454,7 +518,12 @@ function ToolTypeSection({
           }`}
         >
           {anyStreaming ? (
-            <LoaderCircle className="h-3 w-3 animate-spin" strokeWidth={1.8} />
+            <ThinkingOrb
+              state="working"
+              size={20}
+              theme="dark"
+              aria-label="Tools running"
+            />
           ) : (
             <CheckCircle2 className="h-3 w-3" strokeWidth={1.8} />
           )}
@@ -769,10 +838,12 @@ function MessageBubble({
             {formatTime(message.ts)}
           </span>
           {message.status === "streaming" && (
-            <span className="inline-flex items-center gap-1 text-[10px] text-[#4d9fff]">
-              <LoaderCircle className="h-3 w-3 animate-spin" strokeWidth={1.8} />
-              streaming
-            </span>
+            <ThinkingOrb
+              state="working"
+              size={20}
+              theme="dark"
+              aria-label="Streaming"
+            />
           )}
           {message.status === "error" && (
             <span className="inline-flex items-center gap-1 text-[10px] text-[#f07070]">
@@ -784,7 +855,12 @@ function MessageBubble({
         {message.content ? (
           <Markdown content={message.content} />
         ) : (
-          <span className="text-[13px] text-[#6e6e6e]">Thinking…</span>
+          <ThinkingOrb
+            state="working"
+            size={20}
+            theme="dark"
+            aria-label="Thinking"
+          />
         )}
         {message.questions && message.questions.length > 0 && message.role === "tool" && (
           <ClarifyingQuestionsCard
