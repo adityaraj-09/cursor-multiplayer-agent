@@ -47,9 +47,9 @@ export default function RoomCard({
 
   return (
     <div
-      className={`p-4 bg-[#1a1a1a] border rounded-lg transition-colors group ${
+      className={`p-4 bg-[#1a1a1a] border rounded-xl transition-colors group ${
         selected
-          ? "border-[#26405d] bg-[#17202a]"
+          ? "border-[#26405d] bg-[#17202a] shadow-[0_0_0_1px_rgba(38,64,93,0.55)]"
           : "border-[#2b2b2b] hover:border-[#3c3c3c] hover:bg-[#1e1e1e]"
       }`}
     >
