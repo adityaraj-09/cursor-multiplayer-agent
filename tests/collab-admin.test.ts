@@ -154,4 +154,40 @@ describe("room manage access + org lifecycle", () => {
     expect(db.getOrganization(org.id)).toBeUndefined();
     expect(db.getOrganizationMember(org.id, nextOwnerId)).toBeUndefined();
   });
+
+  it("soft-archives sessions so they drop out of default room lists", () => {
+    const stamp = Date.now() + 3;
+    const ownerId = `user_arch_owner_${stamp}`;
+    db.createUser(ownerId, `${ownerId}@ex.com`, "Owner", "x");
+    const live = db.createRoom({
+      id: `room_arch_live_${stamp}`,
+      name: "Keep me",
+      repoPath: "/tmp/demo",
+      agentCommand: "agent",
+      runtime: "cloud",
+      authMode: "server",
+      modelId: "auto",
+      ownerId,
+    });
+    const doomed = db.createRoom({
+      id: `room_arch_gone_${stamp}`,
+      name: "Archive me",
+      repoPath: "/tmp/demo",
+      agentCommand: "agent",
+      runtime: "cloud",
+      authMode: "server",
+      modelId: "auto",
+      ownerId,
+    });
+
+    db.updateRoomStatus(doomed.id, "archived");
+    expect(db.getRoom(doomed.id)?.status).toBe("archived");
+
+    const listed = db
+      .listPersonalRoomsByUser(ownerId)
+      .filter((row) => row.status !== "archived")
+      .map((row) => row.id);
+    expect(listed).toContain(live.id);
+    expect(listed).not.toContain(doomed.id);
+  });
 });

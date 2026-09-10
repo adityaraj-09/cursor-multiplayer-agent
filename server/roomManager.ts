@@ -4515,6 +4515,21 @@ export class RoomManager {
   }
 
   // -----------------------------------------------------------------------
+  // archiveRoom — soft-hide from session lists (stops first if still live)
+  // -----------------------------------------------------------------------
+
+  archiveRoom(id: string, actorUserId?: string): void {
+    const row = db.getRoom(id);
+    if (!row) return;
+    this.assertCanManage(id, actorUserId);
+    if (row.status === "archived") return;
+    if (row.status === "active") {
+      this.stopRoom(id, actorUserId);
+    }
+    db.updateRoomStatus(id, "archived");
+  }
+
+  // -----------------------------------------------------------------------
   // setAgentCursorSession (alias for HTTP layer)
   // -----------------------------------------------------------------------
 
@@ -4539,24 +4554,37 @@ export class RoomManager {
   }
 
   listRoomsForUser(userId: string): RoomInfo[] {
-    return db.listRoomsByUser(userId).map((row) => {
-      const room = this.rooms.get(row.id);
-      return this.toRoomInfo(row, room?.participants.size || 0);
-    });
+    return db
+      .listRoomsByUser(userId)
+      .filter((row) => row.status !== "archived")
+      .map((row) => {
+        const room = this.rooms.get(row.id);
+        return this.toRoomInfo(row, room?.participants.size || 0, userId);
+      });
   }
 
   listPersonalRoomsForUser(userId: string): RoomInfo[] {
-    return db.listPersonalRoomsByUser(userId).map((row) => {
-      const room = this.rooms.get(row.id);
-      return this.toRoomInfo(row, room?.participants.size || 0);
-    });
+    return db
+      .listPersonalRoomsByUser(userId)
+      .filter((row) => row.status !== "archived")
+      .map((row) => {
+        const room = this.rooms.get(row.id);
+        return this.toRoomInfo(row, room?.participants.size || 0, userId);
+      });
   }
 
-  listRoomsForOrg(orgId: string): RoomInfo[] {
-    return db.listRoomsByOrg(orgId).map((row) => {
-      const room = this.rooms.get(row.id);
-      return this.toRoomInfo(row, room?.participants.size || 0);
-    });
+  listRoomsForOrg(orgId: string, actorUserId?: string): RoomInfo[] {
+    return db
+      .listRoomsByOrg(orgId)
+      .filter((row) => row.status !== "archived")
+      .map((row) => {
+        const room = this.rooms.get(row.id);
+        return this.toRoomInfo(
+          row,
+          room?.participants.size || 0,
+          actorUserId,
+        );
+      });
   }
 
   userCanAccessRoom(roomId: string, userId: string): boolean {

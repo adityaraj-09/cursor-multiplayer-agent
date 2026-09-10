@@ -469,7 +469,7 @@ app.get("/api/rooms", requireAuth, (req, res) => {
       res.status(404).json({ error: "Organization not found" });
       return;
     }
-    res.json(roomManager.listRoomsForOrg(orgId));
+    res.json(roomManager.listRoomsForOrg(orgId, req.user!.id));
     return;
   }
   res.json(roomManager.listRoomsForUser(req.user!.id));
@@ -1119,6 +1119,22 @@ app.post("/api/rooms/:id/stop", requireAuth, (req, res) => {
   } catch (err) {
     res.status(400).json({
       error: err instanceof Error ? err.message : "Failed to stop room",
+    });
+  }
+});
+
+app.post("/api/rooms/:id/archive", requireAuth, (req, res) => {
+  const id = routeParam(req.params.id);
+  if (!roomManager.userCanAccessRoom(id, req.user!.id)) {
+    res.status(404).json({ error: "Room not found" });
+    return;
+  }
+  try {
+    roomManager.archiveRoom(id, req.user!.id);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(400).json({
+      error: err instanceof Error ? err.message : "Failed to archive room",
     });
   }
 });
