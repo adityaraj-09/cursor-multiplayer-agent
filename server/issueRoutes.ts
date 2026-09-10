@@ -28,6 +28,10 @@ import {
 } from "./issueAttachments.js";
 import { issueRunner, loadIssueSettings, settingsFromRow } from "./issueRunner.js";
 import { log, logError } from "./logger.js";
+import {
+  contentDispositionInline,
+  safeContentType,
+} from "../shared/uploads.js";
 
 const router: RouterType = Router();
 
@@ -446,11 +450,8 @@ router.get("/:id/attachments/:fileId", requireAuth, (req, res) => {
     res.status(404).json({ error: "Attachment file missing" });
     return;
   }
-  res.setHeader("Content-Type", att.mime);
-  res.setHeader(
-    "Content-Disposition",
-    `inline; filename="${att.name.replace(/"/g, "")}"`,
-  );
+  res.setHeader("Content-Type", safeContentType(att.mime));
+  res.setHeader("Content-Disposition", contentDispositionInline(att.name));
   res.send(buf);
 });
 

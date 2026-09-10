@@ -55,6 +55,10 @@ import {
   saveUpload,
   toAttachment,
 } from "./uploads.js";
+import {
+  contentDispositionInline,
+  safeContentType,
+} from "../shared/uploads.js";
 import type {
   ServerToClientEvents,
   ClientToServerEvents,
@@ -632,11 +636,8 @@ app.get("/api/rooms/:id/uploads/:fileId", requireAuth, (req, res) => {
     res.status(404).json({ error: "File expired or not found" });
     return;
   }
-  res.setHeader("Content-Type", rec.mime);
-  res.setHeader(
-    "Content-Disposition",
-    `inline; filename="${rec.name.replace(/"/g, "")}"`,
-  );
+  res.setHeader("Content-Type", safeContentType(rec.mime));
+  res.setHeader("Content-Disposition", contentDispositionInline(rec.name));
   res.setHeader("Cache-Control", "private, max-age=3600");
   res.send(readUpload(rec));
 });
