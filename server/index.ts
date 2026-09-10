@@ -13,6 +13,8 @@ import { encryptionConfigured } from "./keyCrypto.js";
 import { authMiddleware, hashSessionToken, requireAuth, resolveAuthToken } from "./auth.js";
 import authRoutes from "./authRoutes.js";
 import orgRoutes from "./orgRoutes.js";
+import issueRoutes from "./issueRoutes.js";
+import { issueRunner } from "./issueRunner.js";
 import * as db from "./db.js";
 import {
   getOrgCursorKey,
@@ -196,6 +198,7 @@ function resolveRequestKey(
 // User auth routes
 app.use("/api/auth", authRoutes);
 app.use("/api/orgs", orgRoutes);
+app.use("/api/issues", issueRoutes);
 
 app.get("/api/auth/status", (req, res) => {
   const userId = req.user?.id;
@@ -1536,7 +1539,9 @@ void attachRedisAdapter().finally(() => {
     }
     console.log(`\n  Shared Agent Session API running at:`);
     console.log(`    Local:   http://localhost:${PORT}`);
+    issueRunner.start();
     console.log(`    API:     http://localhost:${PORT}/api/rooms`);
+    console.log(`    Issues:  http://localhost:${PORT}/api/issues`);
     console.log(
       `    Auth:    serverKey=${serverKeyConfigured()} (${serverKeySource()}) encryption=${encryptionConfigured()}\n`,
     );
@@ -1547,6 +1552,7 @@ process.on("SIGINT", () => {
   console.log("\nShutting down...");
   workerRelay.shutdown();
   roomManager.shutdown();
+  issueRunner.stop();
   httpServer.close();
   process.exit(0);
 });

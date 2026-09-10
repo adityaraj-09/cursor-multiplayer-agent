@@ -360,6 +360,63 @@ async function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_memory_entries_room ON memory_entries(room_id, status, updated_at);
     CREATE INDEX IF NOT EXISTS idx_context_receipts_agent ON agent_context_receipts(agent_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_repo_map_nodes_map ON repo_map_nodes(map_id);
+
+    CREATE TABLE IF NOT EXISTS issues (
+      id TEXT PRIMARY KEY,
+      org_id TEXT,
+      creator_id TEXT NOT NULL REFERENCES users(id),
+      title TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      repo_url TEXT NOT NULL,
+      starting_ref TEXT NOT NULL DEFAULT 'main',
+      priority TEXT NOT NULL DEFAULT 'medium',
+      status TEXT NOT NULL DEFAULT 'queued',
+      pickup_delay_ms BIGINT NOT NULL,
+      run_after BIGINT NOT NULL,
+      started_at BIGINT,
+      finished_at BIGINT,
+      claimed_at BIGINT,
+      lease_until BIGINT,
+      cursor_agent_id TEXT,
+      model_id TEXT NOT NULL DEFAULT 'auto',
+      pr_url TEXT,
+      branch TEXT,
+      error TEXT,
+      writeup_md TEXT,
+      cancel_requested BIGINT NOT NULL DEFAULT 0,
+      attempt BIGINT NOT NULL DEFAULT 0,
+      created_at BIGINT NOT NULL,
+      updated_at BIGINT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS issue_attachments (
+      id TEXT PRIMARY KEY,
+      issue_id TEXT NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      mime TEXT NOT NULL,
+      size BIGINT NOT NULL,
+      storage_path TEXT NOT NULL,
+      created_at BIGINT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS issue_settings (
+      scope_key TEXT PRIMARY KEY,
+      default_pickup_delay_ms BIGINT NOT NULL DEFAULT 600000,
+      auto_start BIGINT NOT NULL DEFAULT 1,
+      model_id TEXT NOT NULL DEFAULT 'auto',
+      max_concurrent BIGINT NOT NULL DEFAULT 2,
+      updated_at BIGINT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS issue_events (
+      id TEXT PRIMARY KEY,
+      issue_id TEXT NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL,
+      message TEXT NOT NULL DEFAULT '',
+      created_at BIGINT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_issues_queue ON issues(status, run_after);
+    CREATE INDEX IF NOT EXISTS idx_issues_org ON issues(org_id, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_issues_creator ON issues(creator_id, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_issue_attachments_issue ON issue_attachments(issue_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_issue_events_issue ON issue_events(issue_id, created_at);
   `);
 
   const migrations = [
@@ -2762,6 +2819,529 @@ migrateAgentsV1();
 // ---------------------------------------------------------------------------
 // Synchronous wrapper around pg Pool.
 //
+export interface IssueRow {
+  id: string;
+  org_id: string | null;
+  creator_id: string;
+  title: string;
+  description: string;
+  repo_url: string;
+  starting_ref: string;
+  priority: string;
+  status: string;
+  pickup_delay_ms: number;
+  run_after: number;
+  started_at: number | null;
+  finished_at: number | null;
+  claimed_at: number | null;
+  lease_until: number | null;
+  cursor_agent_id: string | null;
+  model_id: string;
+  pr_url: string | null;
+  branch: string | null;
+  error: string | null;
+  writeup_md: string | null;
+  cancel_requested: number;
+  attempt: number;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface CreateIssueInput {
+  id: string;
+  orgId?: string | null;
+  creatorId: string;
+  title: string;
+  description?: string;
+  repoUrl: string;
+  startingRef?: string;
+  priority?: string;
+  status: string;
+  pickupDelayMs: number;
+  runAfter: number;
+  modelId?: string;
+}
+
+export interface IssuePatch {
+  title?: string;
+  description?: string;
+  repoUrl?: string;
+  startingRef?: string;
+  priority?: string;
+  status?: string;
+  pickupDelayMs?: number;
+  runAfter?: number;
+  startedAt?: number | null;
+  finishedAt?: number | null;
+  claimedAt?: number | null;
+  leaseUntil?: number | null;
+  cursorAgentId?: string | null;
+  modelId?: string;
+  prUrl?: string | null;
+  branch?: string | null;
+  error?: string | null;
+  writeupMd?: string | null;
+  cancelRequested?: boolean;
+  attempt?: number;
+}
+
+export interface IssueAttachmentRow {
+  id: string;
+  issue_id: string;
+  name: string;
+  mime: string;
+  size: number;
+  storage_path: string;
+  created_at: number;
+}
+
+export interface IssueSettingsRow {
+  scope_key: string;
+  default_pickup_delay_ms: number;
+  auto_start: number;
+  model_id: string;
+  max_concurrent: number;
+  updated_at: number;
+}
+
+export interface IssueEventRow {
+  id: string;
+  issue_id: string;
+  kind: string;
+  message: string;
+  created_at: number;
+}
+
+function pgRowToIssue(r: Record<string, unknown>): IssueRow {
+  return {
+    id: String(r.id),
+    org_id: (r.org_id as string) ?? null,
+    creator_id: String(r.creator_id),
+    title: String(r.title),
+    description: String(r.description ?? ""),
+    repo_url: String(r.repo_url),
+    starting_ref: String(r.starting_ref ?? "main"),
+    priority: String(r.priority ?? "medium"),
+    status: String(r.status),
+    pickup_delay_ms: num(r.pickup_delay_ms as string) ?? 0,
+    run_after: num(r.run_after as string) ?? 0,
+    started_at: num(r.started_at as string),
+    finished_at: num(r.finished_at as string),
+    claimed_at: num(r.claimed_at as string),
+    lease_until: num(r.lease_until as string),
+    cursor_agent_id: (r.cursor_agent_id as string) ?? null,
+    model_id: String(r.model_id ?? "auto"),
+    pr_url: (r.pr_url as string) ?? null,
+    branch: (r.branch as string) ?? null,
+    error: (r.error as string) ?? null,
+    writeup_md: (r.writeup_md as string) ?? null,
+    cancel_requested: num(r.cancel_requested as string) ?? 0,
+    attempt: num(r.attempt as string) ?? 0,
+    created_at: num(r.created_at as string) ?? 0,
+    updated_at: num(r.updated_at as string) ?? 0,
+  };
+}
+
+function pgRowToIssueAttachment(r: Record<string, unknown>): IssueAttachmentRow {
+  return {
+    id: String(r.id),
+    issue_id: String(r.issue_id),
+    name: String(r.name),
+    mime: String(r.mime),
+    size: num(r.size as string) ?? 0,
+    storage_path: String(r.storage_path),
+    created_at: num(r.created_at as string) ?? 0,
+  };
+}
+
+function pgRowToIssueSettings(r: Record<string, unknown>): IssueSettingsRow {
+  return {
+    scope_key: String(r.scope_key),
+    default_pickup_delay_ms: num(r.default_pickup_delay_ms as string) ?? 600000,
+    auto_start: num(r.auto_start as string) ?? 1,
+    model_id: String(r.model_id ?? "auto"),
+    max_concurrent: num(r.max_concurrent as string) ?? 2,
+    updated_at: num(r.updated_at as string) ?? 0,
+  };
+}
+
+function pgRowToIssueEvent(r: Record<string, unknown>): IssueEventRow {
+  return {
+    id: String(r.id),
+    issue_id: String(r.issue_id),
+    kind: String(r.kind),
+    message: String(r.message ?? ""),
+    created_at: num(r.created_at as string) ?? 0,
+  };
+}
+
+export function createIssue(input: CreateIssueInput): IssueRow {
+  const now = Date.now();
+  const rows = syncQuery<Record<string, unknown>>(
+    `INSERT INTO issues (
+      id, org_id, creator_id, title, description, repo_url, starting_ref,
+      priority, status, pickup_delay_ms, run_after, cursor_agent_id, model_id,
+      writeup_md, cancel_requested, attempt, created_at, updated_at
+    ) VALUES (
+      $1,$2,$3,$4,$5,$6,$7,
+      $8,$9,$10,$11,NULL,$12,
+      NULL,0,0,$13,$14
+    ) RETURNING *`,
+    [
+      input.id,
+      input.orgId?.trim() || null,
+      input.creatorId,
+      input.title,
+      input.description ?? "",
+      input.repoUrl,
+      input.startingRef?.trim() || "main",
+      input.priority || "medium",
+      input.status,
+      input.pickupDelayMs,
+      input.runAfter,
+      input.modelId?.trim() || "auto",
+      now,
+      now,
+    ],
+  );
+  return pgRowToIssue(rows[0]);
+}
+
+export function getIssue(id: string): IssueRow | undefined {
+  const rows = syncQuery<Record<string, unknown>>(
+    `SELECT * FROM issues WHERE id = $1`,
+    [id],
+  );
+  return rows[0] ? pgRowToIssue(rows[0]) : undefined;
+}
+
+export function listPersonalIssuesByUser(userId: string): IssueRow[] {
+  return syncQuery<Record<string, unknown>>(
+    `SELECT * FROM issues
+     WHERE creator_id = $1 AND (org_id IS NULL OR org_id = '')
+     ORDER BY updated_at DESC`,
+    [userId],
+  ).map(pgRowToIssue);
+}
+
+export function listIssuesByOrg(orgId: string): IssueRow[] {
+  return syncQuery<Record<string, unknown>>(
+    `SELECT * FROM issues WHERE org_id = $1 ORDER BY updated_at DESC`,
+    [orgId],
+  ).map(pgRowToIssue);
+}
+
+export function deleteIssue(id: string): boolean {
+  const rows = syncQuery<{ count: string }>(
+    `WITH deleted AS (DELETE FROM issues WHERE id = $1 RETURNING 1)
+     SELECT COUNT(*)::text AS count FROM deleted`,
+    [id],
+  );
+  return Number(rows[0]?.count ?? 0) > 0;
+}
+
+export function updateIssue(id: string, patch: IssuePatch): IssueRow | undefined {
+  const current = getIssue(id);
+  if (!current) return undefined;
+  const next = {
+    title: patch.title ?? current.title,
+    description: patch.description ?? current.description,
+    repo_url: patch.repoUrl ?? current.repo_url,
+    starting_ref: patch.startingRef ?? current.starting_ref,
+    priority: patch.priority ?? current.priority,
+    status: patch.status ?? current.status,
+    pickup_delay_ms: patch.pickupDelayMs ?? current.pickup_delay_ms,
+    run_after: patch.runAfter ?? current.run_after,
+    started_at:
+      patch.startedAt !== undefined ? patch.startedAt : current.started_at,
+    finished_at:
+      patch.finishedAt !== undefined ? patch.finishedAt : current.finished_at,
+    claimed_at:
+      patch.claimedAt !== undefined ? patch.claimedAt : current.claimed_at,
+    lease_until:
+      patch.leaseUntil !== undefined ? patch.leaseUntil : current.lease_until,
+    cursor_agent_id:
+      patch.cursorAgentId !== undefined
+        ? patch.cursorAgentId
+        : current.cursor_agent_id,
+    model_id: patch.modelId ?? current.model_id,
+    pr_url: patch.prUrl !== undefined ? patch.prUrl : current.pr_url,
+    branch: patch.branch !== undefined ? patch.branch : current.branch,
+    error: patch.error !== undefined ? patch.error : current.error,
+    writeup_md:
+      patch.writeupMd !== undefined ? patch.writeupMd : current.writeup_md,
+    cancel_requested:
+      patch.cancelRequested === undefined
+        ? current.cancel_requested
+        : patch.cancelRequested
+          ? 1
+          : 0,
+    attempt: patch.attempt ?? current.attempt,
+    updated_at: Date.now(),
+  };
+  const rows = syncQuery<Record<string, unknown>>(
+    `UPDATE issues SET
+      title = $1, description = $2, repo_url = $3, starting_ref = $4, priority = $5,
+      status = $6, pickup_delay_ms = $7, run_after = $8, started_at = $9, finished_at = $10,
+      claimed_at = $11, lease_until = $12, cursor_agent_id = $13, model_id = $14,
+      pr_url = $15, branch = $16, error = $17, writeup_md = $18, cancel_requested = $19,
+      attempt = $20, updated_at = $21
+    WHERE id = $22
+    RETURNING *`,
+    [
+      next.title,
+      next.description,
+      next.repo_url,
+      next.starting_ref,
+      next.priority,
+      next.status,
+      next.pickup_delay_ms,
+      next.run_after,
+      next.started_at,
+      next.finished_at,
+      next.claimed_at,
+      next.lease_until,
+      next.cursor_agent_id,
+      next.model_id,
+      next.pr_url,
+      next.branch,
+      next.error,
+      next.writeup_md,
+      next.cancel_requested,
+      next.attempt,
+      next.updated_at,
+      id,
+    ],
+  );
+  return rows[0] ? pgRowToIssue(rows[0]) : undefined;
+}
+
+export function listDueIssueCandidates(now: number): Array<{
+  id: string;
+  org_id: string | null;
+  creator_id: string;
+}> {
+  return syncQuery<{
+    id: string;
+    org_id: string | null;
+    creator_id: string;
+  }>(
+    `SELECT id, org_id, creator_id FROM issues
+     WHERE status = 'queued' AND run_after <= $1
+     ORDER BY run_after ASC, created_at ASC
+     LIMIT 40`,
+    [now],
+  );
+}
+
+export function claimIssue(
+  id: string,
+  now: number,
+  leaseUntil: number,
+): IssueRow | undefined {
+  const rows = syncQuery<Record<string, unknown>>(
+    `UPDATE issues SET
+      status = 'running',
+      started_at = COALESCE(started_at, $1),
+      claimed_at = $2,
+      lease_until = $3,
+      cancel_requested = 0,
+      error = NULL,
+      attempt = attempt + 1,
+      updated_at = $4
+    WHERE id = $5 AND status = 'queued'
+    RETURNING *`,
+    [now, now, leaseUntil, now, id],
+  );
+  return rows[0] ? pgRowToIssue(rows[0]) : undefined;
+}
+
+export function countRunningIssues(input: {
+  orgId?: string | null;
+  creatorId: string;
+}): number {
+  const orgId = input.orgId?.trim() || "";
+  const rows = syncQuery<{ c: string }>(
+    `SELECT COUNT(*)::text AS c FROM issues
+     WHERE status = 'running'
+       AND (
+         (org_id IS NOT NULL AND org_id != '' AND org_id = $1)
+         OR ((org_id IS NULL OR org_id = '') AND creator_id = $2)
+       )`,
+    [orgId, input.creatorId],
+  );
+  return Number(rows[0]?.c ?? 0);
+}
+
+export function recoverStaleIssueLeases(
+  now: number,
+  maxAttempts: number,
+): void {
+  syncQuery(
+    `UPDATE issues SET
+      status = 'queued',
+      claimed_at = NULL,
+      lease_until = NULL,
+      error = 'Runner lease expired; requeued',
+      updated_at = $1
+    WHERE status = 'running'
+      AND lease_until IS NOT NULL
+      AND lease_until < $2
+      AND attempt < $3`,
+    [now, now, maxAttempts],
+  );
+  syncQuery(
+    `UPDATE issues SET
+      status = 'failed',
+      finished_at = $1,
+      claimed_at = NULL,
+      lease_until = NULL,
+      error = 'Runner lease expired after too many attempts',
+      updated_at = $2
+    WHERE status = 'running'
+      AND lease_until IS NOT NULL
+      AND lease_until < $3
+      AND attempt >= $4`,
+    [now, now, now, maxAttempts],
+  );
+}
+
+export function heartbeatIssue(id: string, leaseUntil: number): void {
+  syncQuery(
+    `UPDATE issues SET lease_until = $1, updated_at = $2
+     WHERE id = $3 AND status = 'running'`,
+    [leaseUntil, Date.now(), id],
+  );
+}
+
+export function createIssueAttachment(input: {
+  id: string;
+  issueId: string;
+  name: string;
+  mime: string;
+  size: number;
+  storagePath: string;
+}): IssueAttachmentRow {
+  const now = Date.now();
+  const rows = syncQuery<Record<string, unknown>>(
+    `INSERT INTO issue_attachments (id, issue_id, name, mime, size, storage_path, created_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7)
+     RETURNING *`,
+    [
+      input.id,
+      input.issueId,
+      input.name,
+      input.mime,
+      input.size,
+      input.storagePath,
+      now,
+    ],
+  );
+  return pgRowToIssueAttachment(rows[0]);
+}
+
+export function listIssueAttachments(issueId: string): IssueAttachmentRow[] {
+  return syncQuery<Record<string, unknown>>(
+    `SELECT * FROM issue_attachments WHERE issue_id = $1 ORDER BY created_at ASC`,
+    [issueId],
+  ).map(pgRowToIssueAttachment);
+}
+
+export function getIssueAttachment(
+  issueId: string,
+  attachmentId: string,
+): IssueAttachmentRow | undefined {
+  const rows = syncQuery<Record<string, unknown>>(
+    `SELECT * FROM issue_attachments WHERE issue_id = $1 AND id = $2`,
+    [issueId, attachmentId],
+  );
+  return rows[0] ? pgRowToIssueAttachment(rows[0]) : undefined;
+}
+
+export function deleteIssueAttachment(
+  issueId: string,
+  attachmentId: string,
+): boolean {
+  const rows = syncQuery<{ count: string }>(
+    `WITH deleted AS (
+       DELETE FROM issue_attachments WHERE issue_id = $1 AND id = $2 RETURNING 1
+     )
+     SELECT COUNT(*)::text AS count FROM deleted`,
+    [issueId, attachmentId],
+  );
+  return Number(rows[0]?.count ?? 0) > 0;
+}
+
+export function countIssueAttachments(issueId: string): number {
+  const rows = syncQuery<{ c: string }>(
+    `SELECT COUNT(*)::text AS c FROM issue_attachments WHERE issue_id = $1`,
+    [issueId],
+  );
+  return Number(rows[0]?.c ?? 0);
+}
+
+export function getIssueSettings(scopeKey: string): IssueSettingsRow | undefined {
+  const rows = syncQuery<Record<string, unknown>>(
+    `SELECT * FROM issue_settings WHERE scope_key = $1`,
+    [scopeKey],
+  );
+  return rows[0] ? pgRowToIssueSettings(rows[0]) : undefined;
+}
+
+export function upsertIssueSettings(input: {
+  scopeKey: string;
+  defaultPickupDelayMs: number;
+  autoStart: boolean;
+  modelId: string;
+  maxConcurrent: number;
+}): IssueSettingsRow {
+  const now = Date.now();
+  const rows = syncQuery<Record<string, unknown>>(
+    `INSERT INTO issue_settings (
+      scope_key, default_pickup_delay_ms, auto_start, model_id, max_concurrent, updated_at
+    ) VALUES ($1,$2,$3,$4,$5,$6)
+    ON CONFLICT (scope_key) DO UPDATE SET
+      default_pickup_delay_ms = EXCLUDED.default_pickup_delay_ms,
+      auto_start = EXCLUDED.auto_start,
+      model_id = EXCLUDED.model_id,
+      max_concurrent = EXCLUDED.max_concurrent,
+      updated_at = EXCLUDED.updated_at
+    RETURNING *`,
+    [
+      input.scopeKey,
+      input.defaultPickupDelayMs,
+      input.autoStart ? 1 : 0,
+      input.modelId,
+      input.maxConcurrent,
+      now,
+    ],
+  );
+  return pgRowToIssueSettings(rows[0]);
+}
+
+export function insertIssueEvent(input: {
+  id: string;
+  issueId: string;
+  kind: string;
+  message?: string;
+}): IssueEventRow {
+  const now = Date.now();
+  const rows = syncQuery<Record<string, unknown>>(
+    `INSERT INTO issue_events (id, issue_id, kind, message, created_at)
+     VALUES ($1,$2,$3,$4,$5)
+     RETURNING *`,
+    [input.id, input.issueId, input.kind, input.message ?? "", now],
+  );
+  return pgRowToIssueEvent(rows[0]);
+}
+
+export function listIssueEvents(issueId: string): IssueEventRow[] {
+  return syncQuery<Record<string, unknown>>(
+    `SELECT * FROM issue_events WHERE issue_id = $1 ORDER BY created_at ASC`,
+    [issueId],
+  ).map(pgRowToIssueEvent);
+}
+
 // The existing codebase calls db functions synchronously. Postgres (pg) is
 // inherently async, so we use a SharedArrayBuffer + worker thread pattern to
 // block the calling thread until the query completes. This keeps the external
