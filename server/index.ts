@@ -3,7 +3,9 @@ import express from "express";
 import cors from "cors";
 import { createServer } from "http";
 import { Server } from "socket.io";
-import { PORT, IS_PRODUCTION, CORS_ORIGINS, isAdminUser } from "./config.js";
+import { PORT, IS_PRODUCTION, CORS_ORIGINS, APP_ORIGIN, isAdminUser } from "./config.js";
+import { log, logError } from "./logger.js";
+import { requestLog } from "./requestLog.js";
 import { RoomManager } from "./roomManager.js";
 import { WorkerRelay } from "./workerRelay.js";
 import { FileLockRegistry } from "./fileLocks.js";
@@ -99,6 +101,7 @@ app.use(express.json({ limit: "12mb" }));
 
 // Auth middleware — Clerk JWT or CLI session token → req.user
 app.use(authMiddleware());
+app.use(requestLog);
 
 const httpServer = createServer(app);
 const io = new Server<ClientToServerEvents, ServerToClientEvents>(httpServer, {
@@ -1443,6 +1446,25 @@ app.post("/api/rooms/:id/repo-map", requireAuth, (req, res) => {
   }
 });
 
+app.use(
+  (
+    err: unknown,
+    req: express.Request,
+    res: express.Response,
+    _next: express.NextFunction,
+  ) => {
+    logError("http", "unhandled route error", {
+      method: req.method,
+      path: req.originalUrl,
+      err,
+    });
+    if (res.headersSent) return;
+    res.status(500).json({
+      error: err instanceof Error ? err.message : "Internal server error",
+    });
+  },
+);
+
 io.use((socket, next) => {
   const token =
     (socket.handshake.auth?.token as string | undefined) ||
@@ -1539,22 +1561,41 @@ void attachRedisAdapter().finally(() => {
     } catch {
       // ignore
     }
-    console.log(`\n  Shared Agent Session API running at:`);
-    console.log(`    Local:   http://localhost:${PORT}`);
     issueRunner.start();
-    console.log(`    API:     http://localhost:${PORT}/api/rooms`);
-    console.log(`    Issues:  http://localhost:${PORT}/api/issues`);
-    console.log(
-      `    Auth:    serverKey=${serverKeyConfigured()} (${serverKeySource()}) encryption=${encryptionConfigured()}\n`,
-    );
+    log("boot", "API listening", {
+      port: PORT,
+      production: IS_PRODUCTION,
+      origin: APP_ORIGIN,
+      cors: CORS_ORIGINS,
+      githubOAuth: Boolean(
+        process.env.GITHUB_CLIENT_ID?.trim() &&
+          process.env.GITHUB_CLIENT_SECRET?.trim(),
+      ),
+      githubRedirect:
+        process.env.GITHUB_REDIRECT_URI?.trim() ||
+        `${APP_ORIGIN}/api/workspace/github/oauth/callback`,
+      encryption: encryptionConfigured(),
+      serverKey: serverKeyConfigured(),
+      serverKeySource: serverKeySource(),
+      postgres: Boolean(process.env.DATABASE_URL?.startsWith("postgres")),
+    });
   });
 });
 
-process.on("SIGINT", () => {
-  console.log("\nShutting down...");
+function shutdown(signal: string): void {
+  log("boot", "shutting down", { signal });
   workerRelay.shutdown();
   roomManager.shutdown();
   issueRunner.stop();
   httpServer.close();
   process.exit(0);
+}
+
+process.on("SIGINT", () => shutdown("SIGINT"));
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("uncaughtException", (err) => {
+  logError("boot", "uncaughtException", { err });
+});
+process.on("unhandledRejection", (err) => {
+  logError("boot", "unhandledRejection", { err });
 });

@@ -27,6 +27,7 @@ import {
   saveIssueUpload,
 } from "./issueAttachments.js";
 import { issueRunner, loadIssueSettings, settingsFromRow } from "./issueRunner.js";
+import { log, logError } from "./logger.js";
 
 const router: RouterType = Router();
 
@@ -268,8 +269,17 @@ router.post("/", requireAuth, (req, res) => {
     }
 
     if (autoStart && pickupDelayMs === 0) issueRunner.kick();
+    log("issues", "created", {
+      id,
+      user: req.user!.id,
+      orgId: orgId || "personal",
+      status,
+      repoUrl,
+      pickupDelayMs,
+    });
     res.status(201).json(toIssueInfo(row, { includeEvents: true }));
   } catch (err) {
+    logError("issues", "create failed", { err });
     res.status(400).json({
       error: err instanceof Error ? err.message : "Failed to create issue",
     });
@@ -497,6 +507,7 @@ router.post("/:id/queue", requireAuth, (req, res) => {
   });
   record(id, "queued", `Runs after ${new Date(now + delay).toISOString()}`);
   if (delay === 0) issueRunner.kick();
+  log("issues", "queued", { id, user: req.user!.id, pickupDelayMs: delay });
   res.json(toIssueInfo(updated!, { includeEvents: true }));
 });
 
@@ -532,6 +543,7 @@ router.post("/:id/run-now", requireAuth, (req, res) => {
   });
   record(id, "queued", "Run now requested");
   issueRunner.kick();
+  log("issues", "run-now", { id, user: req.user!.id });
   res.json(toIssueInfo(updated!, { includeEvents: true }));
 });
 
@@ -554,6 +566,7 @@ router.post("/:id/cancel", requireAuth, (req, res) => {
   if (status === "running") {
     const updated = db.updateIssue(id, { cancelRequested: true });
     record(id, "cancel_requested", "Cancel requested");
+    log("issues", "cancel requested", { id, user: req.user!.id });
     res.json(toIssueInfo(updated!, { includeEvents: true }));
     return;
   }
@@ -566,6 +579,7 @@ router.post("/:id/cancel", requireAuth, (req, res) => {
     error: null,
   });
   record(id, "cancelled", "Cancelled");
+  log("issues", "cancelled", { id, user: req.user!.id });
   res.json(toIssueInfo(updated!, { includeEvents: true }));
 });
 
@@ -599,6 +613,7 @@ router.post("/:id/retry", requireAuth, (req, res) => {
   });
   record(id, "retried", delay === 0 ? "Retrying now" : `Retry queued`);
   if (delay === 0) issueRunner.kick();
+  log("issues", "retried", { id, user: req.user!.id, pickupDelayMs: delay });
   res.json(toIssueInfo(updated!, { includeEvents: true }));
 });
 
