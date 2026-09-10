@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { Suspense, useEffect, useMemo, useState, type FormEvent } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import DashboardShell from "../../../components/DashboardShell";
@@ -33,6 +33,20 @@ async function fileToBase64(file: File): Promise<string> {
 }
 
 export default function NewIssuePage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen bg-[#141414] flex items-center justify-center">
+          <p className="text-[13px] text-[#6e6e6e]">Loading…</p>
+        </div>
+      }
+    >
+      <NewIssueForm />
+    </Suspense>
+  );
+}
+
+function NewIssueForm() {
   const router = useRouter();
   const search = useSearchParams();
   const { user, loading: authLoading } = useAuth();
