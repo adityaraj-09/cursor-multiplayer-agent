@@ -10,7 +10,6 @@ import {
   LayoutList,
   Maximize2,
   Settings2,
-  Square,
   X,
 } from "lucide-react";
 import ChatPanel from "../ChatPanel";
@@ -174,6 +173,7 @@ export default function RoomChatPane() {
           ? () => void handleAbortRun(selectedAgentId || undefined)
           : undefined
       }
+      stopping={aborting && selectedStatus === "running"}
       connected={connected}
       canSteer={canSteerSelected}
       steerLockReason={steerLockReason || undefined}
@@ -256,6 +256,7 @@ export default function RoomChatPane() {
       }
       onIntegrate={(id) => void handleIntegrateAgent(id)}
       onAbort={(id) => void handleAbortRun(id)}
+      stopping={aborting}
     />
   ) : (
     <ChatPanel
@@ -368,7 +369,7 @@ export default function RoomChatPane() {
             })}
           </div>
         )}
-        <footer className="shrink-0 border-t border-[#2b2b2b] bg-[#171717]">
+        <footer className="shrink-0 border-t border-[#2b2b2b] bg-[#171717] overflow-visible">
           {steerComposer(true)}
         </footer>
       </div>
@@ -528,19 +529,6 @@ export default function RoomChatPane() {
                   onClick={() => void handleIntegrateAgent(selectedAgent.id)}
                 />
               )}
-            {selectedStatus === "running" && canSteerSelected && (
-              <button
-                type="button"
-                onClick={() => void handleAbortRun()}
-                disabled={aborting}
-                className="inline-flex h-8 items-center gap-1.5 px-2.5 rounded-lg text-[11px] text-[#f07070] hover:text-[#ff8a8a] border border-[#3c2b2b] hover:border-[#5a3a3a] bg-[#1f1818] transition-colors disabled:opacity-50"
-              >
-                <Square className="h-3 w-3" strokeWidth={2} />
-                <span className="hidden sm:inline">
-                  {aborting ? "Stopping…" : "Abort"}
-                </span>
-              </button>
-            )}
             <PresenceBar
               onlyMe
               participants={participants}
@@ -662,7 +650,7 @@ export default function RoomChatPane() {
           </p>
         )}
       {!splitActive && (
-        <footer className="relative z-20 border-t border-[#2b2b2b]/90 bg-[#171717]/95 backdrop-blur-xl shrink-0 overflow-hidden pb-[env(safe-area-inset-bottom)] shadow-[0_-20px_60px_rgba(0,0,0,0.24)]">
+        <footer className="relative z-30 border-t border-[#2b2b2b]/90 bg-[#171717]/95 backdrop-blur-xl shrink-0 overflow-visible pb-[env(safe-area-inset-bottom)] shadow-[0_-20px_60px_rgba(0,0,0,0.24)]">
           {(modelError || cursorSessionError || actionError || agentError) && (
             <p className="px-3 pt-2 text-[11px] text-[#f07070]">
               {actionError || agentError || modelError || cursorSessionError}

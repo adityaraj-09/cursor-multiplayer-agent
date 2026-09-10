@@ -1,18 +1,22 @@
 "use client";
 
-import { ArrowUp, Plus, Square } from "lucide-react";
+import { ArrowUp, LoaderCircle, Plus, Square } from "lucide-react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
+  type CSSProperties,
   type FormEvent,
   type KeyboardEvent,
   type ReactNode,
+  type RefObject,
   type TextareaHTMLAttributes,
   useCallback,
   useEffect,
+  useId,
   useLayoutEffect,
   useRef,
   useState,
 } from "react";
+import { createPortal } from "react-dom";
 import { SPRING_SWAP } from "../../lib/ease";
 import { cn } from "../../lib/utils";
 
@@ -47,6 +51,7 @@ export interface PromptInputProps
   onAction?: (action: string) => void;
   onSubmit?: (value: string, model?: string) => void | Promise<void>;
   loading?: boolean;
+  stopping?: boolean;
   onStop?: () => void;
   minRows?: number;
   maxRows?: number;
@@ -59,6 +64,113 @@ export interface PromptInputProps
   /** Extra send lock (permissions, reconnect, upload). */
   submitDisabled?: boolean;
   modelDisabled?: boolean;
+  modelLockReason?: string;
+}
+
+const MENU_WIDTH = 224;
+const MENU_MAX_HEIGHT = 256;
+
+function menuPosition(
+  anchor: DOMRect,
+  width = MENU_WIDTH,
+  maxHeight = MENU_MAX_HEIGHT,
+): CSSProperties {
+  const gap = 8;
+  const spaceAbove = anchor.top - gap;
+  const spaceBelow = window.innerHeight - anchor.bottom - gap;
+  const openUp = spaceAbove >= Math.min(maxHeight, 140) || spaceAbove >= spaceBelow;
+  const left = Math.min(
+    Math.max(8, anchor.left),
+    window.innerWidth - width - 8,
+  );
+  const height = Math.min(maxHeight, Math.max(96, openUp ? spaceAbove : spaceBelow));
+  if (openUp) {
+    return {
+      position: "fixed",
+      left,
+      width,
+      bottom: window.innerHeight - anchor.top + gap,
+      maxHeight: height,
+      zIndex: 80,
+    };
+  }
+  return {
+    position: "fixed",
+    left,
+    width,
+    top: anchor.bottom + gap,
+    maxHeight: height,
+    zIndex: 80,
+  };
+}
+
+function PromptMenu({
+  open,
+  anchorRef,
+  onClose,
+  children,
+  labelledBy,
+}: {
+  open: boolean;
+  anchorRef: RefObject<HTMLElement | null>;
+  onClose: () => void;
+  children: ReactNode;
+  labelledBy?: string;
+}) {
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [style, setStyle] = useState<CSSProperties>({});
+
+  const place = useCallback(() => {
+    const anchor = anchorRef.current;
+    if (!anchor) return;
+    setStyle(menuPosition(anchor.getBoundingClientRect()));
+  }, [anchorRef]);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    place();
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
+    return () => {
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", place, true);
+    };
+  }, [open, place]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointer = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (menuRef.current?.contains(target) || anchorRef.current?.contains(target)) {
+        return;
+      }
+      onClose();
+    };
+    const onKey = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("pointerdown", onPointer);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("pointerdown", onPointer);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [anchorRef, onClose, open]);
+
+  if (!open || typeof document === "undefined") return null;
+
+  return createPortal(
+    <div
+      ref={menuRef}
+      role="menu"
+      aria-labelledby={labelledBy}
+      style={style}
+      className="overflow-y-auto rounded-xl border border-[#2b2b2b] bg-[#1a1a1a] p-1.5 shadow-[0_18px_50px_rgba(0,0,0,0.55)]"
+    >
+      {children}
+    </div>,
+    document.body,
+  );
 }
 
 export function PromptInput({
@@ -73,6 +185,7 @@ export function PromptInput({
   onAction,
   onSubmit,
   loading = false,
+  stopping = false,
   onStop,
   minRows = 2,
   maxRows = 8,
@@ -86,12 +199,16 @@ export function PromptInput({
   allowEmptySubmit = false,
   submitDisabled = false,
   modelDisabled = false,
+  modelLockReason,
   ...textareaProps
 }: PromptInputProps) {
   const reduce = useReducedMotion() ?? false;
+  const attachTriggerId = `${useId()}-attach`;
+  const modelTriggerId = `${useId()}-model`;
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const measurementRef = useRef<HTMLDivElement>(null);
-  const rootRef = useRef<HTMLFormElement>(null);
+  const actionsTriggerRef = useRef<HTMLButtonElement>(null);
+  const modelsTriggerRef = useRef<HTMLButtonElement>(null);
   const [internalValue, setInternalValue] = useState(defaultValue);
   const [internalModel, setInternalModel] = useState(
     defaultModel ?? models[0]?.value,
@@ -108,6 +225,8 @@ export function PromptInput({
     !disabled &&
     !loading &&
     !submitDisabled;
+  const closeActions = useCallback(() => setActionsOpen(false), []);
+  const closeModels = useCallback(() => setModelsOpen(false), []);
 
   const resizeTextarea = useCallback(() => {
     const textarea = textareaRef.current;
@@ -134,28 +253,6 @@ export function PromptInput({
     observer.observe(textarea);
     return () => observer.disconnect();
   }, [resizeTextarea]);
-
-  useEffect(() => {
-    if (!actionsOpen && !modelsOpen) return;
-    const onPointer = (event: PointerEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) {
-        setActionsOpen(false);
-        setModelsOpen(false);
-      }
-    };
-    const onKey = (event: globalThis.KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setActionsOpen(false);
-        setModelsOpen(false);
-      }
-    };
-    window.addEventListener("pointerdown", onPointer);
-    window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("pointerdown", onPointer);
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [actionsOpen, modelsOpen]);
 
   const setValue = (next: string) => {
     if (value === undefined) setInternalValue(next);
@@ -193,12 +290,13 @@ export function PromptInput({
     submit();
   };
 
+  const sendState = stopping ? "stopping" : loading ? "stop" : "send";
+
   return (
     <form
-      ref={rootRef}
       onSubmit={submit}
       className={cn(
-        "relative w-full rounded-2xl border border-border/80 bg-background p-2 transition-colors focus-within:border-foreground/25",
+        "relative w-full rounded-2xl border border-[#2b2b2b] bg-[#1a1a1a] p-2 transition-colors focus-within:border-[#3c3c3c]",
         disabled && "opacity-60",
         className,
       )}
@@ -222,7 +320,7 @@ export function PromptInput({
           {...textareaProps}
           onChange={(event) => setValue(event.target.value)}
           onKeyDown={handleKeyDown}
-          className="scrollbar-hide block w-full resize-none overflow-y-auto bg-transparent px-2 pt-1.5 text-sm leading-6 text-foreground outline-none placeholder:text-muted-foreground/55"
+          className="scrollbar-hide block w-full resize-none overflow-y-auto bg-transparent px-2 pt-1.5 text-sm leading-6 text-[#e4e4e4] outline-none placeholder:text-[#6e6e6e]"
         />
       </div>
 
@@ -230,15 +328,18 @@ export function PromptInput({
         {actions.length ? (
           <div className="relative">
             <button
+              ref={actionsTriggerRef}
               type="button"
-              disabled={disabled || loading}
+              disabled={disabled}
+              id={attachTriggerId}
               aria-label="Add to prompt"
               aria-expanded={actionsOpen}
+              aria-haspopup="menu"
               onClick={() => {
                 setModelsOpen(false);
                 setActionsOpen((open) => !open);
               }}
-              className="grid size-8 place-items-center rounded-full text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-ring"
+              className="grid size-8 place-items-center rounded-full text-[#a0a0a0] outline-none transition-colors hover:bg-[#252525] hover:text-[#e4e4e4] disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-[#4d9fff]"
             >
               <motion.span
                 aria-hidden="true"
@@ -249,53 +350,61 @@ export function PromptInput({
                 <Plus className="size-4" strokeWidth={1.8} />
               </motion.span>
             </button>
-            {actionsOpen ? (
-              <div className="absolute bottom-full left-0 z-30 mb-2 w-56 rounded-xl border border-border/80 bg-background p-1.5 shadow-[0_18px_50px_rgba(0,0,0,0.35)]">
-                {actions.map((action) => (
-                  <button
-                    key={action.value}
-                    type="button"
-                    disabled={action.disabled}
-                    onClick={() => {
-                      onAction?.(action.value);
-                      setActionsOpen(false);
-                    }}
-                    className="flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left outline-none transition-colors hover:bg-muted focus-visible:bg-muted disabled:pointer-events-none disabled:opacity-50"
-                  >
-                    {action.icon ? (
-                      <span className="mt-0.5 grid size-4 shrink-0 place-items-center text-muted-foreground">
-                        {action.icon}
+            <PromptMenu
+              open={actionsOpen}
+              anchorRef={actionsTriggerRef}
+              onClose={closeActions}
+              labelledBy={attachTriggerId}
+            >
+              {actions.map((action) => (
+                <button
+                  key={action.value}
+                  type="button"
+                  role="menuitem"
+                  disabled={action.disabled}
+                  onClick={() => {
+                    onAction?.(action.value);
+                    setActionsOpen(false);
+                  }}
+                  className="flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left outline-none transition-colors hover:bg-[#252525] focus-visible:bg-[#252525] disabled:pointer-events-none disabled:opacity-50"
+                >
+                  {action.icon ? (
+                    <span className="mt-0.5 grid size-4 shrink-0 place-items-center text-[#a0a0a0]">
+                      {action.icon}
+                    </span>
+                  ) : null}
+                  <span className="min-w-0">
+                    <span className="block text-xs font-medium text-[#e4e4e4]">
+                      {action.label}
+                    </span>
+                    {action.description ? (
+                      <span className="mt-0.5 block text-[11px] leading-snug text-[#6e6e6e]">
+                        {action.description}
                       </span>
                     ) : null}
-                    <span className="min-w-0">
-                      <span className="block text-xs font-medium text-foreground">
-                        {action.label}
-                      </span>
-                      {action.description ? (
-                        <span className="mt-0.5 block text-[11px] leading-snug text-muted-foreground">
-                          {action.description}
-                        </span>
-                      ) : null}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            ) : null}
+                  </span>
+                </button>
+              ))}
+            </PromptMenu>
           </div>
         ) : null}
         {leadingAction}
         {models.length ? (
           <div className="relative min-w-0">
             <button
+              ref={modelsTriggerRef}
               type="button"
-              disabled={disabled || loading || modelDisabled}
+              disabled={disabled || modelDisabled}
+              id={modelTriggerId}
               aria-label="Choose model"
               aria-expanded={modelsOpen}
+              aria-haspopup="menu"
+              title={modelDisabled ? modelLockReason : undefined}
               onClick={() => {
                 setActionsOpen(false);
                 setModelsOpen((open) => !open);
               }}
-              className="inline-flex h-8 max-w-[min(100%,220px)] items-center gap-1.5 rounded-full px-2.5 text-xs text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-ring"
+              className="inline-flex h-8 max-w-[min(100%,220px)] items-center gap-1.5 rounded-full px-2.5 text-xs text-[#a0a0a0] outline-none transition-colors hover:bg-[#252525] hover:text-[#e4e4e4] disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-[#4d9fff]"
             >
               {currentModel?.icon ? (
                 <span className="grid size-4 shrink-0 place-items-center">
@@ -306,49 +415,58 @@ export function PromptInput({
                 {currentModel?.label ?? "Choose model"}
               </span>
             </button>
-            {modelsOpen ? (
-              <div className="absolute bottom-full left-0 z-30 mb-2 max-h-64 w-56 overflow-y-auto rounded-xl border border-border/80 bg-background p-1.5 shadow-[0_18px_50px_rgba(0,0,0,0.35)]">
-                {models.map((option) => (
-                  <button
-                    key={option.value}
-                    type="button"
-                    disabled={option.disabled}
-                    onClick={() => setModel(option.value)}
-                    className={cn(
-                      "flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs outline-none transition-colors hover:bg-muted disabled:opacity-50",
-                      option.value === currentModelValue && "bg-muted/80 text-foreground",
-                    )}
-                  >
-                    {option.icon ? (
-                      <span className="grid size-4 shrink-0 place-items-center">
-                        {option.icon}
-                      </span>
-                    ) : null}
-                    <span className="truncate">{option.label}</span>
-                  </button>
-                ))}
-              </div>
-            ) : null}
+            <PromptMenu
+              open={modelsOpen}
+              anchorRef={modelsTriggerRef}
+              onClose={closeModels}
+              labelledBy={modelTriggerId}
+            >
+              {models.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  role="menuitem"
+                  disabled={option.disabled}
+                  onClick={() => setModel(option.value)}
+                  className={cn(
+                    "flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs outline-none transition-colors hover:bg-[#252525] disabled:opacity-50",
+                    option.value === currentModelValue &&
+                      "bg-[#252525] text-[#e4e4e4]",
+                  )}
+                >
+                  {option.icon ? (
+                    <span className="grid size-4 shrink-0 place-items-center">
+                      {option.icon}
+                    </span>
+                  ) : null}
+                  <span className="truncate">{option.label}</span>
+                </button>
+              ))}
+            </PromptMenu>
           </div>
         ) : null}
 
         <button
           type={loading ? "button" : "submit"}
-          disabled={loading ? !onStop : !canSubmit}
-          aria-label={loading ? "Stop generating" : "Send prompt"}
+          disabled={loading ? !onStop || stopping : !canSubmit}
+          aria-label={
+            stopping ? "Stopping" : loading ? "Stop generating" : "Send prompt"
+          }
           onClick={loading ? onStop : undefined}
-          className="ml-auto grid size-8 place-items-center rounded-full bg-foreground text-background outline-none transition-opacity disabled:opacity-30 focus-visible:ring-2 focus-visible:ring-ring"
+          className="ml-auto grid size-8 place-items-center rounded-full bg-[#e4e4e4] text-[#141414] outline-none transition-opacity disabled:opacity-30 focus-visible:ring-2 focus-visible:ring-[#4d9fff]"
         >
           <AnimatePresence mode="wait" initial={false}>
             <motion.span
-              key={loading ? "stop" : "send"}
+              key={sendState}
               initial={reduce ? { opacity: 1 } : { opacity: 0, y: 3, scale: 0.8 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={reduce ? { opacity: 0 } : { opacity: 0, y: -3, scale: 0.8 }}
               transition={reduce ? { duration: 0 } : SPRING_SWAP}
               className="grid place-items-center"
             >
-              {loading ? (
+              {stopping ? (
+                <LoaderCircle className="size-3.5 animate-spin" strokeWidth={2} />
+              ) : loading ? (
                 <Square className="size-3.5 fill-current" strokeWidth={2} />
               ) : (
                 <ArrowUp className="size-4" strokeWidth={2.2} />
