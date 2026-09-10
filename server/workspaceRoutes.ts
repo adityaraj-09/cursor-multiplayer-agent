@@ -119,7 +119,6 @@ function listWorkspaceKeys(input: {
       hint: orgAnthropicKeyHint(input.orgId),
       canManage: input.canManage,
     },
-    ...personal,
   ];
 }
 
