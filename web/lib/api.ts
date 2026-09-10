@@ -698,6 +698,17 @@ export async function stopRoom(id: string): Promise<void> {
   }
 }
 
+export async function archiveRoom(id: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/rooms/${id}/archive`, {
+    method: "POST",
+    headers: await authHeaders(),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Failed to archive room");
+  }
+}
+
 export async function abortRoomRun(
   id: string,
   agentId?: string,

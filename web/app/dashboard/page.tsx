@@ -7,6 +7,7 @@ import RoomCard from "../../components/RoomCard";
 import UserMenu from "../../components/UserMenu";
 import { useAuth } from "../../components/AuthProvider";
 import {
+  archiveRoom,
   createOrg,
   fetchJoinableOrgs,
   fetchOrgs,
@@ -24,6 +25,7 @@ import { canManageOrg } from "../../../shared/orgs";
 import {
   MAX_BOARD_ROOMS,
   readBoardRoomIds,
+  removeBoardRoomId,
   writeBoardRoomIds,
 } from "../../lib/boardStorage";
 
@@ -42,6 +44,7 @@ export default function SessionsDashboard() {
   const [orgError, setOrgError] = useState("");
   const [busyOrg, setBusyOrg] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [archiveError, setArchiveError] = useState("");
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -160,6 +163,20 @@ export default function SessionsDashboard() {
     }
   };
 
+  const handleArchiveRoom = async (id: string) => {
+    setArchiveError("");
+    try {
+      await archiveRoom(id);
+      setRooms((prev) => prev.filter((room) => room.id !== id));
+      setSelectedIds(removeBoardRoomId(id));
+      setNotice("Session archived");
+    } catch (err) {
+      setArchiveError(
+        err instanceof Error ? err.message : "Failed to archive session",
+      );
+    }
+  };
+
   const activeOrg = orgs.find((o) => o.id === scope) || null;
   const createHref =
     scope === "personal" ? "/create" : `/create?org=${encodeURIComponent(scope)}`;
@@ -245,6 +262,21 @@ export default function SessionsDashboard() {
               onClick={() => setNotice(null)}
               className="shrink-0 text-[12px] text-[#6e6e6e] hover:text-[#e4e4e4] transition-colors"
               aria-label="Dismiss notice"
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
+        {archiveError && (
+          <div className="mb-5 flex items-start gap-3 rounded-md border border-[#3c2b2b] bg-[#1a1414] px-3.5 py-3">
+            <p className="flex-1 text-[13px] text-[#f07070] leading-5">
+              {archiveError}
+            </p>
+            <button
+              type="button"
+              onClick={() => setArchiveError("")}
+              className="shrink-0 text-[12px] text-[#6e6e6e] hover:text-[#e4e4e4] transition-colors"
+              aria-label="Dismiss archive error"
             >
               Dismiss
             </button>
@@ -403,6 +435,7 @@ export default function SessionsDashboard() {
                   room={room}
                   selectable
                   selected={selectedIds.includes(room.id)}
+                  onArchive={handleArchiveRoom}
                   onToggleSelect={(id) => {
                     setSelectedIds((prev) => {
                       const has = prev.includes(id);

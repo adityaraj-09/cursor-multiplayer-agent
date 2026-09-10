@@ -210,6 +210,7 @@ export interface RoomInfo {
   repoPath: string;
   agentCommand: string;
   participantCount: number;
+  /** active | stopped | archived */
   status: string;
   createdAt: number;
   runtime: AgentRuntime;

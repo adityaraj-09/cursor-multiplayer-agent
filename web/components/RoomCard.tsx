@@ -1,7 +1,9 @@
 "use client";
 
 import type { ReactNode } from "react";
+import { useState } from "react";
 import Link from "next/link";
+import { Archive } from "lucide-react";
 import type { RoomInfo } from "../../shared/events";
 
 interface RoomCardProps {
@@ -9,6 +11,7 @@ interface RoomCardProps {
   selectable?: boolean;
   selected?: boolean;
   onToggleSelect?: (id: string) => void;
+  onArchive?: (id: string) => Promise<void> | void;
 }
 
 export default function RoomCard({
@@ -16,13 +19,31 @@ export default function RoomCard({
   selectable,
   selected,
   onToggleSelect,
+  onArchive,
 }: RoomCardProps) {
+  const [archiving, setArchiving] = useState(false);
   const isActive = room.status === "active";
+  const canArchive = Boolean(onArchive && room.myCanManage);
   const timeAgo = getTimeAgo(room.createdAt);
   const target =
     room.runtime === "cloud"
       ? (room.repoUrl || "").replace("https://github.com/", "")
       : room.repoPath.replace(/^.*\/Projects\//, "~/Projects/");
+
+  const handleArchive = async () => {
+    if (!onArchive || archiving) return;
+    const label = room.name || "this session";
+    const ok = window.confirm(
+      `Archive “${label}”?\n\nIt will be stopped if still live and removed from your sessions list.`,
+    );
+    if (!ok) return;
+    setArchiving(true);
+    try {
+      await onArchive(room.id);
+    } finally {
+      setArchiving(false);
+    }
+  };
 
   return (
     <div
@@ -51,18 +72,32 @@ export default function RoomCard({
             {room.name}
           </Link>
         </div>
-        <span
-          className={`shrink-0 mt-0.5 flex items-center gap-1.5 text-[11px] ${
-            isActive ? "text-[#3ecf8e]" : "text-[#6e6e6e]"
-          }`}
-        >
+        <div className="flex items-center gap-1.5 shrink-0">
           <span
-            className={`w-1.5 h-1.5 rounded-full ${
-              isActive ? "bg-[#3ecf8e]" : "bg-[#6e6e6e]"
+            className={`mt-0.5 flex items-center gap-1.5 text-[11px] ${
+              isActive ? "text-[#3ecf8e]" : "text-[#6e6e6e]"
             }`}
-          />
-          {isActive ? "Live" : "Stopped"}
-        </span>
+          >
+            <span
+              className={`w-1.5 h-1.5 rounded-full ${
+                isActive ? "bg-[#3ecf8e]" : "bg-[#6e6e6e]"
+              }`}
+            />
+            {isActive ? "Live" : "Stopped"}
+          </span>
+          {canArchive && (
+            <button
+              type="button"
+              onClick={() => void handleArchive()}
+              disabled={archiving}
+              className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-transparent text-[#6e6e6e] hover:text-[#e4e4e4] hover:border-[#2b2b2b] hover:bg-[#141414] disabled:opacity-50"
+              title="Archive session"
+              aria-label={`Archive ${room.name}`}
+            >
+              <Archive className="h-3.5 w-3.5" strokeWidth={1.75} />
+            </button>
+          )}
+        </div>
       </div>
 
       <Link href={`/room/${room.id}`} className="block">
