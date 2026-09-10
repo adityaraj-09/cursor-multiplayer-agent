@@ -18,6 +18,12 @@ export type {
   AgentContextReceiptRow,
   IntegrationLockRow,
   IntegrationQueueRow,
+  IssueRow,
+  CreateIssueInput,
+  IssuePatch,
+  IssueAttachmentRow,
+  IssueSettingsRow,
+  IssueEventRow,
 } from "./sqlite.js";
 
 const url = process.env.DATABASE_URL ?? "";
@@ -180,3 +186,24 @@ export const updateMemoryEntry = backend.updateMemoryEntry;
 export const insertAgentContextReceipt = backend.insertAgentContextReceipt;
 export const listAgentContextReceipts = backend.listAgentContextReceipts;
 export const latestContextReceiptsByAgent = backend.latestContextReceiptsByAgent;
+
+export const createIssue = backend.createIssue;
+export const getIssue = backend.getIssue;
+export const listPersonalIssuesByUser = backend.listPersonalIssuesByUser;
+export const listIssuesByOrg = backend.listIssuesByOrg;
+export const deleteIssue = backend.deleteIssue;
+export const updateIssue = backend.updateIssue;
+export const listDueIssueCandidates = backend.listDueIssueCandidates;
+export const claimIssue = backend.claimIssue;
+export const countRunningIssues = backend.countRunningIssues;
+export const recoverStaleIssueLeases = backend.recoverStaleIssueLeases;
+export const heartbeatIssue = backend.heartbeatIssue;
+export const createIssueAttachment = backend.createIssueAttachment;
+export const listIssueAttachments = backend.listIssueAttachments;
+export const getIssueAttachment = backend.getIssueAttachment;
+export const deleteIssueAttachment = backend.deleteIssueAttachment;
+export const countIssueAttachments = backend.countIssueAttachments;
+export const getIssueSettings = backend.getIssueSettings;
+export const upsertIssueSettings = backend.upsertIssueSettings;
+export const insertIssueEvent = backend.insertIssueEvent;
+export const listIssueEvents = backend.listIssueEvents;

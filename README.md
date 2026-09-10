@@ -60,6 +60,7 @@ Copy `.env.example` to `.env`:
 | `CORS_ORIGIN` | | Comma-separated allowed browser origins in production |
 | `NEXT_PUBLIC_SOCKET_URL` | | Public API origin for Socket.IO |
 | `DATABASE_URL` | | Postgres URL; omit for SQLite |
+| `ISSUE_UPLOAD_DIR` | `data/issue-uploads` | Persistent issue attachment storage |
 
 ## Features
 
@@ -72,6 +73,7 @@ Copy `.env.example` to `.env`:
 - **Invites** — Host-managed invite links with max uses + expiry
 - **BYOK** — Per-user saved Cursor and Anthropic API keys
 - **Shared memory** — Room-scoped goals, decisions, constraints, discoveries, and handoffs, plus a budgeted repo map injected into every agent runtime
+- **Issues** — Linear-style tickets. After a configurable delay (default 10 minutes), a headless Cursor Cloud agent opens a PR and stores a markdown writeup in the database. These runs never create rooms and do not appear in Sessions.
 
 ## Design proposals
 

@@ -4,6 +4,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
+  CircleDot,
   LayoutGrid,
   Layers3,
   Menu,
@@ -78,6 +79,13 @@ export default function DashboardShell({
       <nav className="px-3 space-y-0.5">
         <NavItem href="/dashboard" active={pathname === "/dashboard"} icon={Layers3}>
           Sessions
+        </NavItem>
+        <NavItem
+          href="/issues"
+          active={pathname === "/issues" || pathname.startsWith("/issues/")}
+          icon={CircleDot}
+        >
+          Issues
         </NavItem>
         <NavItem href="/board" active={pathname === "/board"} icon={LayoutGrid}>
           Board

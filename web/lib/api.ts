@@ -16,6 +16,11 @@ import type {
   OrgMemberInfo,
   OrgRole,
 } from "../../shared/orgs";
+import type {
+  IssueInfo,
+  IssueSettingsInfo,
+  IssueAttachmentInfo,
+} from "../../shared/issues";
 
 export type { OrgInfo, OrgInviteInfo, OrgMemberInfo, OrgRole };
 
@@ -1399,6 +1404,188 @@ export async function captureHandoffDraft(
     body: JSON.stringify({ agentId, ...data }),
   });
   if (!res.ok) throw new Error(await parseApiError(res, "Failed to capture handoff"));
+  return res.json();
+}
+
+export type { IssueInfo, IssueSettingsInfo, IssueAttachmentInfo };
+
+export async function fetchIssues(opts?: {
+  orgId?: string | null;
+}): Promise<IssueInfo[]> {
+  const params = new URLSearchParams();
+  if (opts?.orgId) params.set("orgId", opts.orgId);
+  const qs = params.toString();
+  const res = await fetch(`${API_BASE}/issues${qs ? `?${qs}` : ""}`, {
+    headers: await authHeaders(),
+  });
+  if (!res.ok) throw new Error(await parseApiError(res, "Failed to fetch issues"));
+  return res.json();
+}
+
+export async function fetchIssue(id: string): Promise<IssueInfo> {
+  const res = await fetch(`${API_BASE}/issues/${encodeURIComponent(id)}`, {
+    headers: await authHeaders(),
+  });
+  if (!res.ok) throw new Error(await parseApiError(res, "Issue not found"));
+  return res.json();
+}
+
+export async function createIssue(data: {
+  title: string;
+  description?: string;
+  repoUrl: string;
+  startingRef?: string;
+  priority?: string;
+  pickupDelayMs?: number;
+  autoStart?: boolean;
+  modelId?: string;
+  orgId?: string | null;
+  attachments?: Array<{ name: string; mime?: string; data: string }>;
+}): Promise<IssueInfo> {
+  const res = await fetch(`${API_BASE}/issues`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(await authHeaders()),
+    },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error(await parseApiError(res, "Failed to create issue"));
+  return res.json();
+}
+
+export async function updateIssue(
+  id: string,
+  data: {
+    title?: string;
+    description?: string;
+    repoUrl?: string;
+    startingRef?: string;
+    priority?: string;
+    pickupDelayMs?: number;
+    modelId?: string;
+    writeupMd?: string;
+    status?: string;
+  },
+): Promise<IssueInfo> {
+  const res = await fetch(`${API_BASE}/issues/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+      ...(await authHeaders()),
+    },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error(await parseApiError(res, "Failed to update issue"));
+  return res.json();
+}
+
+export async function deleteIssue(id: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/issues/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+    headers: await authHeaders(),
+  });
+  if (!res.ok) throw new Error(await parseApiError(res, "Failed to delete issue"));
+}
+
+export async function queueIssue(
+  id: string,
+  data?: { pickupDelayMs?: number },
+): Promise<IssueInfo> {
+  const res = await fetch(`${API_BASE}/issues/${encodeURIComponent(id)}/queue`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(await authHeaders()),
+    },
+    body: JSON.stringify(data || {}),
+  });
+  if (!res.ok) throw new Error(await parseApiError(res, "Failed to queue issue"));
+  return res.json();
+}
+
+export async function runIssueNow(id: string): Promise<IssueInfo> {
+  const res = await fetch(`${API_BASE}/issues/${encodeURIComponent(id)}/run-now`, {
+    method: "POST",
+    headers: await authHeaders(),
+  });
+  if (!res.ok) throw new Error(await parseApiError(res, "Failed to start issue"));
+  return res.json();
+}
+
+export async function cancelIssue(id: string): Promise<IssueInfo> {
+  const res = await fetch(`${API_BASE}/issues/${encodeURIComponent(id)}/cancel`, {
+    method: "POST",
+    headers: await authHeaders(),
+  });
+  if (!res.ok) throw new Error(await parseApiError(res, "Failed to cancel issue"));
+  return res.json();
+}
+
+export async function retryIssue(
+  id: string,
+  data?: { pickupDelayMs?: number },
+): Promise<IssueInfo> {
+  const res = await fetch(`${API_BASE}/issues/${encodeURIComponent(id)}/retry`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(await authHeaders()),
+    },
+    body: JSON.stringify(data || {}),
+  });
+  if (!res.ok) throw new Error(await parseApiError(res, "Failed to retry issue"));
+  return res.json();
+}
+
+export async function fetchIssueSettings(opts?: {
+  orgId?: string | null;
+}): Promise<IssueSettingsInfo> {
+  const params = new URLSearchParams();
+  if (opts?.orgId && opts.orgId !== "personal") params.set("orgId", opts.orgId);
+  const qs = params.toString();
+  const res = await fetch(`${API_BASE}/issues/settings${qs ? `?${qs}` : ""}`, {
+    headers: await authHeaders(),
+  });
+  if (!res.ok) throw new Error(await parseApiError(res, "Failed to load issue settings"));
+  return res.json();
+}
+
+export async function updateIssueSettings(data: {
+  orgId?: string | null;
+  defaultPickupDelayMs?: number;
+  autoStart?: boolean;
+  modelId?: string;
+  maxConcurrent?: number;
+}): Promise<IssueSettingsInfo> {
+  const res = await fetch(`${API_BASE}/issues/settings`, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+      ...(await authHeaders()),
+    },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error(await parseApiError(res, "Failed to save issue settings"));
+  return res.json();
+}
+
+export async function uploadIssueAttachment(
+  issueId: string,
+  file: { name: string; mime?: string; data: string },
+): Promise<IssueAttachmentInfo> {
+  const res = await fetch(
+    `${API_BASE}/issues/${encodeURIComponent(issueId)}/attachments`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(await authHeaders()),
+      },
+      body: JSON.stringify(file),
+    },
+  );
+  if (!res.ok) throw new Error(await parseApiError(res, "Failed to upload attachment"));
   return res.json();
 }
 

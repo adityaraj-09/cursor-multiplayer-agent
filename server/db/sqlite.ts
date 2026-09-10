@@ -558,6 +558,69 @@ try {
   // ignore
 }
 
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS issues (
+      id TEXT PRIMARY KEY,
+      org_id TEXT,
+      creator_id TEXT NOT NULL REFERENCES users(id),
+      title TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      repo_url TEXT NOT NULL,
+      starting_ref TEXT NOT NULL DEFAULT 'main',
+      priority TEXT NOT NULL DEFAULT 'medium',
+      status TEXT NOT NULL DEFAULT 'queued',
+      pickup_delay_ms INTEGER NOT NULL,
+      run_after INTEGER NOT NULL,
+      started_at INTEGER,
+      finished_at INTEGER,
+      claimed_at INTEGER,
+      lease_until INTEGER,
+      cursor_agent_id TEXT,
+      model_id TEXT NOT NULL DEFAULT 'auto',
+      pr_url TEXT,
+      branch TEXT,
+      error TEXT,
+      writeup_md TEXT,
+      cancel_requested INTEGER NOT NULL DEFAULT 0,
+      attempt INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS issue_attachments (
+      id TEXT PRIMARY KEY,
+      issue_id TEXT NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      mime TEXT NOT NULL,
+      size INTEGER NOT NULL,
+      storage_path TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS issue_settings (
+      scope_key TEXT PRIMARY KEY,
+      default_pickup_delay_ms INTEGER NOT NULL DEFAULT 600000,
+      auto_start INTEGER NOT NULL DEFAULT 1,
+      model_id TEXT NOT NULL DEFAULT 'auto',
+      max_concurrent INTEGER NOT NULL DEFAULT 2,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS issue_events (
+      id TEXT PRIMARY KEY,
+      issue_id TEXT NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL,
+      message TEXT NOT NULL DEFAULT '',
+      created_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_issues_queue ON issues(status, run_after);
+    CREATE INDEX IF NOT EXISTS idx_issues_org ON issues(org_id, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_issues_creator ON issues(creator_id, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_issue_attachments_issue ON issue_attachments(issue_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_issue_events_issue ON issue_events(issue_id, created_at);
+  `);
+} catch {
+  // ignore
+}
+
 const stmts = {
   insertRoom: db.prepare(`
     INSERT INTO rooms (
@@ -1041,6 +1104,122 @@ const stmts = {
   `),
   listRoomPingAcks: db.prepare(`
     SELECT * FROM room_ping_acks WHERE ping_id = ? ORDER BY acked_at ASC
+  `),
+};
+
+const issueStmts = {
+  insertIssue: db.prepare(`
+    INSERT INTO issues (
+      id, org_id, creator_id, title, description, repo_url, starting_ref,
+      priority, status, pickup_delay_ms, run_after, started_at, finished_at,
+      claimed_at, lease_until, cursor_agent_id, model_id, pr_url, branch,
+      error, writeup_md, cancel_requested, attempt, created_at, updated_at
+    ) VALUES (
+      ?, ?, ?, ?, ?, ?, ?,
+      ?, ?, ?, ?, NULL, NULL,
+      NULL, NULL, NULL, ?, NULL, NULL,
+      NULL, NULL, 0, 0, ?, ?
+    )
+  `),
+  getIssue: db.prepare(`SELECT * FROM issues WHERE id = ?`),
+  listPersonalIssues: db.prepare(`
+    SELECT * FROM issues
+    WHERE creator_id = ? AND (org_id IS NULL OR org_id = '')
+    ORDER BY updated_at DESC
+  `),
+  listOrgIssues: db.prepare(`
+    SELECT * FROM issues WHERE org_id = ? ORDER BY updated_at DESC
+  `),
+  deleteIssue: db.prepare(`DELETE FROM issues WHERE id = ?`),
+  listDueIssueIds: db.prepare(`
+    SELECT id, org_id, creator_id FROM issues
+    WHERE status = 'queued' AND run_after <= ?
+    ORDER BY run_after ASC, created_at ASC
+    LIMIT 40
+  `),
+  claimIssue: db.prepare(`
+    UPDATE issues SET
+      status = 'running',
+      started_at = COALESCE(started_at, ?),
+      claimed_at = ?,
+      lease_until = ?,
+      cancel_requested = 0,
+      error = NULL,
+      attempt = attempt + 1,
+      updated_at = ?
+    WHERE id = ? AND status = 'queued'
+  `),
+  countRunningIssues: db.prepare(`
+    SELECT COUNT(*) AS c FROM issues
+    WHERE status = 'running'
+      AND (
+        (org_id IS NOT NULL AND org_id != '' AND org_id = ?)
+        OR ((org_id IS NULL OR org_id = '') AND creator_id = ?)
+      )
+  `),
+  recoverStaleToQueued: db.prepare(`
+    UPDATE issues SET
+      status = 'queued',
+      claimed_at = NULL,
+      lease_until = NULL,
+      error = 'Runner lease expired; requeued',
+      updated_at = ?
+    WHERE status = 'running'
+      AND lease_until IS NOT NULL
+      AND lease_until < ?
+      AND attempt < ?
+  `),
+  recoverStaleToFailed: db.prepare(`
+    UPDATE issues SET
+      status = 'failed',
+      finished_at = ?,
+      claimed_at = NULL,
+      lease_until = NULL,
+      error = 'Runner lease expired after too many attempts',
+      updated_at = ?
+    WHERE status = 'running'
+      AND lease_until IS NOT NULL
+      AND lease_until < ?
+      AND attempt >= ?
+  `),
+  heartbeatIssue: db.prepare(`
+    UPDATE issues SET lease_until = ?, updated_at = ?
+    WHERE id = ? AND status = 'running'
+  `),
+  insertAttachment: db.prepare(`
+    INSERT INTO issue_attachments (id, issue_id, name, mime, size, storage_path, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `),
+  listAttachments: db.prepare(`
+    SELECT * FROM issue_attachments WHERE issue_id = ? ORDER BY created_at ASC
+  `),
+  getAttachment: db.prepare(`
+    SELECT * FROM issue_attachments WHERE issue_id = ? AND id = ?
+  `),
+  deleteAttachment: db.prepare(`
+    DELETE FROM issue_attachments WHERE issue_id = ? AND id = ?
+  `),
+  countAttachments: db.prepare(`
+    SELECT COUNT(*) AS c FROM issue_attachments WHERE issue_id = ?
+  `),
+  getSettings: db.prepare(`SELECT * FROM issue_settings WHERE scope_key = ?`),
+  upsertSettings: db.prepare(`
+    INSERT INTO issue_settings (
+      scope_key, default_pickup_delay_ms, auto_start, model_id, max_concurrent, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(scope_key) DO UPDATE SET
+      default_pickup_delay_ms = excluded.default_pickup_delay_ms,
+      auto_start = excluded.auto_start,
+      model_id = excluded.model_id,
+      max_concurrent = excluded.max_concurrent,
+      updated_at = excluded.updated_at
+  `),
+  insertEvent: db.prepare(`
+    INSERT INTO issue_events (id, issue_id, kind, message, created_at)
+    VALUES (?, ?, ?, ?, ?)
+  `),
+  listEvents: db.prepare(`
+    SELECT * FROM issue_events WHERE issue_id = ? ORDER BY created_at ASC
   `),
 };
 
@@ -2684,6 +2863,354 @@ export function latestContextReceiptsByAgent(
     out.push(row);
   }
   return out;
+}
+
+export interface IssueRow {
+  id: string;
+  org_id: string | null;
+  creator_id: string;
+  title: string;
+  description: string;
+  repo_url: string;
+  starting_ref: string;
+  priority: string;
+  status: string;
+  pickup_delay_ms: number;
+  run_after: number;
+  started_at: number | null;
+  finished_at: number | null;
+  claimed_at: number | null;
+  lease_until: number | null;
+  cursor_agent_id: string | null;
+  model_id: string;
+  pr_url: string | null;
+  branch: string | null;
+  error: string | null;
+  writeup_md: string | null;
+  cancel_requested: number;
+  attempt: number;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface CreateIssueInput {
+  id: string;
+  orgId?: string | null;
+  creatorId: string;
+  title: string;
+  description?: string;
+  repoUrl: string;
+  startingRef?: string;
+  priority?: string;
+  status: string;
+  pickupDelayMs: number;
+  runAfter: number;
+  modelId?: string;
+}
+
+export interface IssuePatch {
+  title?: string;
+  description?: string;
+  repoUrl?: string;
+  startingRef?: string;
+  priority?: string;
+  status?: string;
+  pickupDelayMs?: number;
+  runAfter?: number;
+  startedAt?: number | null;
+  finishedAt?: number | null;
+  claimedAt?: number | null;
+  leaseUntil?: number | null;
+  cursorAgentId?: string | null;
+  modelId?: string;
+  prUrl?: string | null;
+  branch?: string | null;
+  error?: string | null;
+  writeupMd?: string | null;
+  cancelRequested?: boolean;
+  attempt?: number;
+}
+
+export interface IssueAttachmentRow {
+  id: string;
+  issue_id: string;
+  name: string;
+  mime: string;
+  size: number;
+  storage_path: string;
+  created_at: number;
+}
+
+export interface IssueSettingsRow {
+  scope_key: string;
+  default_pickup_delay_ms: number;
+  auto_start: number;
+  model_id: string;
+  max_concurrent: number;
+  updated_at: number;
+}
+
+export interface IssueEventRow {
+  id: string;
+  issue_id: string;
+  kind: string;
+  message: string;
+  created_at: number;
+}
+
+export function createIssue(input: CreateIssueInput): IssueRow {
+  const now = Date.now();
+  issueStmts.insertIssue.run(
+    input.id,
+    input.orgId?.trim() || null,
+    input.creatorId,
+    input.title,
+    input.description ?? "",
+    input.repoUrl,
+    input.startingRef?.trim() || "main",
+    input.priority || "medium",
+    input.status,
+    input.pickupDelayMs,
+    input.runAfter,
+    input.modelId?.trim() || "auto",
+    now,
+    now,
+  );
+  return issueStmts.getIssue.get(input.id) as IssueRow;
+}
+
+export function getIssue(id: string): IssueRow | undefined {
+  return issueStmts.getIssue.get(id) as IssueRow | undefined;
+}
+
+export function listPersonalIssuesByUser(userId: string): IssueRow[] {
+  return issueStmts.listPersonalIssues.all(userId) as IssueRow[];
+}
+
+export function listIssuesByOrg(orgId: string): IssueRow[] {
+  return issueStmts.listOrgIssues.all(orgId) as IssueRow[];
+}
+
+export function deleteIssue(id: string): boolean {
+  return issueStmts.deleteIssue.run(id).changes > 0;
+}
+
+export function updateIssue(id: string, patch: IssuePatch): IssueRow | undefined {
+  const current = getIssue(id);
+  if (!current) return undefined;
+  const next = {
+    title: patch.title ?? current.title,
+    description: patch.description ?? current.description,
+    repo_url: patch.repoUrl ?? current.repo_url,
+    starting_ref: patch.startingRef ?? current.starting_ref,
+    priority: patch.priority ?? current.priority,
+    status: patch.status ?? current.status,
+    pickup_delay_ms: patch.pickupDelayMs ?? current.pickup_delay_ms,
+    run_after: patch.runAfter ?? current.run_after,
+    started_at:
+      patch.startedAt !== undefined ? patch.startedAt : current.started_at,
+    finished_at:
+      patch.finishedAt !== undefined ? patch.finishedAt : current.finished_at,
+    claimed_at:
+      patch.claimedAt !== undefined ? patch.claimedAt : current.claimed_at,
+    lease_until:
+      patch.leaseUntil !== undefined ? patch.leaseUntil : current.lease_until,
+    cursor_agent_id:
+      patch.cursorAgentId !== undefined
+        ? patch.cursorAgentId
+        : current.cursor_agent_id,
+    model_id: patch.modelId ?? current.model_id,
+    pr_url: patch.prUrl !== undefined ? patch.prUrl : current.pr_url,
+    branch: patch.branch !== undefined ? patch.branch : current.branch,
+    error: patch.error !== undefined ? patch.error : current.error,
+    writeup_md:
+      patch.writeupMd !== undefined ? patch.writeupMd : current.writeup_md,
+    cancel_requested:
+      patch.cancelRequested === undefined
+        ? current.cancel_requested
+        : patch.cancelRequested
+          ? 1
+          : 0,
+    attempt: patch.attempt ?? current.attempt,
+    updated_at: Date.now(),
+  };
+  db.prepare(
+    `UPDATE issues SET
+      title = ?, description = ?, repo_url = ?, starting_ref = ?, priority = ?,
+      status = ?, pickup_delay_ms = ?, run_after = ?, started_at = ?, finished_at = ?,
+      claimed_at = ?, lease_until = ?, cursor_agent_id = ?, model_id = ?,
+      pr_url = ?, branch = ?, error = ?, writeup_md = ?, cancel_requested = ?,
+      attempt = ?, updated_at = ?
+    WHERE id = ?`,
+  ).run(
+    next.title,
+    next.description,
+    next.repo_url,
+    next.starting_ref,
+    next.priority,
+    next.status,
+    next.pickup_delay_ms,
+    next.run_after,
+    next.started_at,
+    next.finished_at,
+    next.claimed_at,
+    next.lease_until,
+    next.cursor_agent_id,
+    next.model_id,
+    next.pr_url,
+    next.branch,
+    next.error,
+    next.writeup_md,
+    next.cancel_requested,
+    next.attempt,
+    next.updated_at,
+    id,
+  );
+  return getIssue(id);
+}
+
+export function listDueIssueCandidates(now: number): Array<{
+  id: string;
+  org_id: string | null;
+  creator_id: string;
+}> {
+  return issueStmts.listDueIssueIds.all(now) as Array<{
+    id: string;
+    org_id: string | null;
+    creator_id: string;
+  }>;
+}
+
+export function claimIssue(
+  id: string,
+  now: number,
+  leaseUntil: number,
+): IssueRow | undefined {
+  const result = issueStmts.claimIssue.run(now, now, leaseUntil, now, id);
+  if (result.changes === 0) return undefined;
+  return getIssue(id);
+}
+
+export function countRunningIssues(input: {
+  orgId?: string | null;
+  creatorId: string;
+}): number {
+  const orgId = input.orgId?.trim() || "";
+  const row = issueStmts.countRunningIssues.get(orgId, input.creatorId) as {
+    c: number;
+  };
+  return row?.c ?? 0;
+}
+
+export function recoverStaleIssueLeases(
+  now: number,
+  maxAttempts: number,
+): void {
+  issueStmts.recoverStaleToQueued.run(now, now, maxAttempts);
+  issueStmts.recoverStaleToFailed.run(now, now, now, maxAttempts);
+}
+
+export function heartbeatIssue(id: string, leaseUntil: number): void {
+  issueStmts.heartbeatIssue.run(leaseUntil, Date.now(), id);
+}
+
+export function createIssueAttachment(input: {
+  id: string;
+  issueId: string;
+  name: string;
+  mime: string;
+  size: number;
+  storagePath: string;
+}): IssueAttachmentRow {
+  const now = Date.now();
+  issueStmts.insertAttachment.run(
+    input.id,
+    input.issueId,
+    input.name,
+    input.mime,
+    input.size,
+    input.storagePath,
+    now,
+  );
+  return issueStmts.getAttachment.get(
+    input.issueId,
+    input.id,
+  ) as IssueAttachmentRow;
+}
+
+export function listIssueAttachments(issueId: string): IssueAttachmentRow[] {
+  return issueStmts.listAttachments.all(issueId) as IssueAttachmentRow[];
+}
+
+export function getIssueAttachment(
+  issueId: string,
+  attachmentId: string,
+): IssueAttachmentRow | undefined {
+  return issueStmts.getAttachment.get(issueId, attachmentId) as
+    | IssueAttachmentRow
+    | undefined;
+}
+
+export function deleteIssueAttachment(
+  issueId: string,
+  attachmentId: string,
+): boolean {
+  return issueStmts.deleteAttachment.run(issueId, attachmentId).changes > 0;
+}
+
+export function countIssueAttachments(issueId: string): number {
+  const row = issueStmts.countAttachments.get(issueId) as { c: number };
+  return row?.c ?? 0;
+}
+
+export function getIssueSettings(scopeKey: string): IssueSettingsRow | undefined {
+  return issueStmts.getSettings.get(scopeKey) as IssueSettingsRow | undefined;
+}
+
+export function upsertIssueSettings(input: {
+  scopeKey: string;
+  defaultPickupDelayMs: number;
+  autoStart: boolean;
+  modelId: string;
+  maxConcurrent: number;
+}): IssueSettingsRow {
+  const now = Date.now();
+  issueStmts.upsertSettings.run(
+    input.scopeKey,
+    input.defaultPickupDelayMs,
+    input.autoStart ? 1 : 0,
+    input.modelId,
+    input.maxConcurrent,
+    now,
+  );
+  return issueStmts.getSettings.get(input.scopeKey) as IssueSettingsRow;
+}
+
+export function insertIssueEvent(input: {
+  id: string;
+  issueId: string;
+  kind: string;
+  message?: string;
+}): IssueEventRow {
+  const now = Date.now();
+  issueStmts.insertEvent.run(
+    input.id,
+    input.issueId,
+    input.kind,
+    input.message ?? "",
+    now,
+  );
+  return {
+    id: input.id,
+    issue_id: input.issueId,
+    kind: input.kind,
+    message: input.message ?? "",
+    created_at: now,
+  };
+}
+
+export function listIssueEvents(issueId: string): IssueEventRow[] {
+  return issueStmts.listEvents.all(issueId) as IssueEventRow[];
 }
 
 export function migrateAgentsV1(): void {
