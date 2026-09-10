@@ -98,8 +98,8 @@ export default function WorkspaceKeysCard({
         <div>
           <h2 className="text-[15px] font-medium text-[#e4e4e4]">API keys</h2>
           <p className="text-[12px] text-[#6e6e6e] mt-0.5">
-            Keys added for this workspace. Team keys are shared; your personal
-            keys stay on your account and are listed here too.
+            Keys for this workspace only. Personal keys stay in Personal;
+            team keys stay on the team.
           </p>
         </div>
       </div>

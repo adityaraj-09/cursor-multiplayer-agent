@@ -91,6 +91,18 @@ describe("per-workspace GitHub storage", () => {
     );
   });
 
+  it("lists only team keys for an org workspace", async () => {
+    const { listWorkspaceKeys } = await import("../server/workspaceRoutes.js");
+    const userId = `user_keys_${randomUUID()}`;
+    const keys = listWorkspaceKeys({
+      userId,
+      orgId: "org_team",
+      canManage: true,
+    });
+    expect(keys.every((key) => key.owner === "team")).toBe(true);
+    expect(keys.some((key) => key.id.startsWith("user-"))).toBe(false);
+  });
+
   it("expires OAuth state after consume", () => {
     const userId = `user_oauth_${randomUUID()}`;
     const state = github.createGithubOAuthState({ userId, orgId: "org_1" });
