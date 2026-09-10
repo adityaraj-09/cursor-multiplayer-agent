@@ -183,7 +183,11 @@ export type RoomContextValue = {
   handleApprovalModeChange: (mode: ApprovalMode) => Promise<void>;
   handleAutoMemoryChange: (mode: AutoMemoryMode) => Promise<void>;
   handleTogglePlanMode: () => Promise<void>;
-  handleDecideApproval: (requestId: string, approved: boolean) => void;
+  handleDecideApproval: (
+    requestId: string,
+    approved: boolean,
+    alwaysAllow?: boolean,
+  ) => void;
   handleExport: () => Promise<void>;
   handleAnswerQuestions: (
     messageId: string,

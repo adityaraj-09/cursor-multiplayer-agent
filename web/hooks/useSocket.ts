@@ -66,7 +66,7 @@ interface UseSocketReturn {
   requestDrive: (agentId?: string) => void;
   releaseDrive: (agentId?: string) => void;
   grantDrive: (toSocketId: string, agentId?: string) => void;
-  decideApproval: (requestId: string, approved: boolean) => void;
+  decideApproval: (requestId: string, approved: boolean, alwaysAllow?: boolean) => void;
   approvePlan: (messageId: string, agentId?: string) => void;
   dismissPlan: (messageId: string) => void;
   revertChanges: (opts?: {
@@ -719,8 +719,13 @@ export function useSocket(
   }, []);
 
   const decideApproval = useCallback(
-    (requestId: string, approved: boolean) => {
-      socketRef.current?.emit("tool-approval-decision", requestId, approved);
+    (requestId: string, approved: boolean, alwaysAllow?: boolean) => {
+      socketRef.current?.emit(
+        "tool-approval-decision",
+        requestId,
+        approved,
+        alwaysAllow ? { alwaysAllow: true } : undefined,
+      );
     },
     [],
   );

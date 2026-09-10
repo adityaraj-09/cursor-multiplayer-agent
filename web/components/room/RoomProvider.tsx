@@ -772,9 +772,9 @@ export default function RoomProvider({
   }, [canManage, selectedAgentId, selectedAgent, roomId]);
 
   const handleDecideApproval = useCallback(
-    (requestId: string, approved: boolean) => {
+    (requestId: string, approved: boolean, alwaysAllow?: boolean) => {
       setDecidingApprovalId(requestId);
-      decideApproval(requestId, approved);
+      decideApproval(requestId, approved, alwaysAllow);
       window.setTimeout(() => setDecidingApprovalId(null), 800);
     },
     [decideApproval],

@@ -12,14 +12,18 @@
     "@clerk/nextjs": "^7.6.1",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
+    "clsx": "^2.1.1",
     "diff2html": "^3.4.56",
     "lucide-react": "^1.28.0",
+    "motion": "^13.2.0",
     "next": "16.2.12",
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1",
-    "socket.io-client": "^4.8.3"
+    "socket.io-client": "^4.8.3",
+    "tailwind-merge": "^3.6.0",
+    "thinking-orbs": "^0.3.1"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",

@@ -24,6 +24,13 @@
 @theme {
   --font-sans: Inter, ui-sans-serif, system-ui, sans-serif;
   --font-serif: "P22 Mackinac W01 Book", Georgia, serif;
+  --color-background: #141414;
+  --color-foreground: #e4e4e4;
+  --color-muted: #1a1a1a;
+  --color-muted-foreground: #8a8a8a;
+  --color-border: #2b2b2b;
+  --color-ring: #4d9fff;
+  --color-destructive: #f07070;
 }
 
 html {

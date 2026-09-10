@@ -13,6 +13,7 @@ if (process.env.VERCEL && !API_URL) {
 }
 
 const nextConfig: NextConfig = {
+  transpilePackages: ["thinking-orbs"],
   // standalone is for Docker; Vercel uses its own bundler
   ...(process.env.VERCEL ? {} : { output: "standalone" as const }),
   async rewrites() {
