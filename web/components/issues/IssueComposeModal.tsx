@@ -5,6 +5,7 @@ import Link from "next/link";
 import {
   ChevronDown,
   Circle,
+  FileText,
   Flag,
   GitBranch,
   Paperclip,
@@ -54,6 +55,7 @@ export default function IssueComposeModal({
   const [repos, setRepos] = useState<WorkspaceGithubRepo[]>([]);
   const [github, setGithub] = useState<WorkspaceGithubInfo | null>(null);
   const [files, setFiles] = useState<File[]>([]);
+  const [filePreviews, setFilePreviews] = useState<Record<string, string>>({});
   const [openMenu, setOpenMenu] = useState<"pickup" | "priority" | "repo" | null>(
     null,
   );
@@ -64,6 +66,22 @@ export default function IssueComposeModal({
   useEffect(() => {
     titleRef.current?.focus();
   }, []);
+
+  useEffect(() => {
+    const next: Record<string, string> = {};
+    const urls: string[] = [];
+    for (const file of files) {
+      if (!file.type.startsWith("image/")) continue;
+      const key = `${file.name}:${file.size}:${file.lastModified}`;
+      const url = URL.createObjectURL(file);
+      urls.push(url);
+      next[key] = url;
+    }
+    setFilePreviews(next);
+    return () => {
+      for (const url of urls) URL.revokeObjectURL(url);
+    };
+  }, [files]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -133,6 +151,32 @@ export default function IssueComposeModal({
     if (pickup === "now") return 0;
     return delayMs;
   }, [pickup, delayMs]);
+
+  const fileKey = (file: File) =>
+    `${file.name}:${file.size}:${file.lastModified}`;
+
+  const addFiles = (incoming: FileList | File[]) => {
+    const list = Array.from(incoming);
+    if (list.length === 0) return;
+    setFiles((prev) => {
+      const seen = new Set(prev.map(fileKey));
+      const merged = [...prev];
+      for (const file of list) {
+        const key = fileKey(file);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        merged.push(file);
+        if (merged.length >= 8) break;
+      }
+      return merged.slice(0, 8);
+    });
+    if (fileRef.current) fileRef.current.value = "";
+  };
+
+  const removeFile = (index: number) => {
+    setFiles((prev) => prev.filter((_, i) => i !== index));
+    if (fileRef.current) fileRef.current.value = "";
+  };
 
   const submit = async () => {
     setError("");
@@ -332,57 +376,98 @@ export default function IssueComposeModal({
           <p className="px-4 pb-2 text-[12px] text-[#f07070]">{error}</p>
         )}
 
-        <div className="flex items-center justify-between gap-3 border-t border-[#2b2b2b] px-4 py-3">
-          <div className="flex items-center gap-2 min-w-0">
-            <input
-              ref={fileRef}
-              type="file"
-              multiple
-              accept="image/*,.pdf,.txt,.md,.json"
-              className="hidden"
-              onChange={(e) => setFiles(Array.from(e.target.files || []))}
-            />
-            <button
-              type="button"
-              onClick={() => fileRef.current?.click()}
-              className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[#6e6e6e] hover:text-[#e4e4e4]"
-              aria-label="Attach files"
-            >
-              <Paperclip className="h-4 w-4" strokeWidth={1.75} />
-            </button>
-            {files.length > 0 && (
-              <span className="text-[11px] text-[#6e6e6e] truncate">
-                {files.length} file{files.length === 1 ? "" : "s"}
-              </span>
-            )}
-          </div>
-          <div className="flex items-center gap-3">
-            <label className="flex items-center gap-2 text-[12px] text-[#a0a0a0]">
-              <span>Create more</span>
+        <div className="border-t border-[#2b2b2b] px-4 py-3">
+          {files.length > 0 && (
+            <div className="mb-3 flex flex-wrap gap-2">
+              {files.map((file, index) => {
+                const key = fileKey(file);
+                const preview = filePreviews[key];
+                return (
+                  <div
+                    key={key}
+                    className="relative flex items-center gap-1.5 rounded-lg border border-[#2b2b2b] bg-[#151515] pl-1.5 pr-6 py-1 max-w-[200px]"
+                  >
+                    {preview ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={preview}
+                        alt=""
+                        className="h-8 w-8 rounded object-cover"
+                      />
+                    ) : (
+                      <FileText
+                        className="h-4 w-4 shrink-0 text-[#a0a0a0]"
+                        strokeWidth={1.75}
+                      />
+                    )}
+                    <span className="min-w-0 truncate text-[11px] text-[#c8c8c8]">
+                      {file.name}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => removeFile(index)}
+                      className="absolute right-1 top-1 h-4 w-4 rounded text-[#6e6e6e] hover:text-[#e4e4e4]"
+                      aria-label={`Remove ${file.name}`}
+                    >
+                      <X className="h-3.5 w-3.5" strokeWidth={2} />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2 min-w-0">
+              <input
+                ref={fileRef}
+                type="file"
+                multiple
+                accept="image/*,.pdf,.txt,.md,.json"
+                className="hidden"
+                onChange={(e) => addFiles(e.target.files || [])}
+              />
               <button
                 type="button"
-                role="switch"
-                aria-checked={createMore}
-                onClick={() => setCreateMore((v) => !v)}
-                className={`relative h-5 w-9 rounded-full transition-colors ${
-                  createMore ? "bg-[#5e6ad2]" : "bg-[#3a3a3a]"
-                }`}
+                onClick={() => fileRef.current?.click()}
+                className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[#6e6e6e] hover:text-[#e4e4e4]"
+                aria-label="Attach files"
               >
-                <span
-                  className={`absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-white transition-transform ${
-                    createMore ? "translate-x-4" : "translate-x-0"
-                  }`}
-                />
+                <Paperclip className="h-4 w-4" strokeWidth={1.75} />
               </button>
-            </label>
-            <button
-              type="button"
-              disabled={creating}
-              onClick={() => void submit()}
-              className="h-8 px-3 rounded-md bg-[#5e6ad2] text-white text-[13px] font-medium hover:bg-[#6b76db] disabled:opacity-50"
-            >
-              {creating ? "Creating…" : "Create issue"}
-            </button>
+              {files.length > 0 && (
+                <span className="text-[11px] text-[#6e6e6e] truncate">
+                  {files.length}/8 attached
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-3">
+              <label className="flex items-center gap-2 text-[12px] text-[#a0a0a0]">
+                <span>Create more</span>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={createMore}
+                  onClick={() => setCreateMore((v) => !v)}
+                  className={`relative h-5 w-9 rounded-full transition-colors ${
+                    createMore ? "bg-[#5e6ad2]" : "bg-[#3a3a3a]"
+                  }`}
+                >
+                  <span
+                    className={`absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-white transition-transform ${
+                      createMore ? "translate-x-4" : "translate-x-0"
+                    }`}
+                  />
+                </button>
+              </label>
+              <button
+                type="button"
+                disabled={creating}
+                onClick={() => void submit()}
+                className="h-8 px-3 rounded-md bg-[#5e6ad2] text-white text-[13px] font-medium hover:bg-[#6b76db] disabled:opacity-50"
+              >
+                {creating ? "Creating…" : "Create issue"}
+              </button>
+            </div>
           </div>
         </div>
       </div>

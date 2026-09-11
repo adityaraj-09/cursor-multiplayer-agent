@@ -5,7 +5,6 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import DashboardShell from "../../../components/DashboardShell";
 import Markdown from "../../../components/Markdown";
-import IssueAgentTranscript from "../../../components/issues/IssueAgentTranscript";
 import { useAuth } from "../../../components/AuthProvider";
 import {
   cancelIssue,
@@ -392,12 +391,6 @@ export default function IssueDetailPage() {
                 </div>
               )}
             </section>
-
-            <IssueAgentTranscript
-              issueId={issue.id}
-              cursorAgentId={issue.cursorAgentId}
-              live={issue.status === "running"}
-            />
 
             <section className="mt-4 rounded-xl border border-[#2b2b2b] bg-[#1a1a1a] p-4">
               <div className="flex items-center justify-between mb-2">
