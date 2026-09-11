@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   conversationTurnsToItems,
   emptyIssueTranscript,
+  transcriptItemsFromListedRuns,
 } from "../shared/issueTranscript.js";
 
 describe("conversationTurnsToItems", () => {
@@ -115,6 +116,17 @@ describe("conversationTurnsToItems", () => {
       status: "error",
       detail: "permission denied",
     });
+  });
+
+  it("builds a transcript from listRuns metadata without conversation replay", () => {
+    const items = transcriptItemsFromListedRuns([
+      { id: "run_a", status: "finished", result: "Opened a PR." },
+      { id: "run_b", status: "error", result: null, error: "boom" },
+      { id: "run_c", status: "running", result: null },
+    ]);
+    expect(items.map((item) => item.kind)).toEqual(["assistant", "error", "tool"]);
+    expect(items[0]?.text).toBe("Opened a PR.");
+    expect(items[2]?.status).toBe("running");
   });
 
   it("returns an empty transcript helper without Cursor fields invented", () => {

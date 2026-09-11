@@ -1,14 +1,13 @@
 import { Agent, type Run } from "@cursor/sdk";
 import {
-  conversationTurnsToItems,
   emptyIssueTranscript,
+  transcriptItemsFromListedRuns,
   type IssueTranscript,
-  type IssueTranscriptItem,
   type IssueTranscriptRun,
 } from "../shared/issueTranscript.js";
-import { logError } from "./logger.js";
+import { log } from "./logger.js";
 
-const MAX_RUNS = 25;
+const MAX_RUNS = 8;
 
 function toRunInfo(run: Run): IssueTranscriptRun {
   return {
@@ -21,34 +20,13 @@ function toRunInfo(run: Run): IssueTranscriptRun {
   };
 }
 
-function fallbackItems(run: Run): IssueTranscriptItem[] {
-  const items: IssueTranscriptItem[] = [];
-  const result = run.result?.trim();
-  if (result) {
-    items.push({
-      id: `${run.id}:result`,
-      kind: "assistant",
-      text: result,
-      runId: run.id,
-    });
-  }
-  if (run.status === "error" && run.error?.message) {
-    items.push({
-      id: `${run.id}:error`,
-      kind: "error",
-      text: run.error.message,
-      runId: run.id,
-    });
-  }
-  return items;
-}
-
 /** Pull Cursor cloud run history for a stored `cursorAgentId`. */
 export async function loadIssueTranscript(input: {
   cursorAgentId: string;
   apiKey: string;
   live: boolean;
 }): Promise<IssueTranscript> {
+  const started = Date.now();
   const listed = await Agent.listRuns(input.cursorAgentId, {
     runtime: "cloud",
     apiKey: input.apiKey,
@@ -61,50 +39,21 @@ export async function loadIssueTranscript(input: {
     if (ta !== tb) return ta - tb;
     return a.id.localeCompare(b.id);
   });
+  const runInfos = runs.map(toRunInfo);
 
-  const items: IssueTranscriptItem[] = [];
-  for (const run of runs) {
-    if (!run.supports("conversation")) {
-      items.push(...fallbackItems(run));
-      continue;
-    }
-    try {
-      const turns = await run.conversation();
-      const converted = conversationTurnsToItems(run.id, turns);
-      if (converted.length > 0) {
-        items.push(...converted);
-      } else {
-        items.push(...fallbackItems(run));
-      }
-    } catch (err) {
-      logError("issues", "transcript conversation failed", {
-        runId: run.id,
-        err,
-      });
-      const fallback = fallbackItems(run);
-      if (fallback.length) {
-        items.push(...fallback);
-      } else {
-        items.push({
-          id: `${run.id}:error`,
-          kind: "error",
-          text:
-            err instanceof Error
-              ? err.message
-              : "Failed to load this Cursor run",
-          runId: run.id,
-        });
-      }
-    }
-  }
+  log("issues", "transcript listed", {
+    cursorAgentId: input.cursorAgentId,
+    runs: runInfos.length,
+    ms: Date.now() - started,
+  });
 
   return {
     cursorAgentId: input.cursorAgentId,
     available: true,
-    live: input.live || runs.some((run) => run.status === "running"),
+    live: input.live || runInfos.some((run) => run.status === "running"),
     error: null,
-    runs: runs.map(toRunInfo),
-    items,
+    runs: runInfos,
+    items: transcriptItemsFromListedRuns(runInfos),
   };
 }
 

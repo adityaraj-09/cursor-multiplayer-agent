@@ -29,6 +29,7 @@ import {
   canCancelIssue,
   canQueueIssue,
   canRetryIssue,
+  issueStatusIsActive,
   issueStatusLabel,
   type IssueAttachmentInfo,
 } from "../../../../shared/issues";
@@ -81,11 +82,27 @@ export default function IssueDetailPage() {
   useEffect(() => {
     if (authLoading || !user || !id) return;
     let cancelled = false;
-    const load = () =>
+    let inFlight = false;
+    const load = () => {
+      if (inFlight) return;
+      inFlight = true;
       fetchIssue(id)
         .then((next) => {
           if (cancelled) return;
-          setIssue(next);
+          setIssue((prev) => {
+            if (
+              prev &&
+              prev.updatedAt === next.updatedAt &&
+              prev.status === next.status &&
+              prev.writeupMd === next.writeupMd &&
+              prev.cursorAgentId === next.cursorAgentId &&
+              prev.prUrl === next.prUrl &&
+              prev.error === next.error
+            ) {
+              return prev;
+            }
+            return next;
+          });
           if (next.orgId) {
             setScope(next.orgId);
             writeSelectedWorkspace(next.orgId);
@@ -96,8 +113,17 @@ export default function IssueDetailPage() {
           if (!cancelled) {
             setError(err instanceof Error ? err.message : "Issue not found");
           }
+        })
+        .finally(() => {
+          inFlight = false;
         });
+    };
     void load();
+    if (issue && !issueStatusIsActive(issue.status)) {
+      return () => {
+        cancelled = true;
+      };
+    }
     const interval = setInterval(() => {
       void load();
     }, 3000);
@@ -105,7 +131,7 @@ export default function IssueDetailPage() {
       cancelled = true;
       clearInterval(interval);
     };
-  }, [id, user, authLoading, editingWriteup]);
+  }, [id, user, authLoading, editingWriteup, issue?.status]);
 
   const attachmentKey = issue
     ? issue.attachments.map((att) => att.id).join(",")
