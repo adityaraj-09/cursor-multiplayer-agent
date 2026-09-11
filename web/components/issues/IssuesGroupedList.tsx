@@ -18,6 +18,7 @@ export type IssueListItem = {
   status: IssueStatus;
   priority: IssuePriority;
   repo?: string;
+  prUrl?: string;
   prLabel?: string;
   labels?: string[];
   assignee?: string;
@@ -65,6 +66,7 @@ export function issueInfoToRow(issue: IssueInfo): IssueListItem {
     status: issue.status,
     priority: issue.priority,
     repo: repoLabel(issue.repoUrl),
+    prUrl: issue.prUrl || undefined,
     prLabel: prLabel(issue.prUrl),
     labels: issue.status === "running" ? ["Working…"] : undefined,
     assignee: issue.creatorName || undefined,
@@ -77,7 +79,7 @@ export default function IssuesGroupedList({
   selectedId,
   onSelect,
   hideTags = false,
-  initiallyCollapsed = ["done", "cancelled"],
+  initiallyCollapsed = ["cancelled"],
 }: {
   items: IssueListItem[];
   selectedId?: string;
@@ -161,17 +163,18 @@ function IssueRow({
   onSelect?: (id: string) => void;
   hideTags?: boolean;
 }) {
-  const className = `group flex w-full items-center gap-2.5 px-3 h-9 text-left text-[13px] transition-colors ${
-    selected ? "bg-[#1e1e1e]" : "hover:bg-[#181818]"
-  }`;
+  const selectedBg = selected ? "bg-[#1e1e1e]" : "hover:bg-[#181818]";
+  const mainClassName = `group flex min-w-0 flex-1 items-center gap-2.5 h-9 text-left text-[13px] transition-colors ${
+    item.prUrl && item.prLabel ? "pl-3" : "px-3"
+  } ${selectedBg}`;
 
-  const body = (
+  const mainBody = (
     <>
       <PriorityBars priority={item.priority} />
       <StatusGlyph status={item.status} />
       <span className="min-w-0 flex-1 truncate text-[#e4e4e4]">{item.title}</span>
       <span className="hidden items-center gap-2 shrink-0 text-[12px] text-[#6e6e6e] sm:flex">
-        {item.prLabel && (
+        {item.prLabel && !item.prUrl && (
           <span className="inline-flex items-center gap-1">
             <GitPullRequest className="h-3 w-3 text-[#5a5a5a]" strokeWidth={1.75} />
             {item.prLabel}
@@ -194,21 +197,32 @@ function IssueRow({
     </>
   );
 
-  if (item.href && !onSelect) {
-    return (
-      <li>
-        <Link href={item.href} className={className}>
-          {body}
-        </Link>
-      </li>
+  const main =
+    item.href && !onSelect ? (
+      <Link href={item.href} className={mainClassName}>
+        {mainBody}
+      </Link>
+    ) : (
+      <button type="button" onClick={() => onSelect?.(item.id)} className={mainClassName}>
+        {mainBody}
+      </button>
     );
-  }
 
   return (
-    <li>
-      <button type="button" onClick={() => onSelect?.(item.id)} className={className}>
-        {body}
-      </button>
+    <li className="flex w-full items-stretch">
+      {main}
+      {item.prUrl && item.prLabel && (
+        <a
+          href={item.prUrl}
+          target="_blank"
+          rel="noreferrer"
+          className={`inline-flex h-9 shrink-0 items-center gap-1 pr-3 pl-1 text-[12px] text-[#a0a0a0] hover:text-[#e4e4e4] ${selectedBg}`}
+          title="Open pull request"
+        >
+          <GitPullRequest className="h-3 w-3 text-[#5a5a5a]" strokeWidth={1.75} />
+          <span className="hidden sm:inline">{item.prLabel}</span>
+        </a>
+      )}
     </li>
   );
 }
