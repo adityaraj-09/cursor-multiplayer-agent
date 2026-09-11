@@ -26,7 +26,13 @@ import {
   removeIssueAttachmentFiles,
   saveIssueUpload,
 } from "./issueAttachments.js";
-import { issueRunner, loadIssueSettings, settingsFromRow } from "./issueRunner.js";
+import {
+  issueRunner,
+  loadIssueSettings,
+  resolveIssueCursorKey,
+  settingsFromRow,
+} from "./issueRunner.js";
+import { loadIssueTranscript, transcriptUnavailable } from "./issueTranscript.js";
 import { log, logError } from "./logger.js";
 import {
   contentDispositionInline,
@@ -298,6 +304,58 @@ router.get("/:id", requireAuth, (req, res) => {
     return;
   }
   res.json(toIssueInfo(row, { includeEvents: true }));
+});
+
+router.get("/:id/transcript", requireAuth, async (req, res) => {
+  const id = routeParam(req.params.id);
+  const row = db.getIssue(id);
+  if (!row || !actorCanView(row, req.user!.id)) {
+    res.status(404).json({ error: "Issue not found" });
+    return;
+  }
+
+  const live = row.status === "running";
+  const cursorAgentId = row.cursor_agent_id?.trim() || null;
+  if (!cursorAgentId) {
+    res.json(transcriptUnavailable({ live, cursorAgentId: null }));
+    return;
+  }
+
+  let apiKey: string;
+  try {
+    apiKey = resolveIssueCursorKey(row);
+  } catch (err) {
+    res.json(
+      transcriptUnavailable({
+        cursorAgentId,
+        live,
+        error: err instanceof Error ? err.message : "No Cursor API key",
+      }),
+    );
+    return;
+  }
+
+  try {
+    res.json(
+      await loadIssueTranscript({
+        cursorAgentId,
+        apiKey,
+        live,
+      }),
+    );
+  } catch (err) {
+    logError("issues", "transcript fetch failed", { issueId: id, err });
+    res.json(
+      transcriptUnavailable({
+        cursorAgentId,
+        live,
+        error:
+          err instanceof Error
+            ? err.message
+            : "Failed to load Cursor run history",
+      }),
+    );
+  }
 });
 
 router.patch("/:id", requireAuth, (req, res) => {
