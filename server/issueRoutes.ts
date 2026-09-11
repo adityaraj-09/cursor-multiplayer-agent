@@ -33,6 +33,7 @@ import {
   settingsFromRow,
 } from "./issueRunner.js";
 import { loadIssueTranscript, transcriptUnavailable } from "./issueTranscript.js";
+import { parseStoredTranscriptItems } from "../shared/issueTranscript.js";
 import { log, logError } from "./logger.js";
 import {
   contentDispositionInline,
@@ -316,8 +317,26 @@ router.get("/:id/transcript", requireAuth, async (req, res) => {
 
   const live = row.status === "running";
   const cursorAgentId = row.cursor_agent_id?.trim() || null;
+  const cachedItems = parseStoredTranscriptItems(row.transcript_json);
   if (!cursorAgentId) {
-    res.json(transcriptUnavailable({ live, cursorAgentId: null }));
+    const items = cachedItems.length
+      ? cachedItems
+      : row.writeup_md?.trim()
+        ? [
+            {
+              id: "issue:writeup",
+              kind: "assistant" as const,
+              text: row.writeup_md,
+            },
+          ]
+        : [];
+    res.json(
+      transcriptUnavailable({
+        live,
+        cursorAgentId: null,
+        items,
+      }),
+    );
     return;
   }
 
@@ -330,19 +349,35 @@ router.get("/:id/transcript", requireAuth, async (req, res) => {
         cursorAgentId,
         live,
         error: err instanceof Error ? err.message : "No Cursor API key",
+        items: cachedItems,
       }),
     );
     return;
   }
 
   try {
-    res.json(
-      await loadIssueTranscript({
-        cursorAgentId,
-        apiKey,
-        live,
-      }),
-    );
+    const transcript = await loadIssueTranscript({
+      cursorAgentId,
+      apiKey,
+      live,
+      cachedItems,
+      writeupMd: row.writeup_md,
+      issueError: row.error,
+    });
+    if (
+      !live &&
+      transcript.items.length > 0 &&
+      cachedItems.length === 0
+    ) {
+      try {
+        db.updateIssue(id, {
+          transcriptJson: JSON.stringify(transcript.items),
+        });
+      } catch (err) {
+        logError("issues", "transcript cache failed", { issueId: id, err });
+      }
+    }
+    res.json(transcript);
   } catch (err) {
     logError("issues", "transcript fetch failed", { issueId: id, err });
     res.json(
@@ -353,6 +388,7 @@ router.get("/:id/transcript", requireAuth, async (req, res) => {
           err instanceof Error
             ? err.message
             : "Failed to load Cursor run history",
+        items: cachedItems,
       }),
     );
   }

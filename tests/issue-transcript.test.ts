@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  applyIssueStreamEvent,
   conversationTurnsToItems,
   emptyIssueTranscript,
+  parseStoredTranscriptItems,
   transcriptItemsFromListedRuns,
 } from "../shared/issueTranscript.js";
 
@@ -127,6 +129,35 @@ describe("conversationTurnsToItems", () => {
     expect(items.map((item) => item.kind)).toEqual(["assistant", "error", "tool"]);
     expect(items[0]?.text).toBe("Opened a PR.");
     expect(items[2]?.status).toBe("running");
+  });
+
+  it("parses stored transcript JSON and applies live stream events", () => {
+    const stored = parseStoredTranscriptItems(
+      JSON.stringify([
+        { id: "a", kind: "assistant", text: "Hello" },
+        { kind: "nope", text: "x" },
+      ]),
+    );
+    expect(stored).toEqual([{ id: "a", kind: "assistant", text: "Hello" }]);
+    let items = applyIssueStreamEvent([], {
+      kind: "user",
+      text: "Fix the button",
+      runId: "r1",
+    });
+    items = applyIssueStreamEvent(items, {
+      kind: "tool_start",
+      callId: "c1",
+      name: "grep",
+      detail: "onClick",
+      runId: "r1",
+    });
+    items = applyIssueStreamEvent(items, {
+      kind: "assistant",
+      text: "Done",
+      runId: "r1",
+    });
+    expect(items.map((item) => item.kind)).toEqual(["user", "tool", "assistant"]);
+    expect(items[1]?.status).toBe("running");
   });
 
   it("returns an empty transcript helper without Cursor fields invented", () => {

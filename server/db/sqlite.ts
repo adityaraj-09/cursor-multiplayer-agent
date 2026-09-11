@@ -314,6 +314,7 @@ const migrations = [
   `ALTER TABLE rooms ADD COLUMN integration_pr_url TEXT`,
   `ALTER TABLE rooms ADD COLUMN integration_agent_id TEXT`,
   `ALTER TABLE agents ADD COLUMN kind TEXT NOT NULL DEFAULT 'feature'`,
+  `ALTER TABLE issues ADD COLUMN transcript_json TEXT`,
 ];
 
 for (const sql of migrations) {
@@ -582,6 +583,7 @@ try {
       branch TEXT,
       error TEXT,
       writeup_md TEXT,
+      transcript_json TEXT,
       cancel_requested INTEGER NOT NULL DEFAULT 0,
       attempt INTEGER NOT NULL DEFAULT 0,
       created_at INTEGER NOT NULL,
@@ -2887,6 +2889,7 @@ export interface IssueRow {
   branch: string | null;
   error: string | null;
   writeup_md: string | null;
+  transcript_json: string | null;
   cancel_requested: number;
   attempt: number;
   created_at: number;
@@ -2927,6 +2930,7 @@ export interface IssuePatch {
   branch?: string | null;
   error?: string | null;
   writeupMd?: string | null;
+  transcriptJson?: string | null;
   cancelRequested?: boolean;
   attempt?: number;
 }
@@ -3025,6 +3029,10 @@ export function updateIssue(id: string, patch: IssuePatch): IssueRow | undefined
     error: patch.error !== undefined ? patch.error : current.error,
     writeup_md:
       patch.writeupMd !== undefined ? patch.writeupMd : current.writeup_md,
+    transcript_json:
+      patch.transcriptJson !== undefined
+        ? patch.transcriptJson
+        : current.transcript_json ?? null,
     cancel_requested:
       patch.cancelRequested === undefined
         ? current.cancel_requested
@@ -3039,8 +3047,8 @@ export function updateIssue(id: string, patch: IssuePatch): IssueRow | undefined
       title = ?, description = ?, repo_url = ?, starting_ref = ?, priority = ?,
       status = ?, pickup_delay_ms = ?, run_after = ?, started_at = ?, finished_at = ?,
       claimed_at = ?, lease_until = ?, cursor_agent_id = ?, model_id = ?,
-      pr_url = ?, branch = ?, error = ?, writeup_md = ?, cancel_requested = ?,
-      attempt = ?, updated_at = ?
+      pr_url = ?, branch = ?, error = ?, writeup_md = ?, transcript_json = ?,
+      cancel_requested = ?, attempt = ?, updated_at = ?
     WHERE id = ?`,
   ).run(
     next.title,
@@ -3061,6 +3069,7 @@ export function updateIssue(id: string, patch: IssuePatch): IssueRow | undefined
     next.branch,
     next.error,
     next.writeup_md,
+    next.transcript_json,
     next.cancel_requested,
     next.attempt,
     next.updated_at,

@@ -27,6 +27,10 @@ import {
 } from "../shared/issues.js";
 import type { IssueRow } from "./db.js";
 import { log, logError, logWarn } from "./logger.js";
+import {
+  applyIssueStreamEvent,
+  type IssueTranscriptItem,
+} from "../shared/issueTranscript.js";
 
 function addEvent(issueId: string, kind: string, message = ""): void {
   try {
@@ -99,9 +103,18 @@ function pickPrFromGit(git?: RunGitInfo): { prUrl: string | null; branch: string
   };
 }
 
+function saveIssueTranscript(issueId: string, items: IssueTranscriptItem[]): void {
+  try {
+    db.updateIssue(issueId, { transcriptJson: JSON.stringify(items) });
+  } catch (err) {
+    logWarn("issues", "failed to save transcript", { err });
+  }
+}
+
 async function runPrompt(
   session: SdkAgentSession,
   prompt: Parameters<SdkAgentSession["run"]>[0],
+  sink?: { issueId: string; items: IssueTranscriptItem[] },
 ): Promise<{
   text: string;
   error: string | null;
@@ -112,21 +125,60 @@ async function runPrompt(
   let error: string | null = null;
   let git: RunGitInfo | undefined;
   let askedQuestion = false;
+  const promptText = typeof prompt === "string" ? prompt : prompt.text;
+  if (sink && promptText.trim()) {
+    sink.items = applyIssueStreamEvent(sink.items, {
+      kind: "user",
+      text: promptText,
+    });
+  }
   await session.run(prompt, (event: SdkStreamEvent) => {
     if (event.kind === "assistant_delta" || event.kind === "assistant_final") {
       text = event.text || text;
+      if (sink) {
+        sink.items = applyIssueStreamEvent(sink.items, {
+          kind: "assistant",
+          text,
+        });
+      }
     } else if (event.kind === "done") {
       text = event.result || text;
       git = event.git;
+      if (sink) {
+        if (text) {
+          sink.items = applyIssueStreamEvent(sink.items, {
+            kind: "assistant",
+            text,
+          });
+        }
+        saveIssueTranscript(sink.issueId, sink.items);
+      }
     } else if (event.kind === "error") {
       error = event.message;
-    } else if (
-      (event.kind === "tool_start" || event.kind === "tool_done") &&
-      event.questions?.length
-    ) {
-      askedQuestion = true;
+      if (sink) {
+        sink.items = applyIssueStreamEvent(sink.items, {
+          kind: "error",
+          text: event.message,
+        });
+        saveIssueTranscript(sink.issueId, sink.items);
+      }
+    } else if (event.kind === "tool_start" || event.kind === "tool_done") {
+      if (event.questions?.length) askedQuestion = true;
+      if (sink) {
+        sink.items = applyIssueStreamEvent(sink.items, {
+          kind: event.kind,
+          callId: event.callId,
+          name: event.name,
+          detail: event.detail,
+          path: event.path,
+        });
+        if (event.kind === "tool_done") {
+          saveIssueTranscript(sink.issueId, sink.items);
+        }
+      }
     }
   });
+  if (sink) saveIssueTranscript(sink.issueId, sink.items);
   return { text, error, git, askedQuestion };
 }
 
@@ -135,13 +187,14 @@ async function collectIssueWriteup(input: {
   issue: IssueRow;
   prUrl: string | null;
   firstTurnText: string;
+  sink: { issueId: string; items: IssueTranscriptItem[] };
 }): Promise<string> {
   const prompt = buildIssueWriteupPrompt({
     issueId: input.issue.id,
     title: input.issue.title,
     prUrl: input.prUrl,
   });
-  let turn = await runPrompt(input.session, prompt);
+  let turn = await runPrompt(input.session, prompt, input.sink);
   let writeup = sanitizeIssueWriteup(turn.text);
 
   if (!writeup) {
@@ -163,6 +216,7 @@ async function collectIssueWriteup(input: {
         `Issue: ${input.issue.title}`,
         input.prUrl ? `PR: ${input.prUrl}` : "No PR URL.",
       ].join("\n"),
+      input.sink,
     );
     writeup = sanitizeIssueWriteup(turn.text);
   }
@@ -218,6 +272,8 @@ async function executeIssue(issue: IssueRow): Promise<void> {
       return;
     }
 
+    db.updateIssue(issue.id, { transcriptJson: "[]" });
+    const sink = { issueId: issue.id, items: [] as IssueTranscriptItem[] };
     const apiKey = resolveIssueCursorKey(issue);
     const modelId = issue.model_id?.trim() || "auto";
     log("issues", "run started", {
@@ -257,6 +313,7 @@ async function executeIssue(issue: IssueRow): Promise<void> {
     const first = await runPrompt(
       session,
       images.length ? { text: fixPrompt, images } : fixPrompt,
+      sink,
     );
     const agentId = session.getAgentId();
     if (agentId) {
@@ -297,6 +354,7 @@ async function executeIssue(issue: IssueRow): Promise<void> {
       const nudge = await runPrompt(
         session,
         "Do not wait for the user. Use the safest reasonable default and finish the fix and pull request.",
+        sink,
       );
       const nudged = pickPrFromGit(nudge.git);
       if (nudged.prUrl || nudged.branch) {
@@ -332,6 +390,7 @@ async function executeIssue(issue: IssueRow): Promise<void> {
       issue,
       prUrl,
       firstTurnText: first.text,
+      sink,
     });
 
     db.updateIssue(issue.id, {
