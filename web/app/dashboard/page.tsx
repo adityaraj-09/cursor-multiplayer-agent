@@ -2,11 +2,14 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { Layers3 } from "lucide-react";
+import { Layers3, LayoutGrid, LayoutList } from "lucide-react";
 import RoomCard from "../../components/RoomCard";
 import CreateTeamCard from "../../components/CreateTeamCard";
 import DashboardShell from "../../components/DashboardShell";
 import EmptyState from "../../components/EmptyState";
+import SessionsGroupedList, {
+  roomInfoToRow,
+} from "../../components/SessionsGroupedList";
 import { useAuth } from "../../components/AuthProvider";
 import {
   archiveRoom,
@@ -29,6 +32,11 @@ import {
   removeBoardRoomId,
   writeBoardRoomIds,
 } from "../../lib/boardStorage";
+import {
+  readDashboardSessionsView,
+  writeDashboardSessionsView,
+  type DashboardSessionsView,
+} from "../../lib/dashboardView";
 
 export default function SessionsDashboard() {
   const { user, loading: authLoading } = useAuth();
@@ -46,6 +54,7 @@ export default function SessionsDashboard() {
   const [busyOrg, setBusyOrg] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [archiveError, setArchiveError] = useState("");
+  const [viewMode, setViewMode] = useState<DashboardSessionsView>("list");
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -63,7 +72,13 @@ export default function SessionsDashboard() {
   useEffect(() => {
     setScope(readSelectedWorkspace());
     setSelectedIds(readBoardRoomIds());
+    setViewMode(readDashboardSessionsView());
   }, []);
+
+  const selectViewMode = (next: DashboardSessionsView) => {
+    setViewMode(next);
+    writeDashboardSessionsView(next);
+  };
 
   useEffect(() => {
     if (authLoading || !user) return;
@@ -188,6 +203,20 @@ export default function SessionsDashboard() {
     () => rooms.filter((room) => room.status === "active").length,
     [rooms],
   );
+  const sessionRows = useMemo(() => rooms.map(roomInfoToRow), [rooms]);
+
+  const toggleBoardSelect = (id: string) => {
+    setSelectedIds((prev) => {
+      const has = prev.includes(id);
+      const next = has
+        ? prev.filter((item) => item !== id)
+        : prev.length >= MAX_BOARD_ROOMS
+          ? prev
+          : [...prev, id];
+      writeBoardRoomIds(next);
+      return next;
+    });
+  };
 
   if (authLoading) {
     return (
@@ -228,7 +257,7 @@ export default function SessionsDashboard() {
       createHref={createHref}
       userName={user.name}
     >
-      <main className="mx-auto w-full max-w-6xl px-4 sm:px-6 py-6 sm:py-8">
+      <main className="mx-auto w-full max-w-7xl px-4 sm:px-6 py-6 sm:py-8">
         {notice && (
           <div className="mb-5 flex items-start gap-3 rounded-lg border border-[#2b2b2b] bg-[#1a1a1a] px-3.5 py-3">
             <p className="flex-1 text-[13px] text-[#e4e4e4] leading-5">
@@ -282,12 +311,48 @@ export default function SessionsDashboard() {
                     }`}
             </p>
           </div>
-          <Link
-            href={createHref}
-            className="hidden lg:inline-flex h-9 px-3.5 rounded-md bg-[#e4e4e4] text-[#141414] text-[13px] font-medium hover:bg-white transition-colors items-center self-start"
-          >
-            New session
-          </Link>
+          <div className="flex items-center gap-2 self-start">
+            <div
+              className="inline-flex h-9 items-center rounded-md border border-[#2b2b2b] bg-[#1a1a1a] p-0.5"
+              role="group"
+              aria-label="Session view"
+            >
+              <button
+                type="button"
+                onClick={() => selectViewMode("list")}
+                className={`inline-flex h-8 items-center gap-1.5 rounded-[5px] px-2.5 text-[12px] transition-colors ${
+                  viewMode === "list"
+                    ? "bg-[#252525] text-[#e4e4e4]"
+                    : "text-[#6e6e6e] hover:text-[#e4e4e4]"
+                }`}
+                aria-pressed={viewMode === "list"}
+                title="List view"
+              >
+                <LayoutList className="h-3.5 w-3.5" strokeWidth={1.75} />
+                List
+              </button>
+              <button
+                type="button"
+                onClick={() => selectViewMode("grid")}
+                className={`inline-flex h-8 items-center gap-1.5 rounded-[5px] px-2.5 text-[12px] transition-colors ${
+                  viewMode === "grid"
+                    ? "bg-[#252525] text-[#e4e4e4]"
+                    : "text-[#6e6e6e] hover:text-[#e4e4e4]"
+                }`}
+                aria-pressed={viewMode === "grid"}
+                title="Grid view"
+              >
+                <LayoutGrid className="h-3.5 w-3.5" strokeWidth={1.75} />
+                Grid
+              </button>
+            </div>
+            <Link
+              href={createHref}
+              className="hidden lg:inline-flex h-9 px-3.5 rounded-md bg-[#e4e4e4] text-[#141414] text-[13px] font-medium hover:bg-white transition-colors items-center"
+            >
+              New session
+            </Link>
+          </div>
         </div>
 
         {joinable.length > 0 && (
@@ -330,14 +395,22 @@ export default function SessionsDashboard() {
         )}
 
         {loading ? (
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-            {[0, 1, 2].map((key) => (
-              <div
-                key={key}
-                className="h-[148px] rounded-xl border border-[#2b2b2b] bg-[#1a1a1a] animate-pulse"
-              />
-            ))}
-          </div>
+          viewMode === "list" ? (
+            <div className="rounded-lg border border-[#2b2b2b] bg-[#171717] divide-y divide-[#1f1f1f]">
+              {[0, 1, 2, 3, 4].map((key) => (
+                <div key={key} className="h-9 animate-pulse bg-[#1a1a1a]" />
+              ))}
+            </div>
+          ) : (
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+              {[0, 1, 2].map((key) => (
+                <div
+                  key={key}
+                  className="h-[148px] rounded-xl border border-[#2b2b2b] bg-[#1a1a1a] animate-pulse"
+                />
+              ))}
+            </div>
+          )
         ) : rooms.length === 0 ? (
           <EmptyState
             icon={Layers3}
@@ -358,29 +431,29 @@ export default function SessionsDashboard() {
           />
         ) : (
           <>
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-              {rooms.map((room) => (
-                <RoomCard
-                  key={room.id}
-                  room={room}
-                  selectable
-                  selected={selectedIds.includes(room.id)}
+            {viewMode === "list" ? (
+              <div className="overflow-hidden rounded-lg border border-[#2b2b2b] bg-[#141414]">
+                <SessionsGroupedList
+                  items={sessionRows}
+                  selectedIds={selectedIds}
+                  onToggleSelect={toggleBoardSelect}
                   onArchive={handleArchiveRoom}
-                  onToggleSelect={(id) => {
-                    setSelectedIds((prev) => {
-                      const has = prev.includes(id);
-                      const next = has
-                        ? prev.filter((item) => item !== id)
-                        : prev.length >= MAX_BOARD_ROOMS
-                          ? prev
-                          : [...prev, id];
-                      writeBoardRoomIds(next);
-                      return next;
-                    });
-                  }}
                 />
-              ))}
-            </div>
+              </div>
+            ) : (
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                {rooms.map((room) => (
+                  <RoomCard
+                    key={room.id}
+                    room={room}
+                    selectable
+                    selected={selectedIds.includes(room.id)}
+                    onArchive={handleArchiveRoom}
+                    onToggleSelect={toggleBoardSelect}
+                  />
+                ))}
+              </div>
+            )}
             {selectedIds.length > 0 && (
               <div className="sticky bottom-4 mt-4 flex items-center justify-between gap-3 rounded-lg border border-[#26405d] bg-[#17202a] px-3 py-2.5">
                 <p className="text-[12px] text-[#8ec5ff]">
