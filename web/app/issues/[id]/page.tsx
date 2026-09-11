@@ -212,7 +212,7 @@ export default function IssueDetailPage() {
         router.push("/issues");
       }}
       onNewTeam={() => undefined}
-      createHref={scope === "personal" ? "/create" : `/create?org=${scope}`}
+      createHref={scope === "personal" ? "/dashboard?compose=1" : `/dashboard?compose=1&org=${scope}`}
       userName={user.name}
     >
       <main className="mx-auto w-full max-w-3xl px-4 sm:px-6 py-6 sm:py-8">

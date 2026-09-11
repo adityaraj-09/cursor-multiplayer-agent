@@ -79,8 +79,8 @@ export function useWorkspaceScope(initial?: WorkspaceScope) {
   const orgId = scope === "personal" ? undefined : scope;
   const activeOrg = orgs.find((org) => org.id === scope) || null;
   const sessionCreateHref = orgId
-    ? `/create?org=${encodeURIComponent(orgId)}`
-    : "/create";
+    ? `/dashboard?compose=1&org=${encodeURIComponent(orgId)}`
+    : "/dashboard?compose=1";
 
   return {
     orgs,

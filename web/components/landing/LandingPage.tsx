@@ -45,7 +45,9 @@ export default function LandingPage() {
   const { user } = useAuth();
   const signedIn = Boolean(user);
   const primaryHref = signedIn ? "/dashboard" : "/login?redirect=/dashboard";
-  const createHref = signedIn ? "/create" : "/login?redirect=/create";
+  const createHref = signedIn
+    ? "/dashboard?compose=1"
+    : `/login?redirect=${encodeURIComponent("/dashboard?compose=1")}`;
   const issuesHref = signedIn ? "/issues" : "/login?redirect=/issues";
 
   return (
