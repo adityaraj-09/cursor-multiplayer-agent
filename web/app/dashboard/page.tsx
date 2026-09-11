@@ -3,7 +3,6 @@
 import { Suspense, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Layers3 } from "lucide-react";
 import { Layers3, LayoutGrid, LayoutList } from "lucide-react";
 import RoomCard from "../../components/RoomCard";
 import CreateTeamCard from "../../components/CreateTeamCard";
@@ -96,6 +95,8 @@ function SessionsDashboardBody() {
     }
     setSelectedIds(readBoardRoomIds());
   }, [search]);
+
+  useEffect(() => {
     setViewMode(readDashboardSessionsView());
   }, []);
 
