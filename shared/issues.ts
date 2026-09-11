@@ -170,6 +170,11 @@ export function canRetryIssue(status: IssueStatus): boolean {
   return status === "failed" || status === "cancelled" || status === "needs_input";
 }
 
+/** True while the issue page should refresh itself (pickup / agent still moving). */
+export function issueStatusIsActive(status: IssueStatus): boolean {
+  return status === "queued" || status === "running" || status === "needs_input";
+}
+
 /** Unwrap a full-document markdown fence the model sometimes wraps around writeups. */
 export function sanitizeIssueWriteup(raw: string): string {
   let text = raw.replace(/\u0000/g, "").trim();

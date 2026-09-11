@@ -17,6 +17,9 @@ vi.mock("@cursor/sdk", async (importOriginal) => {
 });
 
 function makeRun(overrides: Partial<Run> & Pick<Run, "id">): Run {
+  const conversation = vi.fn(async () => {
+    throw new Error("conversation() should not be called");
+  });
   return {
     agentId: "bc-issue",
     status: "finished",
@@ -25,7 +28,7 @@ function makeRun(overrides: Partial<Run> & Pick<Run, "id">): Run {
     stream: async function* () {},
     wait: async () => ({ id: overrides.id, status: "finished", result: "done" }),
     cancel: async () => {},
-    conversation: async () => [],
+    conversation,
     onDidChangeStatus: () => () => {},
     ...overrides,
   };
@@ -36,44 +39,20 @@ describe("loadIssueTranscript", () => {
     vi.mocked(Agent.listRuns).mockReset();
   });
 
-  it("loads conversation history only from the stored cursorAgentId", async () => {
-    const conversation = vi.fn(async () => [
-      {
-        type: "agentConversationTurn",
-        turn: {
-          userMessage: { text: "You are fixing Steer issue iss_9." },
-          steps: [
-            {
-              type: "assistantMessage",
-              message: { text: "Opened a PR." },
-            },
-          ],
-        },
-      },
-    ]);
+  it("loads run summaries from the stored cursorAgentId without replaying streams", async () => {
+    const conversation = vi.fn(async () => []);
     vi.mocked(Agent.listRuns).mockResolvedValue({
       items: [
         makeRun({
           id: "run_later",
           createdAt: 200,
+          result: "Opened a PR.",
           conversation,
         }),
         makeRun({
           id: "run_first",
           createdAt: 100,
-          conversation: async () => [
-            {
-              type: "agentConversationTurn",
-              turn: {
-                steps: [
-                  {
-                    type: "toolCall",
-                    message: { type: "read", args: { path: "src/a.ts" } },
-                  },
-                ],
-              },
-            },
-          ],
+          result: "Inspected src/a.ts",
         }),
       ],
     });
@@ -87,26 +66,24 @@ describe("loadIssueTranscript", () => {
     expect(Agent.listRuns).toHaveBeenCalledWith("bc-issue", {
       runtime: "cloud",
       apiKey: "key-test",
-      limit: 25,
+      limit: 8,
     });
     expect(transcript.available).toBe(true);
     expect(transcript.runs.map((run) => run.id)).toEqual(["run_first", "run_later"]);
-    expect(transcript.items.map((item) => item.kind)).toEqual([
-      "tool",
-      "user",
-      "assistant",
+    expect(transcript.items.map((item) => item.text)).toEqual([
+      "Inspected src/a.ts",
+      "Opened a PR.",
     ]);
-    expect(transcript.items[2]?.text).toBe("Opened a PR.");
-    expect(conversation).toHaveBeenCalledTimes(1);
+    expect(conversation).not.toHaveBeenCalled();
   });
 
-  it("falls back to run.result when conversation is unsupported", async () => {
+  it("keeps a running marker when the latest Cursor run has no result yet", async () => {
     vi.mocked(Agent.listRuns).mockResolvedValue({
       items: [
         makeRun({
           id: "run_plain",
-          result: "All tests passed.",
-          supports: () => false,
+          status: "running",
+          result: undefined,
         }),
       ],
     });
@@ -119,9 +96,11 @@ describe("loadIssueTranscript", () => {
     expect(transcript.live).toBe(true);
     expect(transcript.items).toEqual([
       {
-        id: "run_plain:result",
-        kind: "assistant",
-        text: "All tests passed.",
+        id: "run_plain:running",
+        kind: "tool",
+        text: "Run in progress",
+        toolName: "run",
+        status: "running",
         runId: "run_plain",
       },
     ]);

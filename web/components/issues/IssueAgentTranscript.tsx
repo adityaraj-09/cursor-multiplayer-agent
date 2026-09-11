@@ -109,7 +109,15 @@ export default function IssueAgentTranscript(props: {
 
   useEffect(() => {
     let cancelled = false;
-    const load = () =>
+    let inFlight = false;
+    if (!cursorAgentId && !live) {
+      setTranscript(null);
+      setError("");
+      return;
+    }
+    const load = () => {
+      if (inFlight) return;
+      inFlight = true;
       fetchIssueTranscript(issueId)
         .then((next) => {
           if (cancelled) return;
@@ -120,7 +128,11 @@ export default function IssueAgentTranscript(props: {
           if (!cancelled) {
             setError(err instanceof Error ? err.message : "Failed to load transcript");
           }
+        })
+        .finally(() => {
+          inFlight = false;
         });
+    };
 
     void load();
     if (!live) {

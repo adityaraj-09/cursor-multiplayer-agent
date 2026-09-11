@@ -50,6 +50,48 @@ export function emptyIssueTranscript(
   };
 }
 
+/**
+ * Build a chat timeline from `Agent.listRuns` metadata only.
+ * Do not call `run.conversation()` — on cloud that replays the full SSE
+ * stream and can take a minute per run.
+ */
+export function transcriptItemsFromListedRuns(
+  runs: Array<Pick<IssueTranscriptRun, "id" | "status" | "result" | "error">>,
+): IssueTranscriptItem[] {
+  const items: IssueTranscriptItem[] = [];
+  for (const run of runs) {
+    const result = run.result?.trim();
+    if (result) {
+      items.push({
+        id: `${run.id}:result`,
+        kind: "assistant",
+        text: result,
+        runId: run.id,
+      });
+    }
+    const error = run.error?.trim();
+    if (run.status === "error" && error) {
+      items.push({
+        id: `${run.id}:error`,
+        kind: "error",
+        text: error,
+        runId: run.id,
+      });
+    }
+    if (run.status === "running" && !result) {
+      items.push({
+        id: `${run.id}:running`,
+        kind: "tool",
+        text: "Run in progress",
+        toolName: "run",
+        status: "running",
+        runId: run.id,
+      });
+    }
+  }
+  return items;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }

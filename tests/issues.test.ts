@@ -6,6 +6,7 @@ import {
   canCancelIssue,
   canQueueIssue,
   canRetryIssue,
+  issueStatusIsActive,
   clampMaxConcurrent,
   clampPickupDelayMs,
   issueSettingsScopeKey,
@@ -82,6 +83,11 @@ describe("issue helpers", () => {
     expect(canCancelIssue("done")).toBe(false);
     expect(canRetryIssue("failed")).toBe(true);
     expect(canRetryIssue("queued")).toBe(false);
+    expect(issueStatusIsActive("running")).toBe(true);
+    expect(issueStatusIsActive("queued")).toBe(true);
+    expect(issueStatusIsActive("done")).toBe(false);
+    expect(issueStatusIsActive("in_review")).toBe(false);
+    expect(issueStatusIsActive("failed")).toBe(false);
   });
 });
 
