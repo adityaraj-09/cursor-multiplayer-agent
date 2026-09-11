@@ -70,12 +70,14 @@ export default function SessionsGroupedList({
   selectedIds,
   onToggleSelect,
   onArchive,
+  onSelect,
   initiallyCollapsed = ["stopped"],
 }: {
   items: SessionListItem[];
   selectedIds?: string[];
   onToggleSelect?: (id: string) => void;
   onArchive?: (id: string) => Promise<void> | void;
+  onSelect?: (id: string) => void;
   initiallyCollapsed?: SessionListStatus[];
 }) {
   const grouped = useMemo(() => {
@@ -132,6 +134,7 @@ export default function SessionsGroupedList({
                     selected={selectedIds?.includes(item.id)}
                     onToggleSelect={onToggleSelect}
                     onArchive={onArchive}
+                    onSelect={onSelect}
                   />
                 ))}
               </ul>
@@ -148,11 +151,13 @@ function SessionRow({
   selected,
   onToggleSelect,
   onArchive,
+  onSelect,
 }: {
   item: SessionListItem;
   selected?: boolean;
   onToggleSelect?: (id: string) => void;
   onArchive?: (id: string) => Promise<void> | void;
+  onSelect?: (id: string) => void;
 }) {
   const [archiving, setArchiving] = useState(false);
   const className = `group flex w-full items-center gap-2.5 px-3 h-9 text-left text-[13px] transition-colors ${
@@ -173,6 +178,8 @@ function SessionRow({
     }
   };
 
+  const titleClass = "min-w-0 flex-1 truncate text-[#e4e4e4] hover:text-white text-left";
+
   return (
     <li className={className}>
       {onToggleSelect && (
@@ -185,12 +192,15 @@ function SessionRow({
         />
       )}
       <StatusGlyph status={item.status} />
-      <Link
-        href={item.href}
-        className="min-w-0 flex-1 truncate text-[#e4e4e4] hover:text-white"
-      >
-        {item.name}
-      </Link>
+      {onSelect ? (
+        <button type="button" onClick={() => onSelect(item.id)} className={titleClass}>
+          {item.name}
+        </button>
+      ) : (
+        <Link href={item.href} className={titleClass}>
+          {item.name}
+        </Link>
+      )}
       <span className="hidden items-center gap-2 shrink-0 text-[12px] text-[#6e6e6e] sm:flex">
         <LabelChip>{item.runtimeLabel}</LabelChip>
         <LabelChip>{item.authLabel}</LabelChip>

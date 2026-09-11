@@ -1,9 +1,12 @@
 "use client";
 
-import { useState } from "react";
-import { Archive } from "lucide-react";
+import { useMemo, useState } from "react";
+import { Archive, LayoutGrid, LayoutList } from "lucide-react";
 import ProductChrome, { MockPageHeader } from "./ProductChrome";
 import IssuesGroupedList from "../../issues/IssuesGroupedList";
+import SessionsGroupedList, {
+  type SessionListItem,
+} from "../../SessionsGroupedList";
 import Markdown from "../../Markdown";
 import BoardShowcase from "./BoardShowcase";
 import SessionRoomView from "./SessionRoomView";
@@ -42,6 +45,22 @@ export default function HeroDashboard({
   );
 }
 
+function demoSessionRows(): SessionListItem[] {
+  return DEMO_SESSIONS.map((room) => ({
+    id: room.id,
+    href: `#${room.id}`,
+    name: room.name,
+    status: room.status === "active" ? "active" : "stopped",
+    runtimeLabel: room.runtime === "cloud" ? "Cloud" : "Local",
+    authLabel: room.auth,
+    modelId: room.model,
+    target: room.target,
+    participantCount: room.people,
+    date: room.ago.replace(" ago", ""),
+    canArchive: true,
+  }));
+}
+
 function SessionsPane({
   selected,
   onToggle,
@@ -50,6 +69,8 @@ function SessionsPane({
   onToggle: (next: string[]) => void;
 }) {
   const [openId, setOpenId] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<"list" | "grid">("list");
+  const rows = useMemo(() => demoSessionRows(), []);
 
   if (openId) {
     return <SessionRoomView roomId={openId} onBack={() => setOpenId(null)} />;
@@ -63,85 +84,139 @@ function SessionsPane({
         meta={`${DEMO_SESSIONS.length} sessions · ${DEMO_SESSIONS.filter((room) => room.status === "active").length} live`}
         action="New session"
       />
-      <div className="min-h-0 flex-1 overflow-auto px-4 pb-4 sm:px-5">
-        <div className="grid gap-2.5 sm:grid-cols-2 xl:grid-cols-3">
-          {DEMO_SESSIONS.map((room) => {
-            const isOn = selected.includes(room.id);
-            return (
-              <div
-                key={room.id}
-                className={`rounded-xl border p-3.5 text-left transition-colors ${
-                  isOn
-                    ? "border-[#26405d] bg-[#17202a] shadow-[0_0_0_1px_rgba(38,64,93,0.55)]"
-                    : "border-[#2b2b2b] bg-[#1a1a1a] hover:border-[#3c3c3c]"
-                }`}
-              >
-                <div className="mb-2 flex items-start justify-between gap-2">
-                  <div className="flex min-w-0 items-center gap-2">
-                    <input
-                      type="checkbox"
-                      checked={isOn}
-                      onChange={() =>
-                        onToggle(
-                          isOn
-                            ? selected.filter((id) => id !== room.id)
-                            : [...selected, room.id],
-                        )
-                      }
-                      onClick={(event) => event.stopPropagation()}
-                      className="h-3.5 w-3.5 accent-[#4d9fff]"
-                      aria-label={`Select ${room.name} for the board`}
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setOpenId(room.id)}
-                      className="truncate text-[13px] font-medium text-[#e4e4e4] hover:text-white"
-                    >
-                      {room.name}
-                    </button>
-                  </div>
-                  <span
-                    className={`flex items-center gap-1 text-[11px] ${
-                      room.status === "active" ? "text-[#3ecf8e]" : "text-[#6e6e6e]"
-                    }`}
-                  >
-                    <span
-                      className={`h-1.5 w-1.5 rounded-full ${
-                        room.status === "active" ? "bg-[#3ecf8e]" : "bg-[#6e6e6e]"
-                      }`}
-                    />
-                    {room.status === "active" ? "Live" : "Idle"}
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setOpenId(room.id)}
-                  className="w-full text-left"
-                >
-                  <div className="mb-2 flex flex-wrap gap-1.5">
-                    <span className="rounded border border-[#2b2b2b] bg-[#252525] px-1.5 py-0.5 text-[10px] text-[#a0a0a0]">
-                      {room.runtime === "cloud" ? "Cloud" : "Local"}
-                    </span>
-                    <span className="rounded border border-[#2b2b2b] bg-[#252525] px-1.5 py-0.5 text-[10px] text-[#a0a0a0]">
-                      {room.auth}
-                    </span>
-                    <span className="rounded border border-[#2b2b2b] bg-[#252525] px-1.5 py-0.5 text-[10px] text-[#a0a0a0]">
-                      {room.model}
-                    </span>
-                  </div>
-                  <p className="mb-2 truncate font-mono text-[12px] text-[#6e6e6e]">{room.target}</p>
-                  <p className="text-[11px] text-[#6e6e6e]">
-                    {room.people} online · {room.ago}
-                  </p>
-                  <span className="mt-2 inline-flex items-center gap-1 text-[10px] text-[#6e6e6e]">
-                    <Archive className="h-3 w-3" />
-                    Archive
-                  </span>
-                </button>
-              </div>
-            );
-          })}
+      <div className="flex items-center justify-end gap-2 px-4 pb-2 sm:px-5">
+        <div
+          className="inline-flex h-8 items-center rounded-md border border-[#2b2b2b] bg-[#1a1a1a] p-0.5"
+          role="group"
+          aria-label="Session view"
+        >
+          <button
+            type="button"
+            onClick={() => setViewMode("list")}
+            className={`inline-flex h-7 items-center gap-1.5 rounded-[5px] px-2 text-[11px] transition-colors ${
+              viewMode === "list"
+                ? "bg-[#252525] text-[#e4e4e4]"
+                : "text-[#6e6e6e] hover:text-[#e4e4e4]"
+            }`}
+            aria-pressed={viewMode === "list"}
+          >
+            <LayoutList className="h-3.5 w-3.5" strokeWidth={1.75} />
+            List
+          </button>
+          <button
+            type="button"
+            onClick={() => setViewMode("grid")}
+            className={`inline-flex h-7 items-center gap-1.5 rounded-[5px] px-2 text-[11px] transition-colors ${
+              viewMode === "grid"
+                ? "bg-[#252525] text-[#e4e4e4]"
+                : "text-[#6e6e6e] hover:text-[#e4e4e4]"
+            }`}
+            aria-pressed={viewMode === "grid"}
+          >
+            <LayoutGrid className="h-3.5 w-3.5" strokeWidth={1.75} />
+            Grid
+          </button>
         </div>
+      </div>
+      <div className="min-h-0 flex-1 overflow-auto px-4 pb-4 sm:px-5">
+        {viewMode === "list" ? (
+          <div className="overflow-hidden rounded-lg border border-[#2b2b2b] bg-[#141414]">
+            <SessionsGroupedList
+              items={rows}
+              selectedIds={selected}
+              onToggleSelect={(id) =>
+                onToggle(
+                  selected.includes(id)
+                    ? selected.filter((item) => item !== id)
+                    : [...selected, id],
+                )
+              }
+              onSelect={setOpenId}
+              initiallyCollapsed={[]}
+            />
+          </div>
+        ) : (
+          <div className="grid gap-2.5 sm:grid-cols-2 xl:grid-cols-3">
+            {DEMO_SESSIONS.map((room) => {
+              const isOn = selected.includes(room.id);
+              return (
+                <div
+                  key={room.id}
+                  className={`rounded-xl border p-3.5 text-left transition-colors ${
+                    isOn
+                      ? "border-[#26405d] bg-[#17202a] shadow-[0_0_0_1px_rgba(38,64,93,0.55)]"
+                      : "border-[#2b2b2b] bg-[#1a1a1a] hover:border-[#3c3c3c]"
+                  }`}
+                >
+                  <div className="mb-2 flex items-start justify-between gap-2">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={isOn}
+                        onChange={() =>
+                          onToggle(
+                            isOn
+                              ? selected.filter((id) => id !== room.id)
+                              : [...selected, room.id],
+                          )
+                        }
+                        onClick={(event) => event.stopPropagation()}
+                        className="h-3.5 w-3.5 accent-[#4d9fff]"
+                        aria-label={`Select ${room.name} for the board`}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setOpenId(room.id)}
+                        className="truncate text-[13px] font-medium text-[#e4e4e4] hover:text-white"
+                      >
+                        {room.name}
+                      </button>
+                    </div>
+                    <span
+                      className={`flex items-center gap-1 text-[11px] ${
+                        room.status === "active" ? "text-[#3ecf8e]" : "text-[#6e6e6e]"
+                      }`}
+                    >
+                      <span
+                        className={`h-1.5 w-1.5 rounded-full ${
+                          room.status === "active" ? "bg-[#3ecf8e]" : "bg-[#6e6e6e]"
+                        }`}
+                      />
+                      {room.status === "active" ? "Live" : "Idle"}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setOpenId(room.id)}
+                    className="w-full text-left"
+                  >
+                    <div className="mb-2 flex flex-wrap gap-1.5">
+                      <span className="rounded border border-[#2b2b2b] bg-[#252525] px-1.5 py-0.5 text-[10px] text-[#a0a0a0]">
+                        {room.runtime === "cloud" ? "Cloud" : "Local"}
+                      </span>
+                      <span className="rounded border border-[#2b2b2b] bg-[#252525] px-1.5 py-0.5 text-[10px] text-[#a0a0a0]">
+                        {room.auth}
+                      </span>
+                      <span className="rounded border border-[#2b2b2b] bg-[#252525] px-1.5 py-0.5 text-[10px] text-[#a0a0a0]">
+                        {room.model}
+                      </span>
+                    </div>
+                    <p className="mb-2 truncate font-mono text-[12px] text-[#6e6e6e]">
+                      {room.target}
+                    </p>
+                    <p className="text-[11px] text-[#6e6e6e]">
+                      {room.people} online · {room.ago}
+                    </p>
+                    <span className="mt-2 inline-flex items-center gap-1 text-[10px] text-[#6e6e6e]">
+                      <Archive className="h-3 w-3" />
+                      Archive
+                    </span>
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        )}
         {selected.length > 0 && (
           <div className="sticky bottom-1 mt-3 flex items-center justify-between gap-3 rounded-lg border border-[#26405d] bg-[#17202a] px-3 py-2">
             <p className="text-[12px] text-[#8ec5ff]">
