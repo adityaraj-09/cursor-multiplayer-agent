@@ -37,6 +37,8 @@ function makeRun(overrides: Partial<Run> & Pick<Run, "id">): Run {
 describe("loadIssueTranscript", () => {
   beforeEach(() => {
     vi.mocked(Agent.listRuns).mockReset();
+    vi.mocked(Agent.getRun).mockReset();
+    vi.mocked(Agent.getRun).mockRejectedValue(new Error("no getRun"));
   });
 
   it("loads run summaries from the stored cursorAgentId without replaying streams", async () => {
@@ -75,6 +77,91 @@ describe("loadIssueTranscript", () => {
       "Opened a PR.",
     ]);
     expect(conversation).not.toHaveBeenCalled();
+    expect(Agent.getRun).not.toHaveBeenCalled();
+  });
+
+  it("hydrates empty listRuns results via getRun", async () => {
+    vi.mocked(Agent.listRuns).mockResolvedValue({
+      items: [
+        makeRun({
+          id: "run_empty",
+          createdAt: 100,
+          result: undefined,
+        }),
+      ],
+    });
+    vi.mocked(Agent.getRun).mockResolvedValue(
+      makeRun({
+        id: "run_empty",
+        createdAt: 100,
+        result: "Patched the click handler.",
+      }),
+    );
+
+    const transcript = await loadIssueTranscript({
+      cursorAgentId: "bc-issue",
+      apiKey: "key-test",
+      live: false,
+    });
+    expect(Agent.getRun).toHaveBeenCalledWith("run_empty", {
+      runtime: "cloud",
+      agentId: "bc-issue",
+      apiKey: "key-test",
+    });
+    expect(transcript.items.map((item) => item.text)).toEqual([
+      "Patched the click handler.",
+    ]);
+  });
+
+  it("returns cached items without calling Cursor", async () => {
+    const transcript = await loadIssueTranscript({
+      cursorAgentId: "bc-issue",
+      apiKey: "key-test",
+      live: false,
+      cachedItems: [
+        {
+          id: "cached:1",
+          kind: "assistant",
+          text: "Already saved.",
+        },
+      ],
+    });
+    expect(Agent.listRuns).not.toHaveBeenCalled();
+    expect(transcript.items).toEqual([
+      { id: "cached:1", kind: "assistant", text: "Already saved." },
+    ]);
+  });
+
+  it("streams a finished run when list and getRun have no result text", async () => {
+    vi.mocked(Agent.listRuns).mockResolvedValue({
+      items: [
+        makeRun({
+          id: "run_stream",
+          createdAt: 100,
+          result: undefined,
+          stream: async function* () {
+            yield {
+              type: "assistant",
+              agent_id: "bc-issue",
+              run_id: "run_stream",
+              message: {
+                role: "assistant",
+                content: [{ type: "text", text: "From the Cursor stream." }],
+              },
+            };
+          },
+        }),
+      ],
+    });
+
+    const transcript = await loadIssueTranscript({
+      cursorAgentId: "bc-issue",
+      apiKey: "key-test",
+      live: false,
+    });
+    expect(transcript.items.map((item) => item.text)).toEqual([
+      "From the Cursor stream.",
+    ]);
   });
 
   it("keeps a running marker when the latest Cursor run has no result yet", async () => {

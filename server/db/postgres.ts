@@ -383,6 +383,7 @@ async function initSchema() {
       branch TEXT,
       error TEXT,
       writeup_md TEXT,
+      transcript_json TEXT,
       cancel_requested BIGINT NOT NULL DEFAULT 0,
       attempt BIGINT NOT NULL DEFAULT 0,
       created_at BIGINT NOT NULL,
@@ -456,6 +457,7 @@ async function initSchema() {
     `ALTER TABLE rooms ADD COLUMN IF NOT EXISTS integration_pr_url TEXT`,
     `ALTER TABLE rooms ADD COLUMN IF NOT EXISTS integration_agent_id TEXT`,
     `ALTER TABLE agents ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'feature'`,
+    `ALTER TABLE issues ADD COLUMN IF NOT EXISTS transcript_json TEXT`,
   ];
 
   for (const sql of migrations) {
@@ -2841,6 +2843,7 @@ export interface IssueRow {
   branch: string | null;
   error: string | null;
   writeup_md: string | null;
+  transcript_json: string | null;
   cancel_requested: number;
   attempt: number;
   created_at: number;
@@ -2881,6 +2884,7 @@ export interface IssuePatch {
   branch?: string | null;
   error?: string | null;
   writeupMd?: string | null;
+  transcriptJson?: string | null;
   cancelRequested?: boolean;
   attempt?: number;
 }
@@ -2935,6 +2939,7 @@ function pgRowToIssue(r: Record<string, unknown>): IssueRow {
     branch: (r.branch as string) ?? null,
     error: (r.error as string) ?? null,
     writeup_md: (r.writeup_md as string) ?? null,
+    transcript_json: (r.transcript_json as string) ?? null,
     cancel_requested: num(r.cancel_requested as string) ?? 0,
     attempt: num(r.attempt as string) ?? 0,
     created_at: num(r.created_at as string) ?? 0,
@@ -3070,6 +3075,10 @@ export function updateIssue(id: string, patch: IssuePatch): IssueRow | undefined
     error: patch.error !== undefined ? patch.error : current.error,
     writeup_md:
       patch.writeupMd !== undefined ? patch.writeupMd : current.writeup_md,
+    transcript_json:
+      patch.transcriptJson !== undefined
+        ? patch.transcriptJson
+        : current.transcript_json,
     cancel_requested:
       patch.cancelRequested === undefined
         ? current.cancel_requested
@@ -3084,9 +3093,9 @@ export function updateIssue(id: string, patch: IssuePatch): IssueRow | undefined
       title = $1, description = $2, repo_url = $3, starting_ref = $4, priority = $5,
       status = $6, pickup_delay_ms = $7, run_after = $8, started_at = $9, finished_at = $10,
       claimed_at = $11, lease_until = $12, cursor_agent_id = $13, model_id = $14,
-      pr_url = $15, branch = $16, error = $17, writeup_md = $18, cancel_requested = $19,
-      attempt = $20, updated_at = $21
-    WHERE id = $22
+      pr_url = $15, branch = $16, error = $17, writeup_md = $18, transcript_json = $19,
+      cancel_requested = $20, attempt = $21, updated_at = $22
+    WHERE id = $23
     RETURNING *`,
     [
       next.title,
@@ -3107,6 +3116,7 @@ export function updateIssue(id: string, patch: IssuePatch): IssueRow | undefined
       next.branch,
       next.error,
       next.writeup_md,
+      next.transcript_json,
       next.cancel_requested,
       next.attempt,
       next.updated_at,

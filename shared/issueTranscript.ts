@@ -50,10 +50,129 @@ export function emptyIssueTranscript(
   };
 }
 
+export function parseStoredTranscriptItems(raw: unknown): IssueTranscriptItem[] {
+  if (raw == null) return [];
+  let parsed: unknown = raw;
+  if (typeof raw === "string") {
+    const trimmed = raw.trim();
+    if (!trimmed) return [];
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch {
+      return [];
+    }
+  }
+  if (!Array.isArray(parsed)) return [];
+  const items: IssueTranscriptItem[] = [];
+  for (const row of parsed) {
+    if (!isRecord(row)) continue;
+    const kind = asText(row.kind);
+    if (
+      kind !== "user" &&
+      kind !== "assistant" &&
+      kind !== "thinking" &&
+      kind !== "tool" &&
+      kind !== "error"
+    ) {
+      continue;
+    }
+    const text = asText(row.text);
+    const toolName = asText(row.toolName);
+    if (!text && kind !== "tool") continue;
+    items.push({
+      id: asText(row.id) || `stored:${items.length + 1}`,
+      kind,
+      text: text || toolName || "tool",
+      toolName: toolName || undefined,
+      detail: asText(row.detail) || undefined,
+      path: asText(row.path) || undefined,
+      status:
+        row.status === "running" || row.status === "done" || row.status === "error"
+          ? row.status
+          : undefined,
+      runId: asText(row.runId) || undefined,
+    });
+  }
+  return items;
+}
+
+export function applyIssueStreamEvent(
+  items: IssueTranscriptItem[],
+  event:
+    | { kind: "user"; text: string; runId?: string }
+    | { kind: "assistant"; text: string; runId?: string }
+    | {
+        kind: "tool_start" | "tool_done";
+        callId: string;
+        name: string;
+        detail?: string;
+        path?: string;
+        runId?: string;
+      }
+    | { kind: "error"; text: string; runId?: string },
+): IssueTranscriptItem[] {
+  const next = items.slice();
+  if (event.kind === "user") {
+    const text = event.text.trim();
+    if (!text) return next;
+    next.push({
+      id: `${event.runId || "run"}:user:${next.length}`,
+      kind: "user",
+      text,
+      runId: event.runId,
+    });
+    return next;
+  }
+  if (event.kind === "assistant") {
+    const text = event.text.trim();
+    if (!text) return next;
+    for (let i = next.length - 1; i >= 0; i--) {
+      const item = next[i]!;
+      if (item.kind === "assistant" && (!event.runId || item.runId === event.runId)) {
+        next[i] = { ...item, text };
+        return next;
+      }
+      if (item.kind === "user") break;
+    }
+    next.push({
+      id: `${event.runId || "run"}:assistant:${next.length}`,
+      kind: "assistant",
+      text,
+      runId: event.runId,
+    });
+    return next;
+  }
+  if (event.kind === "error") {
+    const text = event.text.trim();
+    if (!text) return next;
+    next.push({
+      id: `${event.runId || "run"}:error:${next.length}`,
+      kind: "error",
+      text,
+      runId: event.runId,
+    });
+    return next;
+  }
+  const id = `${event.runId || "run"}:tool:${event.callId}`;
+  const idx = next.findIndex((item) => item.id === id);
+  const row: IssueTranscriptItem = {
+    id,
+    kind: "tool",
+    text: event.detail || event.path || event.name,
+    toolName: event.name,
+    detail: event.detail,
+    path: event.path,
+    status: event.kind === "tool_start" ? "running" : "done",
+    runId: event.runId,
+  };
+  if (idx >= 0) next[idx] = row;
+  else next.push(row);
+  return next;
+}
+
 /**
- * Build a chat timeline from `Agent.listRuns` metadata only.
- * Do not call `run.conversation()` — on cloud that replays the full SSE
- * stream and can take a minute per run.
+ * Build a chat timeline from listed/hydrated Cursor run metadata.
+ * `run.conversation()` is avoided here — on cloud that replays SSE.
  */
 export function transcriptItemsFromListedRuns(
   runs: Array<Pick<IssueTranscriptRun, "id" | "status" | "result" | "error">>,

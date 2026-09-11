@@ -139,6 +139,13 @@ describe("issue persistence", () => {
     expect(done?.pr_url).toContain("/pull/9");
     expect(done?.writeup_md).toContain("## Cause");
     expect(db.listRooms().length).toBe(roomsBefore);
+
+    db.updateIssue(issue.id, {
+      transcriptJson: JSON.stringify([
+        { id: "t1", kind: "assistant", text: "Opened a PR." },
+      ]),
+    });
+    expect(db.getIssue(issue.id)?.transcript_json).toContain("Opened a PR.");
   });
 
   it("keeps personal and org lists separate and stores settings", () => {
