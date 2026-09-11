@@ -1,12 +1,14 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Layers3 } from "lucide-react";
 import RoomCard from "../../components/RoomCard";
 import CreateTeamCard from "../../components/CreateTeamCard";
 import DashboardShell from "../../components/DashboardShell";
 import EmptyState from "../../components/EmptyState";
+import SessionComposeModal from "../../components/sessions/SessionComposeModal";
 import { useAuth } from "../../components/AuthProvider";
 import {
   archiveRoom,
@@ -31,6 +33,22 @@ import {
 } from "../../lib/boardStorage";
 
 export default function SessionsDashboard() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen bg-[#141414] flex items-center justify-center">
+          <p className="text-[13px] text-[#6e6e6e]">Loading…</p>
+        </div>
+      }
+    >
+      <SessionsDashboardBody />
+    </Suspense>
+  );
+}
+
+function SessionsDashboardBody() {
+  const router = useRouter();
+  const search = useSearchParams();
   const { user, loading: authLoading } = useAuth();
   const [rooms, setRooms] = useState<RoomInfo[]>([]);
   const [orgs, setOrgs] = useState<OrgInfo[]>([]);
@@ -46,25 +64,28 @@ export default function SessionsDashboard() {
   const [busyOrg, setBusyOrg] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [archiveError, setArchiveError] = useState("");
+  const composeOpen = search.get("compose") === "1";
 
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const raw = params.get("notice");
+    const raw = search.get("notice");
     if (!raw) return;
     setNotice(raw);
+    const params = new URLSearchParams(search.toString());
     params.delete("notice");
-    const next = params.toString();
-    const path = next
-      ? `${window.location.pathname}?${next}`
-      : window.location.pathname;
-    window.history.replaceState({}, "", path);
-  }, []);
+    const qs = params.toString();
+    router.replace(qs ? `/dashboard?${qs}` : "/dashboard", { scroll: false });
+  }, [search, router]);
 
   useEffect(() => {
-    setScope(readSelectedWorkspace());
+    const orgFromQuery = search.get("org");
+    if (orgFromQuery && orgFromQuery !== "personal") {
+      setScope(orgFromQuery);
+      writeSelectedWorkspace(orgFromQuery);
+    } else if (!orgFromQuery) {
+      setScope(readSelectedWorkspace());
+    }
     setSelectedIds(readBoardRoomIds());
-  }, []);
-
+  }, [search]);
   useEffect(() => {
     if (authLoading || !user) return;
     let cancelled = false;
@@ -182,12 +203,22 @@ export default function SessionsDashboard() {
   const activeOrg = orgs.find((o) => o.id === scope) || null;
   const createHref =
     scope === "personal"
-      ? "/create"
-      : `/create?org=${encodeURIComponent(scope)}`;
+      ? "/dashboard?compose=1"
+      : `/dashboard?compose=1&org=${encodeURIComponent(scope)}`;
   const liveCount = useMemo(
     () => rooms.filter((room) => room.status === "active").length,
     [rooms],
   );
+
+  const setCompose = (open: boolean) => {
+    const params = new URLSearchParams(search.toString());
+    if (open) params.set("compose", "1");
+    else params.delete("compose");
+    if (scope !== "personal") params.set("org", scope);
+    else params.delete("org");
+    const qs = params.toString();
+    router.replace(qs ? `/dashboard?${qs}` : "/dashboard", { scroll: false });
+  };
 
   if (authLoading) {
     return (
@@ -282,12 +313,13 @@ export default function SessionsDashboard() {
                     }`}
             </p>
           </div>
-          <Link
-            href={createHref}
+          <button
+            type="button"
+            onClick={() => setCompose(true)}
             className="hidden lg:inline-flex h-9 px-3.5 rounded-md bg-[#e4e4e4] text-[#141414] text-[13px] font-medium hover:bg-white transition-colors items-center self-start"
           >
             New session
-          </Link>
+          </button>
         </div>
 
         {joinable.length > 0 && (
@@ -348,12 +380,13 @@ export default function SessionsDashboard() {
                 : "Create a room and invite teammates to watch and steer."
             }
             action={
-              <Link
-                href={createHref}
+              <button
+                type="button"
+                onClick={() => setCompose(true)}
                 className="inline-flex h-9 px-4 rounded-md bg-[#e4e4e4] text-[#141414] text-[13px] font-medium hover:bg-white transition-colors items-center"
               >
                 Create session
-              </Link>
+              </button>
             }
           />
         ) : (
@@ -421,6 +454,14 @@ export default function SessionsDashboard() {
           }}
           busy={busyOrg}
           error={orgError}
+        />
+      )}
+
+      {composeOpen && (
+        <SessionComposeModal
+          initialOrgId={scope === "personal" ? undefined : scope}
+          workspaceName={activeOrg?.name || "Personal"}
+          onClose={() => setCompose(false)}
         />
       )}
     </DashboardShell>
