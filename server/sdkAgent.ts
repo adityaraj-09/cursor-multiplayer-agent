@@ -209,6 +209,27 @@ export class SdkAgentSession {
     return Boolean(this.config.autoCreatePR);
   }
 
+  isCloudRuntime(): boolean {
+    return this.config.runtime === "cloud";
+  }
+
+  /**
+   * Download a walkthrough artifact by relative path (`artifacts/foo.webp`).
+   * Cloud only — local agents throw / return empty from the SDK.
+   */
+  async downloadArtifact(path: string): Promise<Buffer> {
+    await this.ensureStarted();
+    if (!this.agent) throw new Error("Agent failed to start");
+    return this.agent.downloadArtifact(path);
+  }
+
+  async listArtifacts(): Promise<Array<{ path: string; sizeBytes: number }>> {
+    await this.ensureStarted();
+    if (!this.agent) return [];
+    const items = await this.agent.listArtifacts();
+    return items.map((a) => ({ path: a.path, sizeBytes: a.sizeBytes }));
+  }
+
   isBusy(): boolean {
     return this.processing || this.queue.length > 0;
   }

@@ -17,6 +17,9 @@ const ALLOWED_MIME = new Set([
   "image/jpeg",
   "image/gif",
   "image/webp",
+  "video/mp4",
+  "video/webm",
+  "video/quicktime",
   "application/pdf",
   "text/plain",
   "text/markdown",
@@ -30,6 +33,9 @@ const EXT_MIME: Record<string, string> = {
   jpeg: "image/jpeg",
   gif: "image/gif",
   webp: "image/webp",
+  mp4: "video/mp4",
+  webm: "video/webm",
+  mov: "video/quicktime",
   pdf: "application/pdf",
   txt: "text/plain",
   md: "text/markdown",
@@ -73,10 +79,13 @@ export function saveUpload(opts: {
   name: string;
   mime?: string;
   data: Buffer;
+  /** Override the default chat-upload size cap (e.g. agent walkthrough videos). */
+  maxBytes?: number;
 }): StoredUpload {
   if (opts.data.length === 0) throw new Error("Empty file");
-  if (opts.data.length > MAX_BYTES) {
-    throw new Error(`File too large (max ${Math.round(MAX_BYTES / 1024 / 1024)}MB)`);
+  const limit = opts.maxBytes ?? MAX_BYTES;
+  if (opts.data.length > limit) {
+    throw new Error(`File too large (max ${Math.round(limit / 1024 / 1024)}MB)`);
   }
   const mime = (opts.mime || guessMime(opts.name)).toLowerCase();
   if (!isAllowedUpload(mime, opts.name)) {
@@ -158,6 +167,10 @@ export function isTextUpload(mime: string): boolean {
 
 export function isImageUpload(mime: string): boolean {
   return mime.startsWith("image/");
+}
+
+export function isVideoUpload(mime: string): boolean {
+  return mime.startsWith("video/");
 }
 
 /** Copy attachments into the agent cwd so local/CLI agents can Read them. */
