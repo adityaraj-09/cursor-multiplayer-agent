@@ -131,22 +131,45 @@ function toolPath(args: unknown): string | undefined {
   return undefined;
 }
 
-/** Stream dropped or the cloud agent is still on a previous run. */
+/** Stream dropped, websocket blip, or the cloud agent is still on a previous run. */
 export function isTransientRunStreamError(err: unknown): boolean {
   if (err instanceof AgentBusyError) return true;
+  if (
+    err &&
+    typeof err === "object" &&
+    "isRetryable" in err &&
+    (err as { isRetryable?: unknown }).isRetryable === true
+  ) {
+    return true;
+  }
   const msg = err instanceof Error ? err.message : String(err);
   const code =
     err && typeof err === "object" && "code" in err
       ? String((err as { code?: unknown }).code || "")
       : "";
-  const blob = `${msg} ${code}`.toLowerCase();
+  const name =
+    err && typeof err === "object" && "name" in err
+      ? String((err as { name?: unknown }).name || "")
+      : "";
+  const blob = `${name} ${msg} ${code}`.toLowerCase();
   return (
     blob.includes("stream is no longer available") ||
     blob.includes("no longer available") ||
     blob.includes("agent_busy") ||
     blob.includes("already has an active run") ||
     blob.includes("rst_stream") ||
-    (blob.includes("unavailable") && blob.includes("stream"))
+    blob.includes("econnreset") ||
+    blob.includes("socket hang up") ||
+    blob.includes("websocket") ||
+    blob.includes("networkerror") ||
+    blob.includes("network error") ||
+    blob.includes("deadline_exceeded") ||
+    blob.includes("service unavailable") ||
+    (blob.includes("unavailable") && blob.includes("stream")) ||
+    (blob.includes("connect") &&
+      (blob.includes("reset") ||
+        blob.includes("closed") ||
+        blob.includes("refus")))
   );
 }
 
@@ -166,6 +189,19 @@ function terminalResult(run: Run): RunResult | null {
     durationMs: run.durationMs,
     git: run.git,
     usage: run.usage,
+  };
+}
+
+function cancelledResult(runId: string, partial?: Partial<RunResult>): RunResult {
+  return {
+    id: runId,
+    status: "cancelled",
+    result: partial?.result,
+    error: partial?.error,
+    model: partial?.model,
+    durationMs: partial?.durationMs,
+    git: partial?.git,
+    usage: partial?.usage,
   };
 }
 
@@ -367,17 +403,26 @@ export class SdkAgentSession {
 
       this.lastRunId = run.id;
       this.activeRun = run;
-      await this.consumeStream(run, item, gen, assistantBuf);
-      if (gen !== this.abortGeneration) return;
-
-      const result = await this.waitForRun(run);
-      if (gen !== this.abortGeneration || result.status === "cancelled") {
+      const result = await this.followRun(run, item, gen, assistantBuf);
+      if (gen !== this.abortGeneration || !result || result.status === "cancelled") {
         return;
       }
 
       this.emitRunOutcome(item, result, assistantBuf);
     } catch (err) {
       if (gen !== this.abortGeneration) return;
+
+      // Live websocket/stream handles die often; settle via getRun/listRuns
+      // before surfacing anything to chat / issue runners.
+      if (isTransientRunStreamError(err)) {
+        const recovered = await this.recoverAfterStreamLoss(
+          item,
+          gen,
+          assistantBuf,
+        );
+        if (recovered || gen !== this.abortGeneration) return;
+      }
+
       const message =
         err instanceof CursorAgentError
           ? err.message
@@ -385,11 +430,6 @@ export class SdkAgentSession {
             ? err.message
             : String(err);
       item.onEvent({ kind: "error", message });
-      // Dropped streams / leftover cloud runs are recoverable on the next
-      // send via getRun/listRuns. Don't reject the queue item or Steer will
-      // go idle while Cursor is still running, then the next prompt hits
-      // [agent_busy] with nothing in chat.
-      if (isTransientRunStreamError(err)) return;
       throw err instanceof Error ? err : new Error(message);
     } finally {
       this.activeRun = null;
@@ -403,6 +443,47 @@ export class SdkAgentSession {
     };
   }
 
+  /** Best-effort refresh of the SDK transport after a dropped stream. */
+  private async reloadAgentTransport(): Promise<void> {
+    if (!this.agent) return;
+    try {
+      await this.agent.reload();
+    } catch {
+      // reload is best-effort; resume path below can still settle via REST.
+    }
+  }
+
+  /**
+   * After the live stream dies, poll Cursor for the active/last run and emit
+   * its outcome. Returns true when the prompt was settled (done or cancelled).
+   */
+  private async recoverAfterStreamLoss(
+    item: QueueItem,
+    gen: number,
+    assistantBuf: { value: string },
+  ): Promise<boolean> {
+    await this.reloadAgentTransport();
+    const active =
+      (this.lastRunId ? await this.refetchRun(this.lastRunId) : null) ||
+      (await this.lookupActiveRun());
+    if (!active) return false;
+    try {
+      const recovered = await this.followRun(active, item, gen, assistantBuf);
+      if (gen !== this.abortGeneration) return true;
+      this.emitRunOutcome(item, recovered, assistantBuf);
+      return true;
+    } catch (err) {
+      if (!isTransientRunStreamError(err)) throw err;
+      const settled = await this.pollRunUntilSettled(active.id, gen);
+      if (gen !== this.abortGeneration) return true;
+      if (settled) {
+        this.emitRunOutcome(item, settled, assistantBuf);
+        return true;
+      }
+      return false;
+    }
+  }
+
   /** Start a new run, or finish a leftover cloud run first if the agent is busy. */
   private async sendOrJoinActive(
     item: QueueItem,
@@ -410,26 +491,43 @@ export class SdkAgentSession {
     assistantBuf: { value: string },
   ): Promise<Run> {
     let lastErr: unknown;
-    for (let attempt = 0; attempt < 4; attempt++) {
+    for (let attempt = 0; attempt < 8; attempt++) {
+      if (gen !== this.abortGeneration) {
+        throw lastErr instanceof Error
+          ? lastErr
+          : new Error("Agent run aborted");
+      }
       try {
         return await this.agent!.send(item.prompt, this.sendOptions());
       } catch (err) {
         lastErr = err;
         if (!isTransientRunStreamError(err)) throw err;
+        await this.reloadAgentTransport();
         const active = await this.lookupActiveRun();
         if (active) {
-          const recovered = await this.followRun(
-            active,
-            item,
-            gen,
-            assistantBuf,
-          );
-          if (gen !== this.abortGeneration) throw err;
-          this.emitRunOutcome(item, recovered, assistantBuf);
-          assistantBuf.value = "";
-          continue;
+          try {
+            const recovered = await this.followRun(
+              active,
+              item,
+              gen,
+              assistantBuf,
+            );
+            if (gen !== this.abortGeneration) throw err;
+            this.emitRunOutcome(item, recovered, assistantBuf);
+            assistantBuf.value = "";
+            continue;
+          } catch (followErr) {
+            if (!isTransientRunStreamError(followErr)) throw followErr;
+            const settled = await this.pollRunUntilSettled(active.id, gen);
+            if (gen !== this.abortGeneration) throw err;
+            if (settled) {
+              this.emitRunOutcome(item, settled, assistantBuf);
+              assistantBuf.value = "";
+              continue;
+            }
+          }
         }
-        await sleep(250 * (attempt + 1));
+        await sleep(Math.min(400 * 2 ** attempt, 8000));
       }
     }
     throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
@@ -443,9 +541,11 @@ export class SdkAgentSession {
   ): Promise<RunResult | null> {
     this.lastRunId = run.id;
     this.activeRun = run;
+    // Live updates are best-effort. Status polling is the source of truth when
+    // Cursor's websocket/stream handle disappears mid-run.
     await this.consumeStream(run, item, gen, assistantBuf);
     if (gen !== this.abortGeneration) return null;
-    return this.waitForRun(run);
+    return this.waitForRun(run, gen);
   }
 
   private async consumeStream(
@@ -455,7 +555,9 @@ export class SdkAgentSession {
     assistantBuf: { value: string },
   ): Promise<void> {
     let current = run;
-    for (let attempt = 0; attempt < 3; attempt++) {
+    let delay = 300;
+    for (let attempt = 0; attempt < 6; attempt++) {
+      if (gen !== this.abortGeneration) return;
       try {
         for await (const event of current.stream()) {
           if (gen !== this.abortGeneration) return;
@@ -465,15 +567,22 @@ export class SdkAgentSession {
       } catch (err) {
         if (gen !== this.abortGeneration) return;
         if (!isTransientRunStreamError(err)) throw err;
-        // Live Send stream dropped — the run itself may still be in progress
-        // (or already finished). Reattach via getRun; wait() collects the
-        // terminal result even when stream() cannot.
-        if (attempt === 2) return;
+        // Live stream dropped — reattach while the run is still active. If the
+        // run already finished (or we cannot refetch), stop streaming; waitForRun
+        // / pollRunUntilSettled will collect the terminal result over REST.
+        if (attempt === 0) await this.reloadAgentTransport();
         const again = await this.refetchRun(current.id);
-        if (!again || again.status !== "running") return;
+        if (!again) {
+          await sleep(delay);
+          delay = Math.min(delay * 2, 4000);
+          continue;
+        }
         current = again;
         this.activeRun = current;
         this.lastRunId = current.id;
+        if (again.status !== "running") return;
+        await sleep(delay);
+        delay = Math.min(delay * 2, 4000);
       }
     }
   }
@@ -563,28 +672,102 @@ export class SdkAgentSession {
     });
   }
 
-  private async waitForRun(run: Run): Promise<RunResult> {
+  private async waitForRun(run: Run, gen: number): Promise<RunResult> {
     let current = run;
+    let delay = 400;
     let lastErr: unknown;
-    for (let attempt = 0; attempt < 5; attempt++) {
+    let reloaded = false;
+
+    while (true) {
+      if (gen !== this.abortGeneration) {
+        return cancelledResult(current.id, {
+          result: current.result,
+          error: current.error,
+          model: current.model,
+          durationMs: current.durationMs,
+          git: current.git,
+          usage: current.usage,
+        });
+      }
+
       const done = terminalResult(current);
       if (done) return done;
+
       try {
         return await current.wait();
       } catch (err) {
         lastErr = err;
         if (!isTransientRunStreamError(err)) throw err;
-        const again = await this.refetchRun(current.id);
-        if (again) {
-          current = again;
+        if (!reloaded) {
+          reloaded = true;
+          await this.reloadAgentTransport();
+        }
+      }
+
+      const settled = await this.pollRunUntilSettled(current.id, gen, {
+        maxMs: Math.min(delay * 4, 12_000),
+        initialDelayMs: delay,
+      });
+      if (settled) return settled;
+      if (gen !== this.abortGeneration) {
+        return cancelledResult(current.id);
+      }
+
+      const again = await this.refetchRun(current.id);
+      if (again) {
+        current = again;
+        this.activeRun = current;
+        this.lastRunId = current.id;
+        const terminal = terminalResult(current);
+        if (terminal) return terminal;
+      }
+
+      await sleep(delay);
+      delay = Math.min(Math.round(delay * 1.5), 8000);
+      // Bound only by abort — cloud issue agents can run for a long time after
+      // the websocket dies. Throwing the raw stream error is what used to leave
+      // Steer showing "Run stream is no longer available".
+      if (delay >= 8000 && !again) {
+        // Still nothing from getRun; keep trying but surface if listRuns finds
+        // a different active/finished run for this agent.
+        const listed = await this.lookupActiveOrRecentRun();
+        if (listed && listed.id !== current.id) {
+          current = listed;
           this.activeRun = current;
           this.lastRunId = current.id;
-          continue;
+        } else if (!listed && lastErr) {
+          throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
         }
-        await sleep(300 * (attempt + 1));
       }
     }
-    throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+  }
+
+  /**
+   * Poll Agent.getRun until the run leaves `running`, or `maxMs` elapses.
+   * Used when stream()/wait() fail because the Cursor stream handle is gone.
+   */
+  private async pollRunUntilSettled(
+    runId: string,
+    gen: number,
+    opts?: { maxMs?: number; initialDelayMs?: number },
+  ): Promise<RunResult | null> {
+    const maxMs = opts?.maxMs ?? 120_000;
+    let delay = opts?.initialDelayMs ?? 400;
+    const started = Date.now();
+    while (Date.now() - started < maxMs) {
+      if (gen !== this.abortGeneration) return cancelledResult(runId);
+      const again = await this.refetchRun(runId);
+      if (again) {
+        this.activeRun = again;
+        this.lastRunId = again.id;
+        const done = terminalResult(again);
+        if (done) return done;
+      }
+      await sleep(delay);
+      delay = Math.min(Math.round(delay * 1.5), 5000);
+    }
+    const last = await this.refetchRun(runId);
+    return last ? terminalResult(last) : null;
   }
 
   private async refetchRun(runId: string): Promise<Run | null> {
@@ -602,13 +785,31 @@ export class SdkAgentSession {
       const cached = await this.refetchRun(this.lastRunId);
       if (cached && cached.status === "running") return cached;
     }
+    const listed = await this.listAgentRuns();
+    return listed.find((r) => r.status === "running") ?? null;
+  }
+
+  /** Prefer a running run; otherwise the newest finished/errored run. */
+  private async lookupActiveOrRecentRun(): Promise<Run | null> {
+    const listed = await this.listAgentRuns();
+    const running = listed.find((r) => r.status === "running");
+    if (running) return running;
+    return listed[0] ?? null;
+  }
+
+  private async listAgentRuns(): Promise<Run[]> {
     const agentId = this.getAgentId();
-    if (!agentId) return null;
+    if (!agentId) return [];
     try {
       const listed = await Agent.listRuns(agentId, this.listRunsOptions());
-      return listed.items.find((r) => r.status === "running") ?? null;
+      return [...(listed.items ?? [])].sort((a, b) => {
+        const ta = a.createdAt ?? 0;
+        const tb = b.createdAt ?? 0;
+        if (ta !== tb) return tb - ta;
+        return b.id.localeCompare(a.id);
+      });
     } catch {
-      return null;
+      return [];
     }
   }
 

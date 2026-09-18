@@ -65,6 +65,14 @@ function fakeAgent(send: SDKAgent["send"]): SDKAgent {
   };
 }
 
+function streamGoneEvents(events: SdkStreamEvent[]): SdkStreamEvent[] {
+  return events.filter(
+    (e) =>
+      e.kind === "error" &&
+      e.message.toLowerCase().includes("no longer available"),
+  );
+}
+
 describe("SdkAgentSession run stream recovery", () => {
   beforeEach(() => {
     vi.mocked(Agent.resume).mockReset();
@@ -123,13 +131,64 @@ describe("SdkAgentSession run stream recovery", () => {
       result: "shipped in the background",
       git: undefined,
     });
-    expect(
-      events.filter(
-        (e) =>
-          e.kind === "error" &&
-          e.message.toLowerCase().includes("no longer available"),
-      ),
-    ).toHaveLength(0);
+    expect(streamGoneEvents(events)).toHaveLength(0);
+  });
+
+  it("settles via getRun when both stream() and wait() lose the websocket", async () => {
+    let polls = 0;
+    const run = makeRun({
+      id: "run-ws-dead",
+      stream: async function* () {
+        yield assistantMsg("still going");
+        throw STREAM_GONE;
+      },
+      wait: async () => {
+        throw STREAM_GONE;
+      },
+    });
+    const send = vi.fn(async () => run);
+    const agent = fakeAgent(send);
+    vi.mocked(Agent.resume).mockResolvedValue(agent);
+    vi.mocked(Agent.getRun).mockImplementation(async () => {
+      polls += 1;
+      if (polls < 3) {
+        return {
+          ...run,
+          status: "running",
+          stream: async function* () {
+            throw STREAM_GONE;
+          },
+          wait: async () => {
+            throw STREAM_GONE;
+          },
+        };
+      }
+      return {
+        ...run,
+        status: "finished",
+        result: "finished after reconnect",
+        stream: async function* () {
+          throw STREAM_GONE;
+        },
+        wait: async () => ({
+          id: "run-ws-dead",
+          status: "finished",
+          result: "finished after reconnect",
+        }),
+      };
+    });
+
+    const events: SdkStreamEvent[] = [];
+    await session().run("keep going", (e) => events.push(e));
+
+    expect(agent.reload).toHaveBeenCalled();
+    expect(polls).toBeGreaterThanOrEqual(3);
+    expect(events).toContainEqual({
+      kind: "done",
+      result: "finished after reconnect",
+      git: undefined,
+    });
+    expect(streamGoneEvents(events)).toHaveLength(0);
   });
 
   it("joins a leftover cloud run on agent_busy then sends the new prompt", async () => {
@@ -163,7 +222,11 @@ describe("SdkAgentSession run stream recovery", () => {
     vi.mocked(Agent.listRuns).mockResolvedValue({ items: [leftover] });
     vi.mocked(Agent.getRun).mockImplementation(async (id: string) => {
       if (id === "run-old") {
-        return { ...leftover, status: "finished", result: "previous turn finished" };
+        return {
+          ...leftover,
+          status: "finished",
+          result: "previous turn finished",
+        };
       }
       return next;
     });
@@ -187,5 +250,67 @@ describe("SdkAgentSession run stream recovery", () => {
           e.kind === "error" && e.message.toLowerCase().includes("agent_busy"),
       ),
     ).toHaveLength(0);
+  });
+
+  it("does not paint stream-gone errors when a busy leftover must be polled", async () => {
+    const leftover = makeRun({
+      id: "run-busy-poll",
+      stream: async function* () {
+        throw STREAM_GONE;
+      },
+      wait: async () => {
+        throw STREAM_GONE;
+      },
+    });
+    const next = makeRun({
+      id: "run-after-busy",
+      stream: async function* () {
+        yield assistantMsg("ok");
+      },
+      wait: async () => ({
+        id: "run-after-busy",
+        status: "finished",
+        result: "ok",
+      }),
+    });
+    let leftoverPolls = 0;
+    const send = vi
+      .fn()
+      .mockRejectedValueOnce(AGENT_BUSY)
+      .mockResolvedValueOnce(next);
+    vi.mocked(Agent.resume).mockResolvedValue(fakeAgent(send));
+    vi.mocked(Agent.listRuns).mockResolvedValue({ items: [leftover] });
+    vi.mocked(Agent.getRun).mockImplementation(async (id: string) => {
+      if (id === "run-busy-poll") {
+        leftoverPolls += 1;
+        if (leftoverPolls < 2) {
+          return {
+            ...leftover,
+            status: "running",
+            wait: async () => {
+              throw STREAM_GONE;
+            },
+          };
+        }
+        return {
+          ...leftover,
+          status: "finished",
+          result: "leftover done",
+        };
+      }
+      return next;
+    });
+
+    const events: SdkStreamEvent[] = [];
+    await session().run("next", (e) => events.push(e));
+
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(
+      events.some((e) => e.kind === "done" && e.result === "leftover done"),
+    ).toBe(true);
+    expect(events.some((e) => e.kind === "done" && e.result === "ok")).toBe(
+      true,
+    );
+    expect(streamGoneEvents(events)).toHaveLength(0);
   });
 });
