@@ -144,6 +144,8 @@ async function runPrompt(
     } else if (event.kind === "done") {
       text = event.result || text;
       git = event.git;
+      // A later successful settlement wins over a transient stream blip.
+      error = null;
       if (sink) {
         if (text) {
           sink.items = applyIssueStreamEvent(sink.items, {

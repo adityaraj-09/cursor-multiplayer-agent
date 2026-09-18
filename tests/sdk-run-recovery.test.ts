@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AgentBusyError } from "@cursor/sdk";
+import { AgentBusyError, NetworkError } from "@cursor/sdk";
 import { isTransientRunStreamError } from "../server/sdkAgent.js";
 
 describe("isTransientRunStreamError", () => {
@@ -19,6 +19,19 @@ describe("isTransientRunStreamError", () => {
       isTransientRunStreamError(
         new AgentBusyError("[agent_busy] Agent already has an active run"),
       ),
+    ).toBe(true);
+  });
+
+  it("detects websocket / network blips", () => {
+    expect(
+      isTransientRunStreamError(new NetworkError("websocket connection closed")),
+    ).toBe(true);
+    expect(isTransientRunStreamError(new Error("ECONNRESET"))).toBe(true);
+    expect(
+      isTransientRunStreamError({
+        message: "upstream failed",
+        isRetryable: true,
+      }),
     ).toBe(true);
   });
 
