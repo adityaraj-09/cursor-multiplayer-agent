@@ -100,6 +100,8 @@ import {
   toWorkerAttachments,
   type PromptImage,
 } from "./uploads.js";
+import { materializeArtifactsInText } from "./agentArtifacts.js";
+import { hasArtifactRefs } from "../shared/agentArtifacts.js";
 import {
   APP_ORIGIN,
   DEFAULT_AGENT_COMMAND,
@@ -3285,6 +3287,23 @@ export class RoomManager {
       // Aborted while running — abortRun already finalized UI state.
       if (!isCurrent()) return;
 
+      if (
+        agent.backend instanceof SdkAgentSession &&
+        agent.backend.isCloudRuntime() &&
+        assistantId
+      ) {
+        await this.hydrateCloudArtifacts(
+          room,
+          agent.backend,
+          assistantId,
+          () => assistantContent,
+          (next) => {
+            assistantContent = next;
+          },
+          isCurrent,
+        );
+      }
+
       const latestId = agent.backend.getAgentId();
       if (latestId && latestId !== agent.row.sdk_agent_id) {
         db.setAgentSdkId(agent.row.id, latestId);
@@ -4266,6 +4285,38 @@ export class RoomManager {
   // -----------------------------------------------------------------------
   // finalizeStreamingMessages — close open assistant/tool bubbles on abort
   // -----------------------------------------------------------------------
+
+  /**
+   * Download Cursor walkthrough artifacts referenced in the final assistant
+   * bubble and rewrite `/opt/cursor/artifacts/...` srcs to room upload URLs.
+   */
+  private async hydrateCloudArtifacts(
+    room: RoomState,
+    backend: SdkAgentSession,
+    messageId: string,
+    getContent: () => string,
+    setContent: (next: string) => void,
+    isCurrent: () => boolean,
+  ): Promise<void> {
+    const content = getContent();
+    if (!content || !hasArtifactRefs(content)) return;
+    try {
+      const result = await materializeArtifactsInText({
+        text: content,
+        roomId: room.id,
+        download: (path) => backend.downloadArtifact(path),
+      });
+      if (!isCurrent()) return;
+      if (result.text === content) return;
+      setContent(result.text);
+      db.updateMessageContent(messageId, result.text, "done");
+      this.io
+        .to(room.id)
+        .emit("chat-delta", messageId, result.text, "done");
+    } catch {
+      // Keep the original bubble if artifact download fails.
+    }
+  }
 
   private finalizeStreamingMessages(
     room: RoomState,

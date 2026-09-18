@@ -856,7 +856,7 @@ function MessageBubble({
           )}
         </div>
         {message.content ? (
-          <Markdown content={message.content} />
+          <Markdown content={message.content} roomId={roomId} />
         ) : (
           <p className="text-[13px] text-[#6e6e6e]">Thinking…</p>
         )}
@@ -1019,7 +1019,9 @@ function AttachmentChip({
   const [src, setSrc] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!roomId || !attachment.mime.startsWith("image/")) return;
+    if (!roomId || !(attachment.mime.startsWith("image/") || attachment.mime.startsWith("video/"))) {
+      return;
+    }
     let revoked = false;
     let objectUrl: string | null = null;
     void fetchRoomUploadBlob(roomId, attachment.id)
@@ -1036,6 +1038,18 @@ function AttachmentChip({
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
   }, [roomId, attachment.id, attachment.mime]);
+
+  if (src && attachment.mime.startsWith("video/")) {
+    return (
+      <video
+        src={src}
+        controls
+        playsInline
+        preload="metadata"
+        className="max-h-40 max-w-[220px] rounded-lg border border-[#343434] bg-black"
+      />
+    );
+  }
 
   if (src) {
     return (
