@@ -7,6 +7,7 @@ import {
   hasArtifactRefs,
   rewriteArtifactSrcs,
   toRelativeArtifactPath,
+  assistantIdsNeedingArtifactHydration,
 } from "../shared/agentArtifacts.js";
 import { materializeArtifactsInText } from "../server/agentArtifacts.js";
 import { getUpload, isAllowedUpload, guessMime } from "../server/uploads.js";
@@ -59,6 +60,47 @@ describe("agent artifact path helpers", () => {
     expect(out).toContain(
       "/opt/cursor/artifacts/viva_studio_brief_settings_live_debrief.mp4",
     );
+  });
+
+  it("finds assistant bubbles that still need artifact hydration after close", () => {
+    const ids = assistantIdsNeedingArtifactHydration(
+      [
+        {
+          id: "m1",
+          role: "assistant",
+          agentId: "ag1",
+          content: SAMPLE,
+        },
+        {
+          id: "m2",
+          role: "user",
+          agentId: "ag1",
+          content: SAMPLE,
+        },
+        {
+          id: "m3",
+          role: "assistant",
+          agentId: "ag2",
+          content: SAMPLE,
+        },
+        {
+          id: "m4",
+          role: "assistant",
+          agentId: "ag1",
+          content: "no media here",
+        },
+        {
+          id: "m5",
+          role: "assistant",
+          agentId: "ag1",
+          content: "",
+        },
+      ],
+      "ag1",
+    );
+    // Simulates post-closeAssistant state: in-memory assistantId is null, but
+    // the persisted bubble still has /opt/cursor/artifacts paths.
+    expect(ids).toEqual(["m1"]);
   });
 });
 

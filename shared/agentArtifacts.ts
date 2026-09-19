@@ -77,6 +77,26 @@ export function extractArtifactPaths(text: string): string[] {
   return [...found];
 }
 
+/** Assistant bubble ids for an agent that still embed unresolved artifact paths. */
+export function assistantIdsNeedingArtifactHydration(
+  messages: Array<{
+    id: string;
+    role: string;
+    agentId?: string | null;
+    content?: string | null;
+  }>,
+  agentId: string,
+): string[] {
+  return messages
+    .filter(
+      (m) =>
+        m.agentId === agentId &&
+        m.role === "assistant" &&
+        hasArtifactRefs(m.content || ""),
+    )
+    .map((m) => m.id);
+}
+
 /**
  * Rewrite every occurrence of an absolute/relative artifact path to a served URL.
  * Keys in `replacements` must be relative (`artifacts/foo.webp`).

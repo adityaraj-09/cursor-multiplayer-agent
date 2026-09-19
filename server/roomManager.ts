@@ -101,7 +101,10 @@ import {
   type PromptImage,
 } from "./uploads.js";
 import { materializeArtifactsInText } from "./agentArtifacts.js";
-import { hasArtifactRefs } from "../shared/agentArtifacts.js";
+import {
+  assistantIdsNeedingArtifactHydration,
+  hasArtifactRefs,
+} from "../shared/agentArtifacts.js";
 import {
   APP_ORIGIN,
   DEFAULT_AGENT_COMMAND,
@@ -3287,19 +3290,16 @@ export class RoomManager {
       // Aborted while running — abortRun already finalized UI state.
       if (!isCurrent()) return;
 
+      // closeAssistant() clears assistantId/content on the `done` event, so
+      // hydrate from persisted assistant bubbles that still reference artifacts.
       if (
         agent.backend instanceof SdkAgentSession &&
-        agent.backend.isCloudRuntime() &&
-        assistantId
+        agent.backend.isCloudRuntime()
       ) {
-        await this.hydrateCloudArtifacts(
+        await this.hydrateAgentCloudArtifacts(
           room,
           agent.backend,
-          assistantId,
-          () => assistantContent,
-          (next) => {
-            assistantContent = next;
-          },
+          agent.row.id,
           isCurrent,
         );
       }
@@ -4287,18 +4287,39 @@ export class RoomManager {
   // -----------------------------------------------------------------------
 
   /**
-   * Download Cursor walkthrough artifacts referenced in the final assistant
-   * bubble and rewrite `/opt/cursor/artifacts/...` srcs to room upload URLs.
+   * Download Cursor walkthrough artifacts for an agent's recent assistant
+   * bubbles and rewrite `/opt/cursor/artifacts/...` srcs to room upload URLs.
+   *
+   * Looks up messages from the DB because `closeAssistant` clears the in-memory
+   * assistantId/content before the run callback returns.
+   */
+  private async hydrateAgentCloudArtifacts(
+    room: RoomState,
+    backend: SdkAgentSession,
+    agentId: string,
+    isCurrent: () => boolean,
+  ): Promise<void> {
+    const targets = assistantIdsNeedingArtifactHydration(
+      db.getMessages(room.id, 80),
+      agentId,
+    );
+    for (const messageId of targets) {
+      if (!isCurrent()) return;
+      await this.hydrateCloudArtifacts(room, backend, messageId, isCurrent);
+    }
+  }
+
+  /**
+   * Download Cursor walkthrough artifacts referenced in one assistant bubble
+   * and rewrite `/opt/cursor/artifacts/...` srcs to room upload URLs.
    */
   private async hydrateCloudArtifacts(
     room: RoomState,
     backend: SdkAgentSession,
     messageId: string,
-    getContent: () => string,
-    setContent: (next: string) => void,
     isCurrent: () => boolean,
   ): Promise<void> {
-    const content = getContent();
+    const content = db.getMessage(messageId)?.content || "";
     if (!content || !hasArtifactRefs(content)) return;
     try {
       const result = await materializeArtifactsInText({
@@ -4308,11 +4329,8 @@ export class RoomManager {
       });
       if (!isCurrent()) return;
       if (result.text === content) return;
-      setContent(result.text);
       db.updateMessageContent(messageId, result.text, "done");
-      this.io
-        .to(room.id)
-        .emit("chat-delta", messageId, result.text, "done");
+      this.io.to(room.id).emit("chat-delta", messageId, result.text, "done");
     } catch {
       // Keep the original bubble if artifact download fails.
     }
