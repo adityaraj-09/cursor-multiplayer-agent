@@ -27,11 +27,14 @@ function AuthMedia({
   roomId,
   kind,
   alt,
+  pendingArtifacts,
 }: {
   src: string;
   roomId?: string;
   kind: "img" | "video";
   alt?: string;
+  /** True while the agent may still rewrite /opt/cursor/artifacts paths. */
+  pendingArtifacts?: boolean;
 }) {
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
@@ -63,9 +66,16 @@ function AuthMedia({
   }, [upload?.fileId, upload?.roomId, effectiveRoomId, src]);
 
   if (pendingArtifact) {
+    if (pendingArtifacts) {
+      return (
+        <span className="block my-2 text-[11px] text-[#6e6e6e]">
+          Loading {kind === "video" ? "video" : "image"}…
+        </span>
+      );
+    }
     return (
       <span className="block my-2 text-[11px] text-[#6e6e6e]">
-        Loading {kind === "video" ? "video" : "image"}…
+        {kind === "video" ? "Video" : "Image"} unavailable
       </span>
     );
   }
@@ -107,7 +117,10 @@ function AuthMedia({
   );
 }
 
-function buildComponents(roomId?: string): Components {
+function buildComponents(
+  roomId?: string,
+  pendingArtifacts?: boolean,
+): Components {
   return {
     p: ({ children }) => (
       <p className="mb-2.5 last:mb-0 leading-relaxed">{children}</p>
@@ -181,7 +194,13 @@ function buildComponents(roomId?: string): Components {
     ),
     img: ({ src, alt }) =>
       src ? (
-        <AuthMedia src={String(src)} roomId={roomId} kind="img" alt={alt || ""} />
+        <AuthMedia
+          src={String(src)}
+          roomId={roomId}
+          kind="img"
+          alt={alt || ""}
+          pendingArtifacts={pendingArtifacts}
+        />
       ) : null,
   };
 }
@@ -189,13 +208,15 @@ function buildComponents(roomId?: string): Components {
 export default function Markdown({
   content,
   roomId,
+  pendingArtifacts,
 }: {
   content: string;
   roomId?: string;
+  pendingArtifacts?: boolean;
 }) {
   if (!content.trim()) return null;
   const parts = splitMediaHtml(content);
-  const components = buildComponents(roomId);
+  const components = buildComponents(roomId, pendingArtifacts);
 
   return (
     <div className="markdown-body text-[13px] text-[#e4e4e4] break-words">
@@ -220,6 +241,7 @@ export default function Markdown({
               roomId={roomId}
               kind="img"
               alt={part.alt}
+              pendingArtifacts={pendingArtifacts}
             />
           );
         }
@@ -229,6 +251,7 @@ export default function Markdown({
             src={part.src}
             roomId={roomId}
             kind="video"
+            pendingArtifacts={pendingArtifacts}
           />
         );
       })}

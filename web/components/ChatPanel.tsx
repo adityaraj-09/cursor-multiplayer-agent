@@ -856,7 +856,13 @@ function MessageBubble({
           )}
         </div>
         {message.content ? (
-          <Markdown content={message.content} roomId={roomId} />
+          <Markdown
+            content={message.content}
+            roomId={roomId}
+            pendingArtifacts={
+              message.status === "streaming" || Boolean(agentBusy)
+            }
+          />
         ) : (
           <p className="text-[13px] text-[#6e6e6e]">Thinking…</p>
         )}
