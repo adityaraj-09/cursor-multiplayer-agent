@@ -346,13 +346,6 @@ function SessionsDashboardBody() {
                     }`}
             </p>
           </div>
-          <button
-            type="button"
-            onClick={() => setCompose(true)}
-            className="hidden lg:inline-flex h-9 px-3.5 rounded-md bg-[#e4e4e4] text-[#141414] text-[13px] font-medium hover:bg-white transition-colors items-center self-start"
-          >
-            New session
-          </button>
           <div className="flex items-center gap-2 self-start">
             <div
               className="inline-flex h-9 items-center rounded-md border border-[#2b2b2b] bg-[#1a1a1a] p-0.5"
