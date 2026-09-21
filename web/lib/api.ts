@@ -89,6 +89,36 @@ export async function fetchMe(): Promise<UserInfo | null> {
   return data.user;
 }
 
+export async function fetchVoiceApprovalSettings(): Promise<
+  import("../../shared/voiceApprovals").VoiceApprovalSettings
+> {
+  const res = await fetch(`${API_BASE}/auth/voice-approval`, {
+    headers: await authHeaders(),
+  });
+  if (!res.ok) {
+    throw new Error(await parseApiError(res, "Failed to load call settings"));
+  }
+  return res.json();
+}
+
+export async function updateVoiceApprovalSettings(data: {
+  phoneE164?: string | null;
+  optIn?: boolean;
+}): Promise<import("../../shared/voiceApprovals").VoiceApprovalSettings> {
+  const res = await fetch(`${API_BASE}/auth/voice-approval`, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+      ...(await authHeaders()),
+    },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    throw new Error(await parseApiError(res, "Failed to save call settings"));
+  }
+  return res.json();
+}
+
 export async function createPairingCode(): Promise<{
   code: string;
   expiresAt: number;

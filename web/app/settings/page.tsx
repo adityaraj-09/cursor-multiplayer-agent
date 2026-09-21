@@ -7,6 +7,7 @@ import DashboardShell from "../../components/DashboardShell";
 import CreateTeamCard from "../../components/CreateTeamCard";
 import GithubConnectCard from "../../components/settings/GithubConnectCard";
 import IssuePickupCard from "../../components/settings/IssuePickupCard";
+import VoiceApprovalCard from "../../components/settings/VoiceApprovalCard";
 import OrgTeamSettings from "../../components/settings/OrgTeamSettings";
 import WorkspaceKeysCard from "../../components/settings/WorkspaceKeysCard";
 import { useAuth } from "../../components/AuthProvider";
@@ -135,9 +136,12 @@ function SettingsBody() {
           </h1>
           <p className="text-[13px] text-[#6e6e6e] mt-1">
             GitHub, keys, and pickup for this workspace only. Switch workspaces
-            in the sidebar to configure another.
+            in the sidebar to configure another. Phone approval calls are
+            personal and live on this page too.
           </p>
         </div>
+
+        <VoiceApprovalCard />
 
         {(error || notice) && (
           <p className={`text-[13px] ${error ? "text-[#f07070]" : "text-[#3ecf8e]"}`}>

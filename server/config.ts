@@ -58,3 +58,66 @@ export const APP_ORIGIN =
   process.env.APP_ORIGIN?.trim() ||
   CORS_ORIGINS[0] ||
   "http://localhost:3001";
+
+/**
+ * Public origin of the Express API (Sarvam webhooks). Prefer the Render URL.
+ * Falls back to APP_ORIGIN (Vercel rewrites /api/* to the API).
+ */
+export const API_PUBLIC_ORIGIN =
+  process.env.API_PUBLIC_ORIGIN?.trim() || APP_ORIGIN;
+
+export function sarvamApiKey(): string {
+  return process.env.SARVAM_API_KEY?.trim() || "";
+}
+
+export function sarvamOrgId(): string {
+  return process.env.SARVAM_ORG_ID?.trim() || "";
+}
+
+export function sarvamWorkspaceId(): string {
+  return process.env.SARVAM_WORKSPACE_ID?.trim() || "";
+}
+
+export function sarvamAppId(): string {
+  return process.env.SARVAM_APP_ID?.trim() || "";
+}
+
+export function sarvamAppVersion(): number {
+  const n = Number(process.env.SARVAM_APP_VERSION?.trim() || "1");
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 1;
+}
+
+export function sarvamConnectionId(): string {
+  return process.env.SARVAM_CONNECTION_ID?.trim() || "";
+}
+
+export function sarvamAgentPhone(): string {
+  return process.env.SARVAM_AGENT_PHONE?.trim() || "";
+}
+
+/** Shared secret Sarvam sends when posting a spoken approve/deny. */
+export function sarvamWebhookSecret(): string {
+  return (
+    process.env.SARVAM_WEBHOOK_SECRET?.trim() ||
+    process.env.VOICE_APPROVAL_SECRET?.trim() ||
+    ""
+  );
+}
+
+export function voiceApprovalCooldownMs(): number {
+  const raw = process.env.VOICE_APPROVAL_COOLDOWN_MS?.trim();
+  if (!raw) return 15_000;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n : 15_000;
+}
+
+export function sarvamCallingConfigured(): boolean {
+  return Boolean(
+    sarvamApiKey() &&
+      sarvamOrgId() &&
+      sarvamWorkspaceId() &&
+      sarvamAppId() &&
+      sarvamConnectionId() &&
+      sarvamAgentPhone(),
+  );
+}

@@ -24,6 +24,7 @@ export type {
   IssueAttachmentRow,
   IssueSettingsRow,
   IssueEventRow,
+  UserRow,
 } from "./sqlite.js";
 
 const url = process.env.DATABASE_URL ?? "";
@@ -64,6 +65,8 @@ export const createUser = backend.createUser;
 export const upsertUser = backend.upsertUser;
 export const getUserByEmail = backend.getUserByEmail;
 export const getUserById = backend.getUserById;
+export const updateUserVoiceSettings = backend.updateUserVoiceSettings;
+export const touchUserVoiceCall = backend.touchUserVoiceCall;
 export const createSession = backend.createSession;
 export const getSession = backend.getSession;
 export const deleteSession = backend.deleteSession;
@@ -163,6 +166,11 @@ export const getApprovalRequest = backend.getApprovalRequest;
 export const listPendingApprovals = backend.listPendingApprovals;
 export const resolveApprovalRequest = backend.resolveApprovalRequest;
 export const expireApprovalRequest = backend.expireApprovalRequest;
+export const setApprovalVoiceCall = backend.setApprovalVoiceCall;
+export const setApprovalVoiceCallStatus = backend.setApprovalVoiceCallStatus;
+export const getApprovalByVoiceAttempt = backend.getApprovalByVoiceAttempt;
+export const listInFlightVoiceCallsForUser =
+  backend.listInFlightVoiceCallsForUser;
 
 // Slack webhook + review pings
 export const setRoomSlackWebhook = backend.setRoomSlackWebhook;

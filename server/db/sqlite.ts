@@ -120,7 +120,10 @@ db.exec(`
     email TEXT UNIQUE NOT NULL,
     name TEXT NOT NULL,
     password_hash TEXT NOT NULL,
-    created_at INTEGER NOT NULL
+    created_at INTEGER NOT NULL,
+    phone_e164 TEXT,
+    voice_approvals_opt_in INTEGER NOT NULL DEFAULT 0,
+    voice_last_call_at INTEGER
   );
 
   CREATE TABLE IF NOT EXISTS sessions (
@@ -246,7 +249,11 @@ db.exec(`
     created_at INTEGER NOT NULL,
     decided_at INTEGER,
     decided_by_user_id TEXT,
-    decided_by_name TEXT
+    decided_by_name TEXT,
+    voice_token_hash TEXT,
+    voice_call_attempt_id TEXT,
+    voice_call_status TEXT,
+    voice_called_user_id TEXT
   );
 
   CREATE INDEX IF NOT EXISTS idx_steer_room_ts ON steer_messages(room_id, ts);
@@ -315,6 +322,13 @@ const migrations = [
   `ALTER TABLE rooms ADD COLUMN integration_agent_id TEXT`,
   `ALTER TABLE agents ADD COLUMN kind TEXT NOT NULL DEFAULT 'feature'`,
   `ALTER TABLE issues ADD COLUMN transcript_json TEXT`,
+  `ALTER TABLE users ADD COLUMN phone_e164 TEXT`,
+  `ALTER TABLE users ADD COLUMN voice_approvals_opt_in INTEGER NOT NULL DEFAULT 0`,
+  `ALTER TABLE users ADD COLUMN voice_last_call_at INTEGER`,
+  `ALTER TABLE approval_requests ADD COLUMN voice_token_hash TEXT`,
+  `ALTER TABLE approval_requests ADD COLUMN voice_call_attempt_id TEXT`,
+  `ALTER TABLE approval_requests ADD COLUMN voice_call_status TEXT`,
+  `ALTER TABLE approval_requests ADD COLUMN voice_called_user_id TEXT`,
 ];
 
 for (const sql of migrations) {
@@ -445,7 +459,11 @@ try {
       created_at INTEGER NOT NULL,
       decided_at INTEGER,
       decided_by_user_id TEXT,
-      decided_by_name TEXT
+      decided_by_name TEXT,
+      voice_token_hash TEXT,
+      voice_call_attempt_id TEXT,
+      voice_call_status TEXT,
+      voice_called_user_id TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_approval_requests_room_status ON approval_requests(room_id, status);
   `);
@@ -832,6 +850,14 @@ const stmts = {
   `),
   getUserByEmail: db.prepare(`SELECT * FROM users WHERE email = ?`),
   getUserById: db.prepare(`SELECT * FROM users WHERE id = ?`),
+  updateUserVoiceSettings: db.prepare(`
+    UPDATE users
+    SET phone_e164 = ?, voice_approvals_opt_in = ?
+    WHERE id = ?
+  `),
+  touchUserVoiceCall: db.prepare(`
+    UPDATE users SET voice_last_call_at = ? WHERE id = ?
+  `),
   insertSession: db.prepare(`
     INSERT INTO sessions (token, user_id, created_at, expires_at)
     VALUES (?, ?, ?, ?)
@@ -1001,6 +1027,24 @@ const stmts = {
   `),
   expireApprovalRequest: db.prepare(`
     UPDATE approval_requests SET status = 'expired', decided_at = ? WHERE id = ?
+  `),
+  setApprovalVoiceCall: db.prepare(`
+    UPDATE approval_requests
+    SET voice_token_hash = ?, voice_call_attempt_id = ?,
+        voice_call_status = ?, voice_called_user_id = ?
+    WHERE id = ?
+  `),
+  setApprovalVoiceCallStatus: db.prepare(`
+    UPDATE approval_requests SET voice_call_status = ? WHERE id = ?
+  `),
+  getApprovalByVoiceAttempt: db.prepare(`
+    SELECT * FROM approval_requests WHERE voice_call_attempt_id = ?
+  `),
+  listInFlightVoiceCallsForUser: db.prepare(`
+    SELECT * FROM approval_requests
+    WHERE voice_called_user_id = ?
+      AND status = 'pending'
+      AND voice_call_status IN ('dialing', 'connected')
   `),
 
   updateSlackWebhook: db.prepare(`
@@ -1728,15 +1772,50 @@ export function deleteSetting(key: string): void {
 
 // --- Auth functions ---
 
+export interface UserRow {
+  id: string;
+  email: string;
+  name: string;
+  password_hash: string;
+  created_at: number;
+  phone_e164: string | null;
+  voice_approvals_opt_in: number;
+  voice_last_call_at: number | null;
+}
+
+function rowToUser(row: Record<string, unknown> | undefined): UserRow | undefined {
+  if (!row) return undefined;
+  return {
+    id: String(row.id),
+    email: String(row.email),
+    name: String(row.name),
+    password_hash: String(row.password_hash ?? ""),
+    created_at: Number(row.created_at),
+    phone_e164: (row.phone_e164 as string) || null,
+    voice_approvals_opt_in: Number(row.voice_approvals_opt_in || 0) ? 1 : 0,
+    voice_last_call_at:
+      row.voice_last_call_at == null ? null : Number(row.voice_last_call_at),
+  };
+}
+
 export function createUser(
   id: string,
   email: string,
   name: string,
   passwordHash: string = "",
-): { id: string; email: string; name: string; created_at: number } {
+): UserRow {
   const now = Date.now();
   stmts.insertUser.run(id, email, name, passwordHash, now);
-  return { id, email, name, created_at: now };
+  return getUserById(id) ?? {
+    id,
+    email,
+    name,
+    password_hash: passwordHash,
+    created_at: now,
+    phone_e164: null,
+    voice_approvals_opt_in: 0,
+    voice_last_call_at: null,
+  };
 }
 
 /** Upsert a Clerk-backed user (id = Clerk user id). */
@@ -1744,13 +1823,21 @@ export function upsertUser(
   id: string,
   email: string,
   name: string,
-): { id: string; email: string; name: string; created_at: number } {
+): UserRow {
   const now = Date.now();
   stmts.upsertUser.run(id, email, name, now);
-  const row = stmts.getUserById.get(id) as
-    | { id: string; email: string; name: string; created_at: number }
-    | undefined;
-  return row ?? { id, email, name, created_at: now };
+  return (
+    getUserById(id) ?? {
+      id,
+      email,
+      name,
+      password_hash: "",
+      created_at: now,
+      phone_e164: null,
+      voice_approvals_opt_in: 0,
+      voice_last_call_at: null,
+    }
+  );
 }
 
 export function createPairingCode(
@@ -1785,20 +1872,25 @@ export function usePairingCode(code: string): void {
   stmts.usePairingCode.run(code);
 }
 
-export function getUserByEmail(
-  email: string,
-): { id: string; email: string; name: string; password_hash: string; created_at: number } | undefined {
-  return stmts.getUserByEmail.get(email) as
-    | { id: string; email: string; name: string; password_hash: string; created_at: number }
-    | undefined;
+export function getUserByEmail(email: string): UserRow | undefined {
+  return rowToUser(stmts.getUserByEmail.get(email) as Record<string, unknown> | undefined);
 }
 
-export function getUserById(
-  id: string,
-): { id: string; email: string; name: string; password_hash: string; created_at: number } | undefined {
-  return stmts.getUserById.get(id) as
-    | { id: string; email: string; name: string; password_hash: string; created_at: number }
-    | undefined;
+export function getUserById(id: string): UserRow | undefined {
+  return rowToUser(stmts.getUserById.get(id) as Record<string, unknown> | undefined);
+}
+
+export function updateUserVoiceSettings(
+  userId: string,
+  phoneE164: string | null,
+  optIn: boolean,
+): UserRow | undefined {
+  stmts.updateUserVoiceSettings.run(phoneE164, optIn ? 1 : 0, userId);
+  return getUserById(userId);
+}
+
+export function touchUserVoiceCall(userId: string, at = Date.now()): void {
+  stmts.touchUserVoiceCall.run(at, userId);
 }
 
 export function createSession(
@@ -2407,6 +2499,10 @@ export interface ApprovalRequestRow {
   decided_at: number | null;
   decided_by_user_id: string | null;
   decided_by_name: string | null;
+  voice_token_hash: string | null;
+  voice_call_attempt_id: string | null;
+  voice_call_status: string | null;
+  voice_called_user_id: string | null;
 }
 
 export interface CreateApprovalRequestInput {
@@ -2462,6 +2558,46 @@ export function resolveApprovalRequest(
 
 export function expireApprovalRequest(id: string): void {
   stmts.expireApprovalRequest.run(Date.now(), id);
+}
+
+export function setApprovalVoiceCall(
+  id: string,
+  input: {
+    tokenHash: string;
+    attemptId: string | null;
+    status: string;
+    calledUserId: string;
+  },
+): ApprovalRequestRow | undefined {
+  stmts.setApprovalVoiceCall.run(
+    input.tokenHash,
+    input.attemptId,
+    input.status,
+    input.calledUserId,
+    id,
+  );
+  return getApprovalRequest(id);
+}
+
+export function setApprovalVoiceCallStatus(
+  id: string,
+  status: string,
+): void {
+  stmts.setApprovalVoiceCallStatus.run(status, id);
+}
+
+export function getApprovalByVoiceAttempt(
+  attemptId: string,
+): ApprovalRequestRow | undefined {
+  return stmts.getApprovalByVoiceAttempt.get(attemptId) as
+    | ApprovalRequestRow
+    | undefined;
+}
+
+export function listInFlightVoiceCallsForUser(
+  userId: string,
+): ApprovalRequestRow[] {
+  return stmts.listInFlightVoiceCallsForUser.all(userId) as ApprovalRequestRow[];
 }
 
 // --- Room review pings ---

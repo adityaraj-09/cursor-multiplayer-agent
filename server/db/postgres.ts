@@ -93,7 +93,10 @@ async function initSchema() {
       email TEXT UNIQUE NOT NULL,
       name TEXT NOT NULL,
       password_hash TEXT NOT NULL,
-      created_at BIGINT NOT NULL
+      created_at BIGINT NOT NULL,
+      phone_e164 TEXT,
+      voice_approvals_opt_in INTEGER NOT NULL DEFAULT 0,
+      voice_last_call_at BIGINT
     );
 
     CREATE TABLE IF NOT EXISTS sessions (
@@ -238,7 +241,11 @@ async function initSchema() {
       created_at BIGINT NOT NULL,
       decided_at BIGINT,
       decided_by_user_id TEXT,
-      decided_by_name TEXT
+      decided_by_name TEXT,
+      voice_token_hash TEXT,
+      voice_call_attempt_id TEXT,
+      voice_call_status TEXT,
+      voice_called_user_id TEXT
     );
   `);
 
@@ -458,6 +465,13 @@ async function initSchema() {
     `ALTER TABLE rooms ADD COLUMN IF NOT EXISTS integration_agent_id TEXT`,
     `ALTER TABLE agents ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'feature'`,
     `ALTER TABLE issues ADD COLUMN IF NOT EXISTS transcript_json TEXT`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS phone_e164 TEXT`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS voice_approvals_opt_in INTEGER NOT NULL DEFAULT 0`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS voice_last_call_at BIGINT`,
+    `ALTER TABLE approval_requests ADD COLUMN IF NOT EXISTS voice_token_hash TEXT`,
+    `ALTER TABLE approval_requests ADD COLUMN IF NOT EXISTS voice_call_attempt_id TEXT`,
+    `ALTER TABLE approval_requests ADD COLUMN IF NOT EXISTS voice_call_status TEXT`,
+    `ALTER TABLE approval_requests ADD COLUMN IF NOT EXISTS voice_called_user_id TEXT`,
   ];
 
   for (const sql of migrations) {
@@ -1106,32 +1120,76 @@ export function deleteSetting(key: string): void {
 
 // --- Auth functions ---
 
+export interface UserRow {
+  id: string;
+  email: string;
+  name: string;
+  password_hash: string;
+  created_at: number;
+  phone_e164: string | null;
+  voice_approvals_opt_in: number;
+  voice_last_call_at: number | null;
+}
+
+function rowToUser(r: Record<string, unknown>): UserRow {
+  return {
+    id: String(r.id),
+    email: String(r.email),
+    name: String(r.name),
+    password_hash: String(r.password_hash ?? ""),
+    created_at: num(r.created_at as string | number)!,
+    phone_e164: (r.phone_e164 as string) || null,
+    voice_approvals_opt_in: Number(r.voice_approvals_opt_in || 0) ? 1 : 0,
+    voice_last_call_at: num(r.voice_last_call_at as string | number | null),
+  };
+}
+
 export function createUser(
   id: string,
   email: string,
   name: string,
   passwordHash: string = "",
-): { id: string; email: string; name: string; created_at: number } {
+): UserRow {
   const now = Date.now();
   syncQuery(
     `INSERT INTO users (id, email, name, password_hash, created_at) VALUES ($1,$2,$3,$4,$5)`,
     [id, email, name, passwordHash, now],
   );
-  return { id, email, name, created_at: now };
+  return getUserById(id) ?? {
+    id,
+    email,
+    name,
+    password_hash: passwordHash,
+    created_at: now,
+    phone_e164: null,
+    voice_approvals_opt_in: 0,
+    voice_last_call_at: null,
+  };
 }
 
 export function upsertUser(
   id: string,
   email: string,
   name: string,
-): { id: string; email: string; name: string; created_at: number } {
+): UserRow {
   const now = Date.now();
   syncQuery(
     `INSERT INTO users (id, email, name, password_hash, created_at) VALUES ($1,$2,$3,'',$4)
      ON CONFLICT(id) DO UPDATE SET email = excluded.email, name = excluded.name`,
     [id, email, name, now],
   );
-  return getUserById(id) ?? { id, email, name, created_at: now };
+  return (
+    getUserById(id) ?? {
+      id,
+      email,
+      name,
+      password_hash: "",
+      created_at: now,
+      phone_e164: null,
+      voice_approvals_opt_in: 0,
+      voice_last_call_at: null,
+    }
+  );
 }
 
 export function createPairingCode(
@@ -1176,28 +1234,41 @@ export function usePairingCode(code: string): void {
   syncQuery(`UPDATE pairing_codes SET used = 1 WHERE code = $1`, [code]);
 }
 
-export function getUserByEmail(
-  email: string,
-): { id: string; email: string; name: string; password_hash: string; created_at: number } | undefined {
-  const rows = syncQuery<{ id: string; email: string; name: string; password_hash: string; created_at: string }>(
+export function getUserByEmail(email: string): UserRow | undefined {
+  const rows = syncQuery<Record<string, unknown>>(
     `SELECT * FROM users WHERE email = $1`,
     [email],
   );
   if (!rows.length) return undefined;
-  const r = rows[0];
-  return { ...r, created_at: num(r.created_at)! };
+  return rowToUser(rows[0]);
 }
 
-export function getUserById(
-  id: string,
-): { id: string; email: string; name: string; password_hash: string; created_at: number } | undefined {
-  const rows = syncQuery<{ id: string; email: string; name: string; password_hash: string; created_at: string }>(
+export function getUserById(id: string): UserRow | undefined {
+  const rows = syncQuery<Record<string, unknown>>(
     `SELECT * FROM users WHERE id = $1`,
     [id],
   );
   if (!rows.length) return undefined;
-  const r = rows[0];
-  return { ...r, created_at: num(r.created_at)! };
+  return rowToUser(rows[0]);
+}
+
+export function updateUserVoiceSettings(
+  userId: string,
+  phoneE164: string | null,
+  optIn: boolean,
+): UserRow | undefined {
+  syncQuery(
+    `UPDATE users SET phone_e164 = $1, voice_approvals_opt_in = $2 WHERE id = $3`,
+    [phoneE164, optIn ? 1 : 0, userId],
+  );
+  return getUserById(userId);
+}
+
+export function touchUserVoiceCall(userId: string, at = Date.now()): void {
+  syncQuery(`UPDATE users SET voice_last_call_at = $1 WHERE id = $2`, [
+    at,
+    userId,
+  ]);
 }
 
 export function createSession(
@@ -2133,6 +2204,10 @@ export interface ApprovalRequestRow {
   decided_at: number | null;
   decided_by_user_id: string | null;
   decided_by_name: string | null;
+  voice_token_hash: string | null;
+  voice_call_attempt_id: string | null;
+  voice_call_status: string | null;
+  voice_called_user_id: string | null;
 }
 
 export interface CreateApprovalRequestInput {
@@ -2159,6 +2234,10 @@ function rowToApprovalRequest(r: Record<string, unknown>): ApprovalRequestRow {
     decided_at: num(r.decided_at as string | number | null),
     decided_by_user_id: (r.decided_by_user_id as string) ?? null,
     decided_by_name: (r.decided_by_name as string) ?? null,
+    voice_token_hash: (r.voice_token_hash as string) ?? null,
+    voice_call_attempt_id: (r.voice_call_attempt_id as string) ?? null,
+    voice_call_status: (r.voice_call_status as string) ?? null,
+    voice_called_user_id: (r.voice_called_user_id as string) ?? null,
   };
 }
 
@@ -2220,6 +2299,54 @@ export function expireApprovalRequest(id: string): void {
     `UPDATE approval_requests SET status = 'expired', decided_at = $1 WHERE id = $2`,
     [Date.now(), id],
   );
+}
+
+export function setApprovalVoiceCall(
+  id: string,
+  input: {
+    tokenHash: string;
+    attemptId: string | null;
+    status: string;
+    calledUserId: string;
+  },
+): ApprovalRequestRow | undefined {
+  syncQuery(
+    `UPDATE approval_requests
+     SET voice_token_hash = $1, voice_call_attempt_id = $2,
+         voice_call_status = $3, voice_called_user_id = $4
+     WHERE id = $5`,
+    [input.tokenHash, input.attemptId, input.status, input.calledUserId, id],
+  );
+  return getApprovalRequest(id);
+}
+
+export function setApprovalVoiceCallStatus(id: string, status: string): void {
+  syncQuery(
+    `UPDATE approval_requests SET voice_call_status = $1 WHERE id = $2`,
+    [status, id],
+  );
+}
+
+export function getApprovalByVoiceAttempt(
+  attemptId: string,
+): ApprovalRequestRow | undefined {
+  const rows = syncQuery<Record<string, unknown>>(
+    `SELECT * FROM approval_requests WHERE voice_call_attempt_id = $1`,
+    [attemptId],
+  );
+  return rows.length ? rowToApprovalRequest(rows[0]) : undefined;
+}
+
+export function listInFlightVoiceCallsForUser(
+  userId: string,
+): ApprovalRequestRow[] {
+  return syncQuery<Record<string, unknown>>(
+    `SELECT * FROM approval_requests
+     WHERE voice_called_user_id = $1
+       AND status = 'pending'
+       AND voice_call_status IN ('dialing', 'connected')`,
+    [userId],
+  ).map(rowToApprovalRequest);
 }
 
 // --- Room review pings ---

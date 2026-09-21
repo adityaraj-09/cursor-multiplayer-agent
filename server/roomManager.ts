@@ -143,6 +143,10 @@ import {
   sendSlackTestMessage,
 } from "./notify.js";
 import { userCanManageRoom as userCanManageRoomAccess } from "./roomAccess.js";
+import {
+  placeVoiceApprovalCall,
+  voiceCallSystemMessage,
+} from "./voiceApprovalCall.js";
 import type {
   AgentInfo,
   AgentConflict,
@@ -1752,6 +1756,32 @@ export class RoomManager {
     this.io.to(room.id).emit("tool-approval-requested", info);
 
     this.emitAgentStatus(room, agent.row.id, "idle");
+
+    const driverSocketId =
+      agent.driverSocketId ||
+      (room.agents.size <= 1 ? room.driverSocketId : null);
+    const driverUserId = driverSocketId
+      ? room.participants.get(driverSocketId)?.userId
+      : undefined;
+    const callee = placeVoiceApprovalCall({
+      roomId: room.id,
+      roomName: room.row.name,
+      ownerId: room.row.owner_id,
+      agentId: agent.row.id,
+      agentLabel: agent.row.label,
+      driverUserId,
+      approval: info,
+    });
+    if (callee) {
+      const callMsg = voiceCallSystemMessage({
+        roomId: room.id,
+        agentId: agent.row.id,
+        calleeName: callee.name,
+        phone: callee.phone_e164,
+      });
+      db.insertMessage(callMsg);
+      this.io.to(room.id).emit("chat-message", callMsg);
+    }
 
     return true;
   }
@@ -3665,69 +3695,132 @@ export class RoomManager {
     const room = this.getRoomForSocket(socket.id);
     if (!room) return;
 
-    const approvalRow = db.getApprovalRequest(requestId);
-    if (!approvalRow || approvalRow.room_id !== room.id) {
-      socket.emit("error", "Approval request not found");
-      return;
-    }
-    if (approvalRow.status !== "pending") {
-      socket.emit("error", "This approval has already been decided");
-      return;
-    }
-
     const p = room.participants.get(socket.id);
     if (!p?.userId) {
       socket.emit("error", "Sign in required to decide approvals");
       return;
     }
 
-    const role = this.resolveUserRoomRole(room.id, p.userId);
-    if (role !== "owner" && role !== "editor") {
-      socket.emit("error", "Only editors or the host can decide approvals");
-      return;
-    }
-
-    const agent = room.agents.get(approvalRow.agent_id);
-    const isDriver = Boolean(
-      agent &&
-        (agent.driverSocketId === socket.id ||
-          (room.agents.size <= 1 && room.driverSocketId === socket.id)),
-    );
-    if (role !== "owner" && isDriver) {
-      socket.emit(
-        "error",
-        "You are driving this agent — ask another editor or the host to decide",
-      );
-      return;
-    }
-
-    const decidedByName = p.name || "Someone";
-    const resolved = db.resolveApprovalRequest(
+    const result = this.finalizeToolApproval({
       requestId,
-      approved ? "approved" : "denied",
-      p.userId,
-      decidedByName,
+      approved,
+      alwaysAllow,
+      decidedByUserId: p.userId,
+      decidedByName: p.name || "Someone",
+      actorSocketId: socket.id,
+      enforceDriverRule: true,
+      expectedRoomId: room.id,
+    });
+    if (!result.ok) socket.emit("error", result.error);
+  }
+
+  /**
+   * Spoken approve/deny from Sarvam. Same resume path as the in-room button;
+   * skips the "driver cannot self-approve" rule because the phone is a
+   * second channel.
+   */
+  applyVoiceApprovalDecision(opts: {
+    requestId: string;
+    approved: boolean;
+    decidedByUserId: string;
+    decidedByName: string;
+  }): { ok: true } | { ok: false; error: string; status: number } {
+    return this.finalizeToolApproval({
+      requestId: opts.requestId,
+      approved: opts.approved,
+      alwaysAllow: false,
+      decidedByUserId: opts.decidedByUserId,
+      decidedByName: opts.decidedByName,
+      enforceDriverRule: false,
+    });
+  }
+
+  private finalizeToolApproval(opts: {
+    requestId: string;
+    approved: boolean;
+    alwaysAllow: boolean;
+    decidedByUserId: string;
+    decidedByName: string;
+    actorSocketId?: string;
+    enforceDriverRule: boolean;
+    expectedRoomId?: string;
+  }): { ok: true } | { ok: false; error: string; status: number } {
+    const approvalRow = db.getApprovalRequest(opts.requestId);
+    if (!approvalRow) {
+      return { ok: false, error: "Approval request not found", status: 404 };
+    }
+    if (opts.expectedRoomId && approvalRow.room_id !== opts.expectedRoomId) {
+      return { ok: false, error: "Approval request not found", status: 404 };
+    }
+    if (approvalRow.status !== "pending") {
+      return {
+        ok: false,
+        error: "This approval has already been decided",
+        status: 409,
+      };
+    }
+
+    const role = this.resolveUserRoomRole(
+      approvalRow.room_id,
+      opts.decidedByUserId,
     );
-    if (!resolved) return;
+    if (role !== "owner" && role !== "editor") {
+      return {
+        ok: false,
+        error: "Only editors or the host can decide approvals",
+        status: 403,
+      };
+    }
+
+    const room = this.rooms.get(approvalRow.room_id);
+    const agent = room?.agents.get(approvalRow.agent_id);
+    if (opts.enforceDriverRule && opts.actorSocketId && room) {
+      const isDriver = Boolean(
+        agent &&
+          (agent.driverSocketId === opts.actorSocketId ||
+            (room.agents.size <= 1 && room.driverSocketId === opts.actorSocketId)),
+      );
+      if (role !== "owner" && isDriver) {
+        return {
+          ok: false,
+          error:
+            "You are driving this agent — ask another editor or the host to decide",
+          status: 403,
+        };
+      }
+    }
+
+    const resolved = db.resolveApprovalRequest(
+      opts.requestId,
+      opts.approved ? "approved" : "denied",
+      opts.decidedByUserId,
+      opts.decidedByName,
+    );
+    if (!resolved) {
+      return { ok: false, error: "Approval request not found", status: 404 };
+    }
+    if (resolved.voice_call_status && resolved.voice_call_status !== "completed") {
+      db.setApprovalVoiceCallStatus(resolved.id, "completed");
+    }
 
     const info = this.approvalRowToInfo(resolved);
-    this.io.to(room.id).emit("tool-approval-resolved", info);
+    this.io.to(approvalRow.room_id).emit("tool-approval-resolved", info);
 
     const sysMsg: ChatMessage = {
       id: nanoid(12),
-      roomId: room.id,
+      roomId: approvalRow.room_id,
       role: "system",
-      content: `${approved ? "Approved" : "Denied"} by ${decidedByName}.`,
+      content: `${opts.approved ? "Approved" : "Denied"} by ${opts.decidedByName}.`,
       status: "done",
       ts: Date.now(),
       agentId: approvalRow.agent_id,
       approval: info,
     };
     db.insertMessage(sysMsg);
-    this.io.to(room.id).emit("chat-message", sysMsg);
+    this.io.to(approvalRow.room_id).emit("chat-message", sysMsg);
 
-    if (!agent || !approved) return;
-    if (alwaysAllow) {
+    if (!room || !agent || !opts.approved) return { ok: true };
+    if (opts.alwaysAllow) {
       agent.alwaysAllowedTools ??= new Set();
       const toolKey = approvalRow.tool_name
         .replace(/ToolCall$/i, "")
@@ -3735,7 +3828,7 @@ export class RoomManager {
         .toLowerCase();
       if (toolKey) agent.alwaysAllowedTools.add(toolKey);
     }
-    if (agent.workerRunActive || agent.backend.isBusy()) return;
+    if (agent.workerRunActive || agent.backend.isBusy()) return { ok: true };
 
     const key = approvalActionKey(
       approvalRow.tool_name,
@@ -3744,8 +3837,9 @@ export class RoomManager {
     );
     agent.preApprovedActions.add(key);
 
-    const resumePrompt = `Your proposed action was approved by ${decidedByName}. Proceed with it now:\n\nTool: ${approvalRow.tool_name}\n${approvalRow.detail}\n${approvalRow.path ? `Path: ${approvalRow.path}` : ""}\n\nDo not ask for approval again for this exact action.`;
+    const resumePrompt = `Your proposed action was approved by ${opts.decidedByName}. Proceed with it now:\n\nTool: ${approvalRow.tool_name}\n${approvalRow.detail}\n${approvalRow.path ? `Path: ${approvalRow.path}` : ""}\n\nDo not ask for approval again for this exact action.`;
     void this.runAgent(room, agent, resumePrompt);
+    return { ok: true };
   }
 
   // -----------------------------------------------------------------------

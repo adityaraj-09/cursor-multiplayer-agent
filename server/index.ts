@@ -17,6 +17,7 @@ import authRoutes from "./authRoutes.js";
 import orgRoutes from "./orgRoutes.js";
 import issueRoutes from "./issueRoutes.js";
 import workspaceRoutes from "./workspaceRoutes.js";
+import { createVoiceApprovalRoutes } from "./voiceApprovalRoutes.js";
 import { issueRunner } from "./issueRunner.js";
 import * as db from "./db.js";
 import {
@@ -98,7 +99,13 @@ app.use(
   cors({
     origin: corsOrigin,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "X-Cursor-Api-Key"],
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+      "X-Cursor-Api-Key",
+      "X-API-Key",
+      "X-Webhook-Secret",
+    ],
   }),
 );
 app.use(express.json({ limit: "12mb" }));
@@ -208,6 +215,7 @@ app.use("/api/auth", authRoutes);
 app.use("/api/orgs", orgRoutes);
 app.use("/api/issues", issueRoutes);
 app.use("/api/workspace", workspaceRoutes);
+app.use("/api", createVoiceApprovalRoutes(roomManager));
 
 app.get("/api/auth/status", (req, res) => {
   const userId = req.user?.id;

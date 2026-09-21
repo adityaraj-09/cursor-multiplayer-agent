@@ -7,7 +7,7 @@ import DashboardShell from "../../components/DashboardShell";
 import CreateTeamCard from "../../components/CreateTeamCard";
 import { useAuth } from "../../components/AuthProvider";
 import { steerClerkAppearance } from "../../lib/clerkAppearance";
-import { useWorkspaceScope } from "../../lib/useWorkspaceScope";
+import VoiceApprovalCard from "../../components/settings/VoiceApprovalCard";
 
 export default function ProfilePage() {
   const { user, loading } = useAuth();
@@ -69,9 +69,11 @@ export default function ProfilePage() {
           </h1>
           <p className="text-[13px] text-[#6e6e6e] mt-1">
             Signed in with Clerk — manage email, password, and connected
-            accounts below.
+            accounts below. Phone approval calls are saved on this page.
           </p>
         </div>
+
+        <VoiceApprovalCard />
 
         <section className="rounded-xl border border-[#2b2b2b] bg-[#1a1a1a] p-4 sm:p-5">
           <div className="flex items-start gap-4">

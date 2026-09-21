@@ -11,9 +11,14 @@ import {
   requireAuth,
   clerkConfigured,
 } from "./auth.js";
-import { INVITE_TTL_MS } from "./config.js";
+import { INVITE_TTL_MS, sarvamCallingConfigured } from "./config.js";
 import { notifyEvent } from "./notify.js";
 import { userCanManageRoom } from "./roomAccess.js";
+import {
+  maskPhoneE164,
+  normalizePhoneE164,
+  type VoiceApprovalSettings,
+} from "../shared/voiceApprovals.js";
 import {
   parseRoomInviteRole,
   type RoomInviteRole,
@@ -27,6 +32,49 @@ router.get("/me", requireAuth, (req, res) => {
     user: req.user,
     clerk: clerkConfigured(),
   });
+});
+
+function voiceSettingsFor(userId: string): VoiceApprovalSettings {
+  const user = db.getUserById(userId);
+  const phone = user?.phone_e164 || null;
+  return {
+    phoneE164: phone,
+    phoneMasked: maskPhoneE164(phone),
+    optIn: Boolean(user?.voice_approvals_opt_in && phone),
+    callingConfigured: sarvamCallingConfigured(),
+  };
+}
+
+/** GET /api/auth/voice-approval — phone + opt-in for approval calls. */
+router.get("/voice-approval", requireAuth, (req, res) => {
+  res.json(voiceSettingsFor(req.user!.id));
+});
+
+/** PUT /api/auth/voice-approval — save phone + opt-in. */
+router.put("/voice-approval", requireAuth, (req, res) => {
+  const body = (req.body || {}) as Record<string, unknown>;
+  const phoneRaw =
+    typeof body.phoneE164 === "string"
+      ? body.phoneE164
+      : typeof body.phone === "string"
+        ? body.phone
+        : "";
+  const phone = phoneRaw.trim() ? normalizePhoneE164(phoneRaw) : null;
+  if (phoneRaw.trim() && !phone) {
+    res.status(400).json({
+      error: "Enter a valid phone number with country code (e.g. +9198…)",
+    });
+    return;
+  }
+  const optIn = Boolean(body.optIn ?? body.opt_in);
+  if (optIn && !phone) {
+    res.status(400).json({
+      error: "Add a phone number before turning on approval calls",
+    });
+    return;
+  }
+  db.updateUserVoiceSettings(req.user!.id, phone, optIn);
+  res.json(voiceSettingsFor(req.user!.id));
 });
 
 /**
