@@ -7,6 +7,7 @@ import DashboardShell from "../../components/DashboardShell";
 import CreateTeamCard from "../../components/CreateTeamCard";
 import { useAuth } from "../../components/AuthProvider";
 import { steerClerkAppearance } from "../../lib/clerkAppearance";
+import { useWorkspaceScope } from "../../lib/useWorkspaceScope";
 import VoiceApprovalCard from "../../components/settings/VoiceApprovalCard";
 
 export default function ProfilePage() {
