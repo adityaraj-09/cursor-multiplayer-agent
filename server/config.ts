@@ -82,9 +82,16 @@ export function sarvamAppId(): string {
   return process.env.SARVAM_APP_ID?.trim() || "";
 }
 
-export function sarvamAppVersion(): number {
-  const n = Number(process.env.SARVAM_APP_VERSION?.trim() || "1");
+/** Instant Outbound wants an integer. Dashboard labels like `v4` parse as 4. */
+export function parseSarvamAppVersion(raw: string | undefined | null): number {
+  const s = String(raw ?? "").trim();
+  if (!s) return 1;
+  const n = Number(s.replace(/^v/i, "").trim());
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : 1;
+}
+
+export function sarvamAppVersion(): number {
+  return parseSarvamAppVersion(process.env.SARVAM_APP_VERSION);
 }
 
 /**

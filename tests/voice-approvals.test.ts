@@ -6,6 +6,7 @@ import {
   parseVoiceCallStatus,
   parseVoiceDecision,
 } from "../shared/voiceApprovals.js";
+import { parseSarvamAppVersion } from "../server/config.js";
 import {
   generateVoiceToken,
   hashVoiceToken,
@@ -17,6 +18,15 @@ import {
 } from "../server/sarvam.js";
 
 describe("voice approval helpers", () => {
+  it("parses Sarvam app versions from dashboard labels", () => {
+    expect(parseSarvamAppVersion("4")).toBe(4);
+    expect(parseSarvamAppVersion("v4")).toBe(4);
+    expect(parseSarvamAppVersion("V4")).toBe(4);
+    expect(parseSarvamAppVersion("  v4  ")).toBe(4);
+    expect(parseSarvamAppVersion("")).toBe(1);
+    expect(parseSarvamAppVersion("nope")).toBe(1);
+  });
+
   it("normalizes Indian and E.164 phones", () => {
     expect(normalizePhoneE164("9876543210")).toBe("+919876543210");
     expect(normalizePhoneE164("+91 98765 43210")).toBe("+919876543210");

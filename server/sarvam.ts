@@ -22,9 +22,20 @@ const MAX_OUTBOUND_ATTEMPTS = 3;
 
 /** Names Instant Outbound already rejected for this process (committed app version). */
 const rejectedAgentVariableKeys = new Set<string>();
+let rejectedAgentVariableVersion: number | null = null;
 
 export function resetRejectedAgentVariableKeys(): void {
   rejectedAgentVariableKeys.clear();
+  rejectedAgentVariableVersion = null;
+}
+
+function rejectedKeysForCurrentVersion(): Set<string> {
+  const version = sarvamAppVersion();
+  if (rejectedAgentVariableVersion !== version) {
+    rejectedAgentVariableKeys.clear();
+    rejectedAgentVariableVersion = version;
+  }
+  return rejectedAgentVariableKeys;
 }
 
 /** Parse `Agent variables '{'a', 'b'}' not found` from a Sarvam 422 body. */
@@ -63,9 +74,10 @@ export function sarvamErrorText(
 }
 
 function rememberRejectedKeys(keys: string[]): void {
+  const rejected = rejectedKeysForCurrentVersion();
   for (const key of keys) {
     const name = key.trim();
-    if (name) rejectedAgentVariableKeys.add(name);
+    if (name) rejected.add(name);
   }
 }
 
@@ -73,10 +85,11 @@ export function filterAgentVariables(
   variables: Record<string, string>,
 ): Record<string, string> {
   const allow = sarvamAgentVariableAllowlist();
+  const rejected = rejectedKeysForCurrentVersion();
   const out: Record<string, string> = {};
   for (const [key, value] of Object.entries(variables)) {
     if (allow && !allow.includes(key)) continue;
-    if (rejectedAgentVariableKeys.has(key)) continue;
+    if (rejected.has(key)) continue;
     out[key] = value;
   }
   return out;
