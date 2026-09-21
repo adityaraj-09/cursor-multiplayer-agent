@@ -1,4 +1,4 @@
-import { Router, type Router as RouterType } from "express";
+import { Router, type Request, type Router as RouterType } from "express";
 import type { RoomManager } from "./roomManager.js";
 import * as db from "./db.js";
 import { log, logWarn } from "./logger.js";
@@ -7,7 +7,12 @@ import {
   extractProvidedSecret,
   webhookSecretOk,
 } from "./sarvam.js";
-import { parseVoiceCallStatus, parseVoiceDecision } from "../shared/voiceApprovals.js";
+import {
+  parseVoiceCallStatus,
+  parseVoiceDecision,
+  flattenVoiceWebhookBody,
+  pickRawVoiceDecision,
+} from "../shared/voiceApprovals.js";
 import { resolveVoiceDecisionTarget } from "./voiceApprovalCall.js";
 
 function headerString(value: string | string[] | undefined): string {
@@ -29,6 +34,17 @@ function readToken(body: Record<string, unknown>): string {
   return String(body.token || body.voice_token || body.voiceToken || "").trim();
 }
 
+function queryRecord(query: Request["query"]): Record<string, unknown> {
+  return query as Record<string, unknown>;
+}
+
+function snippet(value: unknown): string {
+  const text = String(value ?? "").replace(/\s+/g, " ").trim();
+  if (!text) return "";
+  if (/^[a-f0-9]{32,}$/i.test(text)) return "(hex)";
+  return text.length > 80 ? `${text.slice(0, 79)}…` : text;
+}
+
 export function createVoiceApprovalRoutes(roomManager: RoomManager): RouterType {
   const router: RouterType = Router();
 
@@ -38,7 +54,7 @@ export function createVoiceApprovalRoutes(roomManager: RoomManager): RouterType 
    * single in-flight voice call when the committed Sarvam agent has no vars.
    */
   router.post("/voice-approvals/decision", (req, res) => {
-    const body = (req.body || {}) as Record<string, unknown>;
+    const body = flattenVoiceWebhookBody(req.body);
     const provided = extractProvidedSecret({
       authorization: headerString(req.headers.authorization),
       apiKey: headerString(
@@ -47,16 +63,25 @@ export function createVoiceApprovalRoutes(roomManager: RoomManager): RouterType 
       querySecret: String(req.query.secret || ""),
     });
     if (sarvamWebhookSecret() && !webhookSecretOk(provided)) {
+      logWarn("voice-approval", "decision rejected: bad webhook secret", {
+        contentType: headerString(req.headers["content-type"]),
+      });
       res.status(401).json({ error: "Invalid webhook secret", status: "denied" });
       return;
     }
 
     const approvalId = readApprovalId(body);
-    const decision = parseVoiceDecision(
-      body.decision ?? body.approved ?? body.result ?? body.choice,
-    );
+    const rawDecision = pickRawVoiceDecision(body, queryRecord(req.query));
+    const decision = parseVoiceDecision(rawDecision);
     const token = readToken(body);
     if (!decision) {
+      logWarn("voice-approval", "decision body not understood", {
+        contentType: headerString(req.headers["content-type"]),
+        keys: Object.keys(body).join(",") || "(empty)",
+        decisionRaw: snippet(rawDecision) || "(missing)",
+        approvalId: approvalId || "(none)",
+        hasToken: Boolean(token),
+      });
       res.status(400).json({
         error: "decision must be approved or denied",
         status: "unclear",
@@ -72,6 +97,12 @@ export function createVoiceApprovalRoutes(roomManager: RoomManager): RouterType 
       allowTokenless,
     });
     if (!target.ok) {
+      logWarn("voice-approval", "decision did not match an approval", {
+        approvalId: approvalId || "(none)",
+        hasToken: Boolean(token),
+        error: target.error,
+        httpStatus: target.httpStatus,
+      });
       res.status(target.httpStatus).json({
         error: target.error,
         status: target.status,
@@ -137,7 +168,7 @@ export function createVoiceApprovalRoutes(roomManager: RoomManager): RouterType 
       return;
     }
 
-    const body = (req.body || {}) as Record<string, unknown>;
+    const body = flattenVoiceWebhookBody(req.body);
     const attemptId = String(body.attempt_id || body.attemptId || "").trim();
     const meta =
       body.webhook_config && typeof body.webhook_config === "object"

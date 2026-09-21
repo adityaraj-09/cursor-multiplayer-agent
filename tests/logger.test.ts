@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { log, logError, logWarn } from "../server/logger.js";
+import { redactRequestPath } from "../server/requestLog.js";
 
 describe("logger", () => {
   afterEach(() => {
@@ -28,5 +29,13 @@ describe("logger", () => {
     expect(line).toContain("run failed");
     expect(line).toContain("boom");
     expect(warn).toHaveBeenCalled();
+  });
+
+  it("redacts webhook secrets in request paths", () => {
+    expect(
+      redactRequestPath(
+        "/api/voice-approvals/call-status?secret=supersecret",
+      ),
+    ).toBe("/api/voice-approvals/call-status?secret=***");
   });
 });

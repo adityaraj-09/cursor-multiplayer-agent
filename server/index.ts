@@ -109,6 +109,8 @@ app.use(
   }),
 );
 app.use(express.json({ limit: "12mb" }));
+app.use(express.urlencoded({ extended: true }));
+app.use(express.text({ type: ["text/plain"], limit: "1mb" }));
 
 // Auth middleware — Clerk JWT or CLI session token → req.user
 app.use(authMiddleware());
@@ -216,6 +218,7 @@ app.use("/api/orgs", orgRoutes);
 app.use("/api/issues", issueRoutes);
 app.use("/api/workspace", workspaceRoutes);
 app.use("/api", createVoiceApprovalRoutes(roomManager));
+app.use("/", createVoiceApprovalRoutes(roomManager));
 
 app.get("/api/auth/status", (req, res) => {
   const userId = req.user?.id;

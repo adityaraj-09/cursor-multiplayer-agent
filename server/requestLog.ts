@@ -5,6 +5,13 @@ function shouldSkip(path: string): boolean {
   return path.startsWith("/socket.io");
 }
 
+export function redactRequestPath(path: string): string {
+  return path.replace(
+    /([?&](?:secret|token|key|api[_-]?key|voice_token)=)[^&]*/gi,
+    "$1***",
+  );
+}
+
 export function requestLog(
   req: Request,
   res: Response,
@@ -16,7 +23,7 @@ export function requestLog(
   }
   const start = Date.now();
   res.on("finish", () => {
-    const path = req.originalUrl || req.url;
+    const path = redactRequestPath(req.originalUrl || req.url);
     const status = res.statusCode;
     const ms = Date.now() - start;
     const msg = `${req.method} ${path} ${status}  ${ms}ms`;

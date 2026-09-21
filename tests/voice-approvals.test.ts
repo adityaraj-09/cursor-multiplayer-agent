@@ -5,6 +5,8 @@ import {
   normalizePhoneE164,
   parseVoiceCallStatus,
   parseVoiceDecision,
+  flattenVoiceWebhookBody,
+  pickRawVoiceDecision,
 } from "../shared/voiceApprovals.js";
 import { parseSarvamAppVersion } from "../server/config.js";
 import {
@@ -49,6 +51,10 @@ describe("voice approval helpers", () => {
     expect(parseVoiceDecision("stop")).toBe("denied");
     expect(parseVoiceDecision("no")).toBe("denied");
     expect(parseVoiceDecision("maybe")).toBeNull();
+    expect(parseVoiceDecision("Approved.")).toBe("approved");
+    expect(parseVoiceDecision("yes, go ahead")).toBe("approved");
+    expect(parseVoiceDecision("please deny this")).toBe("denied");
+    expect(parseVoiceDecision("don't approve")).toBeNull();
   });
 
   it("parses call statuses", () => {
@@ -65,6 +71,24 @@ describe("voice approval helpers", () => {
     expect(voiceTokensEqual("", hash)).toBe(false);
     expect(secretsEqual("abc", "abc")).toBe(true);
     expect(secretsEqual("abc", "xyz")).toBe(false);
+  });
+
+  it("unwraps nested Sarvam API-tool bodies", () => {
+    const nested = flattenVoiceWebhookBody({
+      parameters: { decision: "approve", approval_id: "apr_1" },
+    });
+    expect(pickRawVoiceDecision(nested)).toBe("approve");
+    expect(nested.approval_id).toBe("apr_1");
+    expect(
+      parseVoiceDecision(
+        pickRawVoiceDecision(
+          flattenVoiceWebhookBody({
+            call_transcript: "Yes, go ahead and run it.",
+          }),
+        ),
+      ),
+    ).toBe("approved");
+    expect(flattenVoiceWebhookBody("approve").decision).toBe("approve");
   });
 });
 
