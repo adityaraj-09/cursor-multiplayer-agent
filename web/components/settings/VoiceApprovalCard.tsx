@@ -40,9 +40,10 @@ export default function VoiceApprovalCard() {
     setError("");
     setNotice("");
     try {
+      const enable = Boolean(phone.trim()) && optIn;
       const next = await updateVoiceApprovalSettings({
         phoneE164: phone,
-        optIn,
+        optIn: enable,
       });
       setSettings(next);
       setPhone(next.phoneE164 || "");
@@ -80,7 +81,11 @@ export default function VoiceApprovalCard() {
         Phone (E.164)
         <input
           value={phone}
-          onChange={(e) => setPhone(e.target.value)}
+          onChange={(e) => {
+            const next = e.target.value;
+            setPhone(next);
+            if (next.trim()) setOptIn(true);
+          }}
           placeholder="+9198XXXXXXXX"
           autoComplete="tel"
           className="mt-1 w-full h-9 px-2.5 rounded-md bg-[#252525] border border-[#2b2b2b] text-[13px] text-[#e4e4e4] outline-none focus:border-[#4d9fff]"
@@ -96,6 +101,12 @@ export default function VoiceApprovalCard() {
         Call me when a tool needs approval
       </label>
 
+      {settings?.phoneE164 && !optIn && (
+        <p className="text-[12px] text-[#e8a23a] mt-3">
+          Number is saved but calls are off. Check the box and Save — that’s
+          why the last approval skipped with “opt-in off”.
+        </p>
+      )}
       {settings && !settings.callingConfigured && (
         <p className="text-[12px] text-[#e8a23a] mt-3">
           Calling isn’t configured on this server yet. Your number is saved;

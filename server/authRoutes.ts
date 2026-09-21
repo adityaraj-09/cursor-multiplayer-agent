@@ -67,7 +67,12 @@ router.put("/voice-approval", requireAuth, (req, res) => {
     });
     return;
   }
-  const optIn = Boolean(body.optIn ?? body.opt_in);
+  const optInRaw = body.optIn ?? body.opt_in;
+  // Saving a number turns calls on unless they explicitly pass false.
+  const optIn =
+    optInRaw === undefined || optInRaw === null
+      ? Boolean(phone)
+      : Boolean(optInRaw);
   if (optIn && !phone) {
     res.status(400).json({
       error: "Add a phone number before turning on approval calls",
