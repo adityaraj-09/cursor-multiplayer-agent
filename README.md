@@ -63,7 +63,8 @@ Copy `.env.example` to `.env`:
 | `ISSUE_UPLOAD_DIR` | `data/issue-uploads` | Persistent issue attachment storage |
 | `SARVAM_API_KEY` | | Voice Agents API key for approval calls |
 | `SARVAM_ORG_ID` / `SARVAM_WORKSPACE_ID` | | From the Sarvam dashboard URL |
-| `SARVAM_APP_ID` / `SARVAM_APP_VERSION` | | Committed approval-caller agent |
+| `SARVAM_APP_ID` / `SARVAM_APP_VERSION` | | Committed approval-caller agent. Instant Outbound only accepts `agent_variables` declared on that version. |
+| `SARVAM_AGENT_VARIABLES` | (send all, drop 422 extras) | Optional comma-separated input variable names on the committed agent |
 | `SARVAM_CONNECTION_ID` / `SARVAM_AGENT_PHONE` | | Telephony connection + caller ID |
 | `SARVAM_WEBHOOK_SECRET` | | Shared secret for `/api/voice-approvals/decision` |
 | `API_PUBLIC_ORIGIN` | `APP_ORIGIN` | Public API URL Sarvam can reach |

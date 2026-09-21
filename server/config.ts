@@ -87,6 +87,20 @@ export function sarvamAppVersion(): number {
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : 1;
 }
 
+/**
+ * Input variable names declared on the committed Sarvam agent.
+ * `undefined` = send every key (and drop any 422 unknowns on retry).
+ * Empty list = omit agent_variables entirely.
+ */
+export function sarvamAgentVariableAllowlist(): string[] | undefined {
+  const raw = process.env.SARVAM_AGENT_VARIABLES;
+  if (raw === undefined) return undefined;
+  return raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
 export function sarvamConnectionId(): string {
   return process.env.SARVAM_CONNECTION_ID?.trim() || "";
 }

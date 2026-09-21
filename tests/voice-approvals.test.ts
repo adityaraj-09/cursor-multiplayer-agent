@@ -11,6 +11,9 @@ import {
   hashVoiceToken,
   voiceTokensEqual,
   secretsEqual,
+  parseUnknownAgentVariableNames,
+  sarvamErrorText,
+  resetRejectedAgentVariableKeys,
 } from "../server/sarvam.js";
 
 describe("voice approval helpers", () => {
@@ -140,19 +143,109 @@ describe("voice approval persistence", () => {
     expect(voiceTokensEqual(token, row?.voice_token_hash)).toBe(true);
     expect(db.getApprovalByVoiceAttempt("att_1")?.id).toBe(approval.id);
   });
+
+  it("matches a tokenless decision to the single in-flight call", async () => {
+    const { resolveVoiceDecisionTarget } = await import(
+      "../server/voiceApprovalCall.js"
+    );
+    const room = db.createRoom({
+      id: randomUUID(),
+      name: "Voice",
+      repoPath: "/tmp",
+      agentCommand: "echo",
+      runtime: "local",
+      authMode: "cli",
+      modelId: "auto",
+    });
+    const agent = db.createAgent({ roomId: room.id, label: "A" });
+    const approval = db.createApprovalRequest({
+      roomId: room.id,
+      agentId: agent.id,
+      callId: "c-voice",
+      toolName: "shell",
+    });
+    db.setApprovalVoiceCall(approval.id, {
+      tokenHash: hashVoiceToken("tok"),
+      attemptId: "att_live",
+      status: "dialing",
+      calledUserId: "user_voice",
+    });
+    for (const row of db.listPendingVoiceCalledApprovals()) {
+      if (row.id !== approval.id) db.expireApprovalRequest(row.id);
+    }
+
+    const byId = resolveVoiceDecisionTarget({
+      approvalId: approval.id,
+      token: "",
+      allowTokenless: true,
+    });
+    expect(byId.ok).toBe(true);
+    if (byId.ok) expect(byId.tokenless).toBe(true);
+
+    const wrong = resolveVoiceDecisionTarget({
+      approvalId: approval.id,
+      token: "nope",
+      allowTokenless: true,
+    });
+    expect(wrong.ok).toBe(false);
+
+    const matched = resolveVoiceDecisionTarget({
+      approvalId: "",
+      token: "",
+      allowTokenless: true,
+    });
+    expect(matched.ok).toBe(true);
+    if (matched.ok) {
+      expect(matched.row.id).toBe(approval.id);
+      expect(matched.tokenless).toBe(true);
+    }
+  });
+});
+
+describe("sarvam error parsing", () => {
+  it("reads nested Instant Outbound 422 details", () => {
+    const names = parseUnknownAgentVariableNames(
+      "Agent variables '{'agent_label', 'approval_id', 'tool_detail', 'user_name', 'voice_token', 'file_path', 'room_name', 'join_url'}' not found",
+    );
+    expect(names?.sort()).toEqual(
+      [
+        "agent_label",
+        "approval_id",
+        "file_path",
+        "join_url",
+        "room_name",
+        "tool_detail",
+        "user_name",
+        "voice_token",
+      ].sort(),
+    );
+    expect(
+      sarvamErrorText(
+        {
+          error: {
+            message: "(422) Invalid Parameter",
+            data: { details: "Agent variables '{'x'}' not found" },
+          },
+        },
+        '{"error":{}}',
+      ),
+    ).toBe("Agent variables '{'x'}' not found");
+  });
 });
 
 describe("sarvam outbound payload", () => {
   const prev = { ...process.env };
 
   afterEach(() => {
+    resetRejectedAgentVariableKeys();
+    delete process.env.SARVAM_AGENT_VARIABLES;
     for (const key of Object.keys(process.env)) {
       if (!(key in prev)) delete process.env[key];
     }
     Object.assign(process.env, prev);
   });
 
-  it("posts Instant Outbound with agent variables", async () => {
+  function sarvamEnv() {
     process.env.SARVAM_API_KEY = "sk-test";
     process.env.SARVAM_ORG_ID = "org_1";
     process.env.SARVAM_WORKSPACE_ID = "ws_1";
@@ -161,6 +254,10 @@ describe("sarvam outbound payload", () => {
     process.env.SARVAM_CONNECTION_ID = "conn_1";
     process.env.SARVAM_AGENT_PHONE = "+918000000000";
     process.env.API_PUBLIC_ORIGIN = "https://api.example.com";
+  }
+
+  it("posts Instant Outbound with agent variables", async () => {
+    sarvamEnv();
 
     const { createInstantOutboundCall } = await import("../server/sarvam.js");
     const fetchMock = vi.fn(async () => {
@@ -192,10 +289,103 @@ describe("sarvam outbound payload", () => {
       );
       const body = JSON.parse(String(init.body)) as {
         user_config: { user_phone_number: string };
-        app_config: { agent_variables: Record<string, string> };
+        app_config: { agent_variables?: Record<string, string> };
       };
       expect(body.user_config.user_phone_number).toBe("+919876543210");
-      expect(body.app_config.agent_variables.approval_id).toBe("apr_1");
+      expect(body.app_config.agent_variables?.approval_id).toBe("apr_1");
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+
+  it("retries Instant Outbound without undeclared agent variables", async () => {
+    sarvamEnv();
+    const { createInstantOutboundCall } = await import("../server/sarvam.js");
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as {
+        app_config: { agent_variables?: Record<string, string> };
+      };
+      const extra = Object.keys(body.app_config.agent_variables || {});
+      if (extra.length > 0) {
+        const listed = extra.map((name) => `'${name}'`).join(", ");
+        return {
+          ok: false,
+          status: 422,
+          text: async () =>
+            JSON.stringify({
+              error: {
+                message: "(422) Invalid Parameter",
+                type: "invalid_parameter",
+                code: 422,
+                data: {
+                  details: `Agent variables '{${listed}}' not found`,
+                },
+              },
+            }),
+        } as Response;
+      }
+      return {
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ attempt_id: "att_retry" }),
+      } as Response;
+    });
+    const original = globalThis.fetch;
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    try {
+      const result = await createInstantOutboundCall({
+        userPhone: "9876543210",
+        initialBotMessage: "Hi",
+        variables: {
+          user_name: "Aditya",
+          room_name: "Room",
+          agent_label: "Cursor",
+          tool_name: "shell",
+          tool_detail: "ls",
+          file_path: "",
+          approval_id: "apr_41de80dfb80920d5",
+          voice_token: "tok",
+          join_url: "https://example.com/room/1",
+        },
+      });
+      expect(result.attemptId).toBe("att_retry");
+      expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(2);
+      const retryBody = JSON.parse(
+        String((fetchMock.mock.calls.at(-1)?.[1] as RequestInit).body),
+      ) as { app_config: { agent_variables?: unknown; initial_bot_message?: string } };
+      expect(retryBody.app_config.agent_variables).toBeUndefined();
+      expect(retryBody.app_config.initial_bot_message).toBe("Hi");
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+
+  it("omits agent variables not in SARVAM_AGENT_VARIABLES", async () => {
+    sarvamEnv();
+    process.env.SARVAM_AGENT_VARIABLES = "tool_name";
+    const { createInstantOutboundCall } = await import("../server/sarvam.js");
+    const fetchMock = vi.fn(async () => {
+      return {
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ attempt_id: "att_allow" }),
+      } as Response;
+    });
+    const original = globalThis.fetch;
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    try {
+      await createInstantOutboundCall({
+        userPhone: "9876543210",
+        variables: {
+          tool_name: "shell",
+          approval_id: "apr_1",
+          voice_token: "tok",
+        },
+      });
+      const body = JSON.parse(
+        String((fetchMock.mock.calls[0]?.[1] as RequestInit).body),
+      ) as { app_config: { agent_variables: Record<string, string> } };
+      expect(body.app_config.agent_variables).toEqual({ tool_name: "shell" });
     } finally {
       globalThis.fetch = original;
     }

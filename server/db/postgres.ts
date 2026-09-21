@@ -2349,6 +2349,16 @@ export function listInFlightVoiceCallsForUser(
   ).map(rowToApprovalRequest);
 }
 
+export function listPendingVoiceCalledApprovals(): ApprovalRequestRow[] {
+  return syncQuery<Record<string, unknown>>(
+    `SELECT * FROM approval_requests
+     WHERE status = 'pending'
+       AND voice_called_user_id IS NOT NULL
+       AND BTRIM(voice_called_user_id) != ''
+     ORDER BY created_at DESC`,
+  ).map(rowToApprovalRequest);
+}
+
 // --- Room review pings ---
 
 export type RoomPingStatus = "open" | "dismissed";

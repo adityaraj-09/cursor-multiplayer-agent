@@ -171,6 +171,8 @@ export const setApprovalVoiceCallStatus = backend.setApprovalVoiceCallStatus;
 export const getApprovalByVoiceAttempt = backend.getApprovalByVoiceAttempt;
 export const listInFlightVoiceCallsForUser =
   backend.listInFlightVoiceCallsForUser;
+export const listPendingVoiceCalledApprovals =
+  backend.listPendingVoiceCalledApprovals;
 
 // Slack webhook + review pings
 export const setRoomSlackWebhook = backend.setRoomSlackWebhook;

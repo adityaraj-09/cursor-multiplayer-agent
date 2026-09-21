@@ -1046,6 +1046,13 @@ const stmts = {
       AND status = 'pending'
       AND voice_call_status IN ('dialing', 'connected')
   `),
+  listPendingVoiceCalledApprovals: db.prepare(`
+    SELECT * FROM approval_requests
+    WHERE status = 'pending'
+      AND voice_called_user_id IS NOT NULL
+      AND TRIM(voice_called_user_id) != ''
+    ORDER BY created_at DESC
+  `),
 
   updateSlackWebhook: db.prepare(`
     UPDATE rooms SET slack_webhook_ciphertext = ?, slack_webhook_hint = ? WHERE id = ?
@@ -2598,6 +2605,10 @@ export function listInFlightVoiceCallsForUser(
   userId: string,
 ): ApprovalRequestRow[] {
   return stmts.listInFlightVoiceCallsForUser.all(userId) as ApprovalRequestRow[];
+}
+
+export function listPendingVoiceCalledApprovals(): ApprovalRequestRow[] {
+  return stmts.listPendingVoiceCalledApprovals.all() as ApprovalRequestRow[];
 }
 
 // --- Room review pings ---

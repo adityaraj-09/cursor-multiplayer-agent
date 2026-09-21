@@ -11,6 +11,7 @@ import {
   createInstantOutboundCall,
   generateVoiceToken,
   hashVoiceToken,
+  voiceTokensEqual,
 } from "./sarvam.js";
 
 export interface PlaceVoiceApprovalInput {
@@ -89,6 +90,80 @@ export function pickVoiceApprovalCallee(input: {
     if (user) return user;
   }
   return null;
+}
+
+export type VoiceDecisionTarget =
+  | { ok: true; row: db.ApprovalRequestRow; tokenless: boolean }
+  | { ok: false; httpStatus: number; error: string; status: string };
+
+/**
+ * Match a spoken approve/deny to a pending approval.
+ * Tokenless matching is only allowed when the shared webhook secret already checked out.
+ */
+export function resolveVoiceDecisionTarget(input: {
+  approvalId: string;
+  token: string;
+  allowTokenless: boolean;
+}): VoiceDecisionTarget {
+  if (input.approvalId) {
+    const row = db.getApprovalRequest(input.approvalId);
+    if (!row) {
+      return {
+        ok: false,
+        httpStatus: 404,
+        error: "Approval request not found",
+        status: "error",
+      };
+    }
+    if (row.voice_token_hash && voiceTokensEqual(input.token, row.voice_token_hash)) {
+      return { ok: true, row, tokenless: false };
+    }
+    if (input.token) {
+      return {
+        ok: false,
+        httpStatus: 401,
+        error: "Invalid voice token",
+        status: "denied",
+      };
+    }
+    if (input.allowTokenless && row.status === "pending" && row.voice_called_user_id) {
+      return { ok: true, row, tokenless: true };
+    }
+    return {
+      ok: false,
+      httpStatus: 401,
+      error: "Invalid voice token",
+      status: "denied",
+    };
+  }
+
+  if (!input.allowTokenless) {
+    return {
+      ok: false,
+      httpStatus: 400,
+      error: "approvalId is required",
+      status: "error",
+    };
+  }
+
+  const pending = db.listPendingVoiceCalledApprovals();
+  if (pending.length === 0) {
+    return {
+      ok: false,
+      httpStatus: 404,
+      error: "No in-flight voice approval",
+      status: "error",
+    };
+  }
+  if (pending.length > 1) {
+    return {
+      ok: false,
+      httpStatus: 409,
+      error: "Multiple in-flight voice approvals",
+      status: "error",
+    };
+  }
+  return { ok: true, row: pending[0], tokenless: true };
 }
 
 /**

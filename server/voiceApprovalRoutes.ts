@@ -5,10 +5,10 @@ import { log, logWarn } from "./logger.js";
 import { sarvamWebhookSecret } from "./config.js";
 import {
   extractProvidedSecret,
-  voiceTokensEqual,
   webhookSecretOk,
 } from "./sarvam.js";
 import { parseVoiceCallStatus, parseVoiceDecision } from "../shared/voiceApprovals.js";
+import { resolveVoiceDecisionTarget } from "./voiceApprovalCall.js";
 
 function headerString(value: string | string[] | undefined): string {
   if (Array.isArray(value)) return value[0] || "";
@@ -34,7 +34,8 @@ export function createVoiceApprovalRoutes(roomManager: RoomManager): RouterType 
 
   /**
    * Sarvam API tool hits this when the user says approve/deny on the call.
-   * Auth: per-approval voice_token (required) + optional shared webhook secret.
+   * Auth: per-approval voice_token, or the shared webhook secret plus the
+   * single in-flight voice call when the committed Sarvam agent has no vars.
    */
   router.post("/voice-approvals/decision", (req, res) => {
     const body = (req.body || {}) as Record<string, unknown>;
@@ -55,10 +56,6 @@ export function createVoiceApprovalRoutes(roomManager: RoomManager): RouterType 
       body.decision ?? body.approved ?? body.result ?? body.choice,
     );
     const token = readToken(body);
-    if (!approvalId) {
-      res.status(400).json({ error: "approvalId is required", status: "error" });
-      return;
-    }
     if (!decision) {
       res.status(400).json({
         error: "decision must be approved or denied",
@@ -67,14 +64,25 @@ export function createVoiceApprovalRoutes(roomManager: RoomManager): RouterType 
       return;
     }
 
-    const row = db.getApprovalRequest(approvalId);
-    if (!row) {
-      res.status(404).json({ error: "Approval request not found", status: "error" });
+    const allowTokenless =
+      Boolean(sarvamWebhookSecret()) && webhookSecretOk(provided);
+    const target = resolveVoiceDecisionTarget({
+      approvalId,
+      token,
+      allowTokenless,
+    });
+    if (!target.ok) {
+      res.status(target.httpStatus).json({
+        error: target.error,
+        status: target.status,
+      });
       return;
     }
-    if (!row.voice_token_hash || !voiceTokensEqual(token, row.voice_token_hash)) {
-      res.status(401).json({ error: "Invalid voice token", status: "denied" });
-      return;
+    const row = target.row;
+    if (target.tokenless) {
+      log("voice-approval", "decision matched in-flight call", {
+        approvalId: row.id,
+      });
     }
     if (row.status !== "pending") {
       res.json({
@@ -97,7 +105,7 @@ export function createVoiceApprovalRoutes(roomManager: RoomManager): RouterType 
     }
 
     const result = roomManager.applyVoiceApprovalDecision({
-      requestId: approvalId,
+      requestId: row.id,
       approved: decision === "approved",
       decidedByUserId,
       decidedByName: `${callee?.name || "Someone"} (phone)`,
@@ -108,8 +116,9 @@ export function createVoiceApprovalRoutes(roomManager: RoomManager): RouterType 
     }
 
     log("voice-approval", "decision from call", {
-      approvalId,
+      approvalId: row.id,
       decision,
+      tokenless: target.tokenless || undefined,
     });
     res.json({ status: "ok", decision });
   });
