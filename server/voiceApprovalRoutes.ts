@@ -12,6 +12,7 @@ import {
   parseVoiceDecision,
   flattenVoiceWebhookBody,
   pickRawVoiceDecision,
+  extractCallWebhookDecision,
 } from "../shared/voiceApprovals.js";
 import { resolveVoiceDecisionTarget } from "./voiceApprovalCall.js";
 
@@ -212,11 +213,54 @@ export function createVoiceApprovalRoutes(roomManager: RoomManager): RouterType 
       db.setApprovalVoiceCallStatus(row.id, "completed");
     }
 
+    const spoken =
+      row.status === "pending" ? extractCallWebhookDecision(body) : null;
     log("voice-approval", "call-status", {
       approvalId: row.id,
       attemptId,
       status: next,
+      duration: body.duration ?? undefined,
+      interactionId: body.interaction_id || undefined,
+      transcriptTurns: spoken?.userTurns.length || undefined,
+      spokenSource: spoken?.source || undefined,
+      spokenDecision: spoken?.decision || undefined,
+      userSaid: spoken?.userTurns.slice(-2).join(" | ").slice(0, 160) || undefined,
     });
+
+    if (row.status === "pending" && spoken?.decision) {
+      const calleeId = row.voice_called_user_id || "";
+      const callee = calleeId ? db.getUserById(calleeId) : undefined;
+      if (!callee?.id) {
+        logWarn("voice-approval", "call ended with a decision but no callee", {
+          approvalId: row.id,
+        });
+      } else {
+        const result = roomManager.applyVoiceApprovalDecision({
+          requestId: row.id,
+          approved: spoken.decision === "approved",
+          decidedByUserId: callee.id,
+          decidedByName: `${callee.name || "Someone"} (phone)`,
+        });
+        if (!result.ok) {
+          logWarn("voice-approval", "call-status could not apply decision", {
+            approvalId: row.id,
+            error: result.error,
+          });
+        } else {
+          log("voice-approval", "decision from call transcript", {
+            approvalId: row.id,
+            decision: spoken.decision,
+            source: spoken.source,
+          });
+        }
+      }
+    } else if (row.status === "pending" && next === "connected") {
+      logWarn("voice-approval", "call connected but no approve/deny in transcript", {
+        approvalId: row.id,
+        userSaid: spoken?.userTurns.slice(-2).join(" | ").slice(0, 160) || "(none)",
+      });
+    }
+
     res.json({ ok: true });
   });
 

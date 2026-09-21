@@ -178,7 +178,11 @@ export default function ChatPanel({
     (req) =>
       !(filterAgentId && agents.length > 1) || req.agentId === filterAgentId,
   );
-  for (const req of visiblePendings) approvalById.set(req.id, req);
+  for (const req of visiblePendings) {
+    const existing = approvalById.get(req.id);
+    if (existing && existing.status !== "pending") continue;
+    approvalById.set(req.id, req);
+  }
 
   const renderApproval = (request: ApprovalRequestInfo) => (
     <ApprovalCard

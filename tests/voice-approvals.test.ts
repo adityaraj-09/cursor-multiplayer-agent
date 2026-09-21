@@ -7,6 +7,7 @@ import {
   parseVoiceDecision,
   flattenVoiceWebhookBody,
   pickRawVoiceDecision,
+  extractCallWebhookDecision,
 } from "../shared/voiceApprovals.js";
 import { parseSarvamAppVersion } from "../server/config.js";
 import {
@@ -89,6 +90,33 @@ describe("voice approval helpers", () => {
       ),
     ).toBe("approved");
     expect(flattenVoiceWebhookBody("approve").decision).toBe("approve");
+  });
+
+  it("reads approve/deny from Instant Outbound call-status transcripts", () => {
+    const fromVars = extractCallWebhookDecision({
+      status: "connected",
+      final_agent_variables: { decision: "deny" },
+    });
+    expect(fromVars.decision).toBe("denied");
+    expect(fromVars.source).toBe("variables");
+
+    const fromTalk = extractCallWebhookDecision({
+      status: "connected",
+      interaction_transcript: [
+        { role: "agent", en_text: "Should I approve or deny this?" },
+        { role: "user", en_text: "Yes, go ahead." },
+      ],
+    });
+    expect(fromTalk.decision).toBe("approved");
+    expect(fromTalk.source).toBe("transcript");
+
+    const unclear = extractCallWebhookDecision({
+      status: "connected",
+      interaction_transcript: [
+        { role: "user", en_text: "Who is this?" },
+      ],
+    });
+    expect(unclear.decision).toBeNull();
   });
 });
 

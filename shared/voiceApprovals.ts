@@ -178,15 +178,72 @@ export function pickRawVoiceDecision(
 ): unknown {
   for (const key of DECISION_KEYS) {
     const value = body[key] ?? query?.[key];
-    if (value !== undefined && value !== null && String(value).trim() !== "") {
-      return value;
+    if (value === undefined || value === null || String(value).trim() === "") {
+      continue;
     }
+    if (key === "status" && parseVoiceCallStatus(value)) continue;
+    return value;
   }
   for (const key of TRANSCRIPT_KEYS) {
     const value = body[key];
     if (typeof value === "string" && value.trim()) return value;
   }
   return undefined;
+}
+
+function userTranscriptTurns(raw: unknown): string[] {
+  if (typeof raw === "string" && raw.trim()) return [raw.trim()];
+  if (!Array.isArray(raw)) return [];
+  const texts: string[] = [];
+  for (const turn of raw) {
+    if (!turn || typeof turn !== "object") continue;
+    const rec = turn as Record<string, unknown>;
+    const role = String(rec.role || rec.speaker || "").toLowerCase();
+    if (role && role !== "user" && role !== "customer" && role !== "human") {
+      continue;
+    }
+    const text = String(
+      rec.en_text || rec.text || rec.content || rec.transcript || "",
+    ).trim();
+    if (text) texts.push(text);
+  }
+  return texts;
+}
+
+/**
+ * Instant Outbound's terminal webhook (`status: connected`) includes the
+ * transcript. Use that when the mid-call API tool never posts /decision.
+ */
+export function extractCallWebhookDecision(body: Record<string, unknown>): {
+  decision: VoiceDecision | null;
+  source: "variables" | "transcript" | null;
+  userTurns: string[];
+} {
+  const variableBags = [
+    body.final_agent_variables,
+    body.final_agent,
+    body.collected_variables,
+    body.extracted_data,
+  ];
+  for (const bag of variableBags) {
+    if (!bag || typeof bag !== "object" || Array.isArray(bag)) continue;
+    const raw = pickRawVoiceDecision(bag as Record<string, unknown>);
+    const decision = parseVoiceDecision(raw);
+    if (decision) {
+      return { decision, source: "variables", userTurns: [] };
+    }
+  }
+
+  const userTurns = userTranscriptTurns(
+    body.interaction_transcript ?? body.transcript ?? body.turns,
+  );
+  for (let i = userTurns.length - 1; i >= 0; i--) {
+    const decision = parseVoiceDecision(userTurns[i]);
+    if (decision) {
+      return { decision, source: "transcript", userTurns };
+    }
+  }
+  return { decision: null, source: null, userTurns };
 }
 
 export function parseVoiceCallStatus(raw: unknown): VoiceCallStatus | null {
