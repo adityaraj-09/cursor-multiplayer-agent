@@ -16,19 +16,16 @@ export function requestLog(
   }
   const start = Date.now();
   res.on("finish", () => {
-    const payload = {
-      method: req.method,
-      path: req.originalUrl || req.url,
-      status: res.statusCode,
-      ms: Date.now() - start,
-      user: req.user?.id || null,
-      ip: req.ip,
-    };
-    if (res.statusCode >= 500) {
-      logError("http", `${req.method} ${req.originalUrl}`, payload);
+    const path = req.originalUrl || req.url;
+    const status = res.statusCode;
+    const ms = Date.now() - start;
+    const msg = `${req.method} ${path} ${status}  ${ms}ms`;
+    const extra = { user: req.user?.id || undefined };
+    if (status >= 500) {
+      logError("http", msg, extra);
       return;
     }
-    log("http", `${req.method} ${req.originalUrl} ${res.statusCode}`, payload);
+    log("http", msg, extra);
   });
   next();
 }

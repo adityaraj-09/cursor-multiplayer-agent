@@ -12,6 +12,7 @@ import {
   clerkConfigured,
 } from "./auth.js";
 import { INVITE_TTL_MS, sarvamCallingConfigured } from "./config.js";
+import { log } from "./logger.js";
 import { notifyEvent } from "./notify.js";
 import { userCanManageRoom } from "./roomAccess.js";
 import {
@@ -74,6 +75,12 @@ router.put("/voice-approval", requireAuth, (req, res) => {
     return;
   }
   db.updateUserVoiceSettings(req.user!.id, phone, optIn);
+  log("voice-approval", "saved phone settings", {
+    userId: req.user!.id,
+    optIn,
+    phone: maskPhoneE164(phone),
+    sarvamReady: sarvamCallingConfigured(),
+  });
   res.json(voiceSettingsFor(req.user!.id));
 });
 

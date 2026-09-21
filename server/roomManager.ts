@@ -147,6 +147,7 @@ import {
   placeVoiceApprovalCall,
   voiceCallSystemMessage,
 } from "./voiceApprovalCall.js";
+import { log } from "./logger.js";
 import type {
   AgentInfo,
   AgentConflict,
@@ -722,9 +723,12 @@ export class RoomManager {
     }
 
     this.initRoomState(row, existingByAgentId);
-    console.log(
-      `Created ${runtime}/${authMode}/${backendKind} room "${name}" (${id}) model=${modelId} control=${controlMode}`,
-    );
+    log("room", `created ${runtime}/${authMode}/${backendKind} room`, {
+      name,
+      roomId: id,
+      model: modelId,
+      control: controlMode,
+    });
     return this.toRoomInfo(row, 0, ownerId || undefined);
   }
 
@@ -1756,6 +1760,15 @@ export class RoomManager {
     this.io.to(room.id).emit("tool-approval-requested", info);
 
     this.emitAgentStatus(room, agent.row.id, "idle");
+    log("voice-approval", "tool paused for approval", {
+      roomId: room.id,
+      room: room.row.name,
+      agentId: agent.row.id,
+      agent: agent.row.label,
+      approvalId: info.id,
+      tool: event.name,
+      path: event.path || "",
+    });
 
     const driverSocketId =
       agent.driverSocketId ||
@@ -1869,7 +1882,7 @@ export class RoomManager {
     this.broadcastMembers(roomId);
     socket.emit("members-updated", this.listMembers(roomId));
     db.updateRoomActivity(roomId);
-    console.log(`${name} joined room ${roomId} (${socket.id})`);
+    log("room", "joined", { name, roomId, socketId: socket.id });
     return true;
   }
 
@@ -1941,7 +1954,7 @@ export class RoomManager {
     }
 
     this.broadcastPresence(room);
-    console.log(`${p?.name || "Unknown"} left room ${roomId}`);
+    log("room", "left", { name: p?.name || "Unknown", roomId });
   }
 
   handleLeaveRoom(socket: Socket): void {

@@ -11,8 +11,8 @@ import {
   sarvamWebhookSecret,
   sarvamWorkspaceId,
 } from "./config.js";
-import { logError, logWarn } from "./logger.js";
-import { normalizePhoneE164 } from "../shared/voiceApprovals.js";
+import { log, logError, logWarn } from "./logger.js";
+import { maskPhoneE164, normalizePhoneE164 } from "../shared/voiceApprovals.js";
 
 export { sarvamCallingConfigured };
 
@@ -52,6 +52,16 @@ export function secretsEqual(
 
 export function voiceDecisionWebhookUrl(): string {
   return `${API_PUBLIC_ORIGIN.replace(/\/+$/, "")}/api/voice-approvals/decision`;
+}
+
+function redactUrl(url: string): string {
+  try {
+    const u = new URL(url);
+    if (u.searchParams.has("secret")) u.searchParams.set("secret", "***");
+    return u.toString();
+  } catch {
+    return url.replace(/secret=[^&]+/gi, "secret=***");
+  }
 }
 
 export function voiceCallStatusWebhookUrl(): string {
@@ -135,6 +145,20 @@ export async function createInstantOutboundCall(
     },
   };
 
+  log("sarvam", "POST Instant Outbound", {
+    url,
+    appId: sarvamAppId(),
+    appVersion: sarvamAppVersion(),
+    orgId: sarvamOrgId(),
+    workspaceId: sarvamWorkspaceId(),
+    connectionId: sarvamConnectionId(),
+    agentPhone: maskPhoneE164(agentPhone) || agentPhone,
+    userPhone: maskPhoneE164(userPhone),
+    approvalId: input.variables.approval_id || "",
+    webhook: redactUrl(voiceCallStatusWebhookUrl()),
+    variableKeys: Object.keys(input.variables).join(","),
+  });
+
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), OUTBOUND_TIMEOUT_MS);
   try {
@@ -154,6 +178,10 @@ export async function createInstantOutboundCall(
     } catch {
       data = { raw: text };
     }
+    log("sarvam", `outbound response ${res.status}`, {
+      ok: res.ok,
+      body: text.slice(0, 500),
+    });
     if (!res.ok) {
       const detail =
         typeof data.detail === "string"
@@ -167,10 +195,11 @@ export async function createInstantOutboundCall(
     if (!attemptId) {
       throw new Error("Sarvam outbound did not return attempt_id");
     }
+    log("sarvam", "outbound accepted", { attemptId });
     return { attemptId };
   } catch (err) {
     if (err instanceof Error && err.name === "AbortError") {
-      logWarn("sarvam", "outbound call timed out");
+      logWarn("sarvam", "outbound call timed out", { url });
       throw new Error("Sarvam outbound timed out");
     }
     logError("sarvam", "outbound call failed", { err });

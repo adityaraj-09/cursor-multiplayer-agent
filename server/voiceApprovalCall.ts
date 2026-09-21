@@ -4,14 +4,13 @@ import {
   isVoiceCallInFlight,
   maskPhoneE164,
 } from "../shared/voiceApprovals.js";
-import { APP_ORIGIN, voiceApprovalCooldownMs } from "./config.js";
+import { APP_ORIGIN, sarvamMissingConfigKeys, voiceApprovalCooldownMs } from "./config.js";
 import * as db from "./db.js";
 import { log, logWarn } from "./logger.js";
 import {
   createInstantOutboundCall,
   generateVoiceToken,
   hashVoiceToken,
-  sarvamCallingConfigured,
 } from "./sarvam.js";
 
 export interface PlaceVoiceApprovalInput {
@@ -49,6 +48,30 @@ function eligibleCallee(userId: string): db.UserRow | null {
   return user;
 }
 
+function describeCandidates(
+  roomId: string,
+  ownerId: string | null,
+  driverUserId?: string | null,
+): string {
+  const ids = candidateUserIds(roomId, ownerId);
+  if (ids.length === 0) return "no owner/editor candidates";
+  const driver = driverUserId?.trim() || "";
+  return ids
+    .map((id) => {
+      const user = db.getUserById(id);
+      const driving = id === driver ? " driving" : "";
+      if (!user) return `${id}: missing user${driving}`;
+      if (!user.voice_approvals_opt_in) {
+        return `${user.name}: opt-in off${driving}`;
+      }
+      if (!user.phone_e164?.trim()) {
+        return `${user.name}: no phone${driving}`;
+      }
+      return `${user.name}: ${maskPhoneE164(user.phone_e164)} opted-in${driving}`;
+    })
+    .join("; ");
+}
+
 export function pickVoiceApprovalCallee(input: {
   roomId: string;
   ownerId: string | null;
@@ -75,10 +98,37 @@ export function pickVoiceApprovalCallee(input: {
 export function placeVoiceApprovalCall(
   input: PlaceVoiceApprovalInput,
 ): db.UserRow | null {
-  if (!sarvamCallingConfigured()) return null;
+  const base = {
+    approvalId: input.approval.id,
+    roomId: input.roomId,
+    room: input.roomName,
+    tool: input.approval.toolName,
+    agent: input.agentLabel,
+  };
+  log("voice-approval", "considering call", base);
+
+  const missing = sarvamMissingConfigKeys();
+  if (missing.length) {
+    logWarn("voice-approval", "skip call: Sarvam not configured", {
+      ...base,
+      missing: missing.join(","),
+    });
+    return null;
+  }
   const existing = db.getApprovalRequest(input.approval.id);
-  if (!existing || existing.status !== "pending") return null;
+  if (!existing || existing.status !== "pending") {
+    logWarn("voice-approval", "skip call: approval not pending", {
+      ...base,
+      status: existing?.status || "missing",
+    });
+    return null;
+  }
   if (existing.voice_call_attempt_id || isVoiceCallInFlight(existing.voice_call_status)) {
+    log("voice-approval", "skip call: already dialing", {
+      ...base,
+      attemptId: existing.voice_call_attempt_id,
+      callStatus: existing.voice_call_status,
+    });
     return null;
   }
 
@@ -87,12 +137,24 @@ export function placeVoiceApprovalCall(
     ownerId: input.ownerId,
     driverUserId: input.driverUserId,
   });
-  if (!callee?.phone_e164) return null;
+  if (!callee?.phone_e164) {
+    logWarn("voice-approval", "skip call: no opted-in phone", {
+      ...base,
+      ownerId: input.ownerId,
+      driverUserId: input.driverUserId || "",
+      candidates: describeCandidates(
+        input.roomId,
+        input.ownerId,
+        input.driverUserId,
+      ),
+    });
+    return null;
+  }
 
   if (db.listInFlightVoiceCallsForUser(callee.id).length > 0) {
-    log("voice-approval", "skip call; user already on an approval call", {
+    log("voice-approval", "skip call: user already on an approval call", {
+      ...base,
       userId: callee.id,
-      approvalId: input.approval.id,
     });
     return null;
   }
@@ -103,12 +165,20 @@ export function placeVoiceApprovalCall(
     callee.voice_last_call_at &&
     Date.now() - callee.voice_last_call_at < cooldown
   ) {
-    log("voice-approval", "skip call; cooldown", {
+    log("voice-approval", "skip call: cooldown", {
+      ...base,
       userId: callee.id,
-      approvalId: input.approval.id,
+      cooldownMs: cooldown,
+      lastCallAt: callee.voice_last_call_at,
     });
     return null;
   }
+
+  log("voice-approval", "dialing", {
+    ...base,
+    userId: callee.id,
+    phone: maskPhoneE164(callee.phone_e164),
+  });
 
   const token = generateVoiceToken();
   db.setApprovalVoiceCall(input.approval.id, {

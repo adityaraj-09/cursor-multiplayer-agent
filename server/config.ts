@@ -121,3 +121,15 @@ export function sarvamCallingConfigured(): boolean {
       sarvamAgentPhone(),
   );
 }
+
+/** Env var names that must be set for Instant Outbound. Never includes values. */
+export function sarvamMissingConfigKeys(): string[] {
+  const missing: string[] = [];
+  if (!sarvamApiKey()) missing.push("SARVAM_API_KEY");
+  if (!sarvamOrgId()) missing.push("SARVAM_ORG_ID");
+  if (!sarvamWorkspaceId()) missing.push("SARVAM_WORKSPACE_ID");
+  if (!sarvamAppId()) missing.push("SARVAM_APP_ID");
+  if (!sarvamConnectionId()) missing.push("SARVAM_CONNECTION_ID");
+  if (!sarvamAgentPhone()) missing.push("SARVAM_AGENT_PHONE");
+  return missing;
+}

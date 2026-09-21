@@ -6,22 +6,16 @@ describe("logger", () => {
     vi.restoreAllMocks();
   });
 
-  it("writes JSON lines with scope and message", () => {
+  it("writes readable lines with scope and message", () => {
     const spy = vi.spyOn(console, "log").mockImplementation(() => undefined);
-    log("http", "GET /api/issues 200", { status: 200, user: "u1" });
+    log("http", "GET /api/issues 200  3ms", { user: "u1" });
     expect(spy).toHaveBeenCalledTimes(1);
-    const rec = JSON.parse(String(spy.mock.calls[0][0])) as {
-      scope: string;
-      msg: string;
-      status: number;
-      user: string;
-      level: string;
-    };
-    expect(rec.scope).toBe("http");
-    expect(rec.msg).toContain("GET /api/issues");
-    expect(rec.status).toBe(200);
-    expect(rec.user).toBe("u1");
-    expect(rec.level).toBe("info");
+    const line = String(spy.mock.calls[0][0]);
+    expect(line).toContain("INFO");
+    expect(line).toContain("http");
+    expect(line).toContain("GET /api/issues 200  3ms");
+    expect(line).toContain("user=u1");
+    expect(line.startsWith("{")).toBe(false);
   });
 
   it("serializes errors without throwing", () => {
@@ -29,10 +23,10 @@ describe("logger", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     logError("issues", "run failed", { err: new Error("boom") });
     logWarn("github", "oauth callback failed", { message: "expired" });
-    const rec = JSON.parse(String(spy.mock.calls[0][0])) as {
-      err: { message: string };
-    };
-    expect(rec.err.message).toBe("boom");
+    const line = String(spy.mock.calls[0][0]);
+    expect(line).toContain("ERROR");
+    expect(line).toContain("run failed");
+    expect(line).toContain("boom");
     expect(warn).toHaveBeenCalled();
   });
 });

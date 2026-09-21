@@ -3,7 +3,7 @@ import express from "express";
 import cors from "cors";
 import { createServer } from "http";
 import { Server } from "socket.io";
-import { PORT, IS_PRODUCTION, CORS_ORIGINS, APP_ORIGIN, isAdminUser } from "./config.js";
+import { PORT, IS_PRODUCTION, CORS_ORIGINS, APP_ORIGIN, API_PUBLIC_ORIGIN, isAdminUser, sarvamCallingConfigured, sarvamMissingConfigKeys } from "./config.js";
 import { log, logError } from "./logger.js";
 import { requestLog } from "./requestLog.js";
 import { RoomManager } from "./roomManager.js";
@@ -1587,6 +1587,9 @@ void attachRedisAdapter().finally(() => {
       serverKey: serverKeyConfigured(),
       serverKeySource: serverKeySource(),
       postgres: Boolean(process.env.DATABASE_URL?.startsWith("postgres")),
+      sarvamCalling: sarvamCallingConfigured(),
+      sarvamMissing: sarvamMissingConfigKeys().join(",") || undefined,
+      apiPublicOrigin: API_PUBLIC_ORIGIN,
     });
   });
 });
