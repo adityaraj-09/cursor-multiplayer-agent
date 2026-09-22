@@ -1776,3 +1776,141 @@ export async function fetchIssueAttachmentBlob(
   return res.blob();
 }
 
+
+// ---------------------------------------------------------------------------
+// Swarms
+// ---------------------------------------------------------------------------
+
+export type {
+  SwarmAgentInfo,
+  SwarmArtifactInfo,
+  SwarmHypothesisInfo,
+  SwarmInfo,
+  SwarmLedgerInfo,
+  SwarmMessageInfo,
+  SwarmPostInfo,
+  SwarmSnapshot,
+  SwarmTaskInfo,
+} from "../../shared/swarm";
+
+type SwarmSnapshotT = import("../../shared/swarm").SwarmSnapshot;
+type SwarmInfoT = import("../../shared/swarm").SwarmInfo;
+
+export async function fetchSwarms(opts?: { orgId?: string | null }): Promise<SwarmInfoT[]> {
+  const qs = opts?.orgId && opts.orgId !== "personal" ? `?orgId=${encodeURIComponent(opts.orgId)}` : "";
+  const res = await fetch(`${API_BASE}/swarms${qs}`, { headers: await authHeaders() });
+  if (!res.ok) throw new Error(await parseApiError(res, "Failed to load swarms"));
+  return res.json();
+}
+
+export async function fetchSwarm(id: string): Promise<SwarmSnapshotT> {
+  const res = await fetch(`${API_BASE}/swarms/${encodeURIComponent(id)}`, {
+    headers: await authHeaders(),
+  });
+  if (!res.ok) throw new Error(await parseApiError(res, "Swarm not found"));
+  return res.json();
+}
+
+export async function createSwarm(data: {
+  goal: string;
+  title?: string;
+  orgId?: string | null;
+  repoUrl?: string;
+  startingRef?: string;
+  modelId?: string;
+  budgetUsd?: number;
+  deadlineHours?: number;
+  maxWorkers?: number;
+  maxRunning?: number;
+  autoStart?: boolean;
+}): Promise<SwarmSnapshotT> {
+  const res = await fetch(`${API_BASE}/swarms`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...(await authHeaders()) },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error(await parseApiError(res, "Failed to create swarm"));
+  return res.json();
+}
+
+export type SwarmAction = "start" | "pause" | "resume" | "stop" | "approve" | "reject";
+
+export async function swarmAction(
+  id: string,
+  action: SwarmAction,
+  body?: { note?: string },
+): Promise<SwarmSnapshotT> {
+  const res = await fetch(`${API_BASE}/swarms/${encodeURIComponent(id)}/${action}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...(await authHeaders()) },
+    body: JSON.stringify(body ?? {}),
+  });
+  if (!res.ok) throw new Error(await parseApiError(res, `Failed to ${action} swarm`));
+  return res.json();
+}
+
+export async function updateSwarm(
+  id: string,
+  data: {
+    title?: string;
+    budgetUsd?: number;
+    deadlineHours?: number;
+    maxWorkers?: number;
+    maxRunning?: number;
+    maxCycles?: number;
+  },
+): Promise<SwarmSnapshotT> {
+  const res = await fetch(`${API_BASE}/swarms/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...(await authHeaders()) },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error(await parseApiError(res, "Failed to update swarm"));
+  return res.json();
+}
+
+export async function deleteSwarm(id: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/swarms/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+    headers: await authHeaders(),
+  });
+  if (!res.ok) throw new Error(await parseApiError(res, "Failed to delete swarm"));
+}
+
+export async function postSwarmDirective(
+  id: string,
+  body: string,
+  channel: "plan" | "questions" = "plan",
+): Promise<import("../../shared/swarm").SwarmPostInfo> {
+  const res = await fetch(`${API_BASE}/swarms/${encodeURIComponent(id)}/directives`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...(await authHeaders()) },
+    body: JSON.stringify({ body, channel }),
+  });
+  if (!res.ok) throw new Error(await parseApiError(res, "Failed to post"));
+  return res.json();
+}
+
+export async function fetchSwarmAgentMessages(
+  swarmId: string,
+  agentId: string,
+): Promise<{ notesMd: string; messages: import("../../shared/swarm").SwarmMessageInfo[] }> {
+  const res = await fetch(
+    `${API_BASE}/swarms/${encodeURIComponent(swarmId)}/agents/${encodeURIComponent(agentId)}/messages`,
+    { headers: await authHeaders() },
+  );
+  if (!res.ok) throw new Error(await parseApiError(res, "Failed to load transcript"));
+  return res.json();
+}
+
+export async function fetchSwarmArtifact(
+  swarmId: string,
+  artifactId: string,
+): Promise<import("../../shared/swarm").SwarmArtifactInfo & { content: string }> {
+  const res = await fetch(
+    `${API_BASE}/swarms/${encodeURIComponent(swarmId)}/artifacts/${encodeURIComponent(artifactId)}`,
+    { headers: await authHeaders() },
+  );
+  if (!res.ok) throw new Error(await parseApiError(res, "Failed to load artifact"));
+  return res.json();
+}
