@@ -217,3 +217,7 @@ export const getIssueSettings = backend.getIssueSettings;
 export const upsertIssueSettings = backend.upsertIssueSettings;
 export const insertIssueEvent = backend.insertIssueEvent;
 export const listIssueEvents = backend.listIssueEvents;
+
+// Swarms — portable raw queries consumed by server/swarm/store.ts
+export const swarmQueryAll = backend.swarmQueryAll;
+export const swarmQueryRun = backend.swarmQueryRun;

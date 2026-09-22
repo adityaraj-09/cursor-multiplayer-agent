@@ -3,6 +3,7 @@ import { mkdirSync } from "fs";
 import { dirname, resolve } from "path";
 import { randomBytes } from "crypto";
 import { repoMapNodePk } from "./repoMapIds.js";
+import { SWARM_SCHEMA_SQL } from "./swarmSchema.js";
 import type {
   AgentBackendKind,
   AgentRuntime,
@@ -3397,4 +3398,18 @@ export function migrateAgentsV1(): void {
 }
 
 migrateAgentsV1();
+
+db.exec(SWARM_SCHEMA_SQL);
+
+/** Portable escape hatch for server/swarm/store.ts (`?` placeholders). */
+export function swarmQueryAll<T = Record<string, unknown>>(
+  sql: string,
+  params: unknown[] = [],
+): T[] {
+  return db.prepare(sql).all(...(params as never[])) as T[];
+}
+
+export function swarmQueryRun(sql: string, params: unknown[] = []): number {
+  return db.prepare(sql).run(...(params as never[])).changes;
+}
 

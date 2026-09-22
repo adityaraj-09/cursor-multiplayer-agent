@@ -3,8 +3,10 @@ import {
   AgentBusyError,
   Cursor,
   CursorAgentError,
+  type AgentUsage,
   type GetRunOptions,
   type ListRunsOptions,
+  type McpServerConfig,
   type ModelSelection,
   type Run,
   type RunResult,
@@ -72,6 +74,16 @@ export interface SdkAgentConfig {
   autoCreatePR?: boolean;
   /** Cursor SDK conversation mode. */
   mode?: "agent" | "plan";
+  /** Cloud only: start a no-repo agent (research workers) instead of cloning `repoUrl`. */
+  noRepo?: boolean;
+  /**
+   * Inline MCP servers, resolved on every create / resume / send. Cursor replaces
+   * creation-time servers per send and does not persist them across resume, so
+   * callers that rotate credentials pass a factory.
+   */
+  mcpServers?: () => Record<string, McpServerConfig> | undefined;
+  /** Cloud only: caller tags persisted on the Cursor agent. */
+  metadata?: Record<string, string>;
 }
 
 export type SdkPrompt = string | SDKUserMessage;
@@ -304,11 +316,14 @@ export class SdkAgentSession {
   async ensureStarted(): Promise<string> {
     if (this.agent) return this.agent.agentId;
 
+    const mcpServers = this.config.mcpServers?.();
     const base = {
       apiKey: this.config.apiKey,
       model: this.config.model,
       name: this.config.name,
+      ...(mcpServers ? { mcpServers } : {}),
     };
+    const metadata = this.config.metadata ? { metadata: this.config.metadata } : {};
 
     if (this.config.agentId) {
       this.agent = await Agent.resume(this.config.agentId, {
@@ -323,21 +338,26 @@ export class SdkAgentSession {
             }),
       });
     } else if (this.config.runtime === "cloud") {
-      if (!this.config.repoUrl) {
+      if (!this.config.repoUrl && !this.config.noRepo) {
         throw new Error("Cloud runtime requires repoUrl");
       }
       this.agent = await Agent.create({
         ...base,
         mode: this.config.mode === "plan" ? "plan" : "agent",
         cloud: {
-          repos: [
-            {
-              url: this.config.repoUrl,
-              startingRef: this.config.startingRef || "main",
-            },
-          ],
-          autoCreatePR: Boolean(this.config.autoCreatePR),
+          ...(this.config.noRepo || !this.config.repoUrl
+            ? {}
+            : {
+                repos: [
+                  {
+                    url: this.config.repoUrl,
+                    startingRef: this.config.startingRef || "main",
+                  },
+                ],
+              }),
+          autoCreatePR: this.config.noRepo ? false : Boolean(this.config.autoCreatePR),
           skipReviewerRequest: true,
+          ...metadata,
         },
       });
     } else {
@@ -436,11 +456,28 @@ export class SdkAgentSession {
     }
   }
 
-  private sendOptions(): { model: ModelSelection; mode: "agent" | "plan" } {
+  private sendOptions(): {
+    model: ModelSelection;
+    mode: "agent" | "plan";
+    mcpServers?: Record<string, McpServerConfig>;
+  } {
+    const mcpServers = this.config.mcpServers?.();
     return {
       model: this.config.model,
       mode: this.config.mode === "plan" ? "plan" : "agent",
+      ...(mcpServers ? { mcpServers } : {}),
     };
+  }
+
+  /** Billed tokens + dollar cost for this agent (cloud). Null when unavailable. */
+  async getUsage(): Promise<AgentUsage | null> {
+    try {
+      await this.ensureStarted();
+      if (!this.agent) return null;
+      return await this.agent.getUsage();
+    } catch {
+      return null;
+    }
   }
 
   /** Best-effort refresh of the SDK transport after a dropped stream. */

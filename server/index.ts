@@ -19,6 +19,9 @@ import issueRoutes from "./issueRoutes.js";
 import workspaceRoutes from "./workspaceRoutes.js";
 import { createVoiceApprovalRoutes } from "./voiceApprovalRoutes.js";
 import { issueRunner } from "./issueRunner.js";
+import swarmRoutes from "./swarm/routes.js";
+import { SWARM_MCP_PATH, handleSwarmMcp, swarmMcpUrl } from "./swarm/mcp.js";
+import { swarmRunner } from "./swarm/runner.js";
 import * as db from "./db.js";
 import {
   getOrgCursorKey,
@@ -111,6 +114,12 @@ app.use(
 app.use(express.json({ limit: "12mb" }));
 app.use(express.urlencoded({ extended: true }));
 app.use(express.text({ type: ["text/plain"], limit: "1mb" }));
+
+// Swarm board MCP — called by Cursor's backend with a per-agent swarm token,
+// so it sits before user auth (those tokens are not user sessions).
+app.all(SWARM_MCP_PATH, (req, res) => {
+  void handleSwarmMcp(req, res);
+});
 
 // Auth middleware — Clerk JWT or CLI session token → req.user
 app.use(authMiddleware());
@@ -216,6 +225,7 @@ function resolveRequestKey(
 app.use("/api/auth", authRoutes);
 app.use("/api/orgs", orgRoutes);
 app.use("/api/issues", issueRoutes);
+app.use("/api/swarms", swarmRoutes);
 app.use("/api/workspace", workspaceRoutes);
 app.use("/api", createVoiceApprovalRoutes(roomManager));
 app.use("/", createVoiceApprovalRoutes(roomManager));
@@ -1574,6 +1584,7 @@ void attachRedisAdapter().finally(() => {
       // ignore
     }
     issueRunner.start();
+    swarmRunner.start();
     log("boot", "API listening", {
       port: PORT,
       production: IS_PRODUCTION,
@@ -1593,6 +1604,7 @@ void attachRedisAdapter().finally(() => {
       sarvamCalling: sarvamCallingConfigured(),
       sarvamMissing: sarvamMissingConfigKeys().join(",") || undefined,
       apiPublicOrigin: API_PUBLIC_ORIGIN,
+      swarmMcpUrl: swarmMcpUrl(),
     });
   });
 });
@@ -1602,6 +1614,7 @@ function shutdown(signal: string): void {
   workerRelay.shutdown();
   roomManager.shutdown();
   issueRunner.stop();
+  swarmRunner.stop();
   httpServer.close();
   process.exit(0);
 }

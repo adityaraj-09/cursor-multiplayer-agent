@@ -16,7 +16,8 @@ export type NotifyKind =
   | "member_role_changed"
   | "org_transferred"
   | "org_deleted"
-  | "review_flagged";
+  | "review_flagged"
+  | "swarm_update";
 
 export interface NotifyPayload {
   kind: NotifyKind;
