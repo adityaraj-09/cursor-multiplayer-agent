@@ -413,8 +413,26 @@ export class SwarmRunner {
     const sink = new SwarmTranscriptSink(swarm.id, agent.id, cycle);
     const before = this.orchestratorFootprint(swarm.id, agent.id);
 
+    let apiKey: string;
     try {
-      const apiKey = resolveSwarmCursorKey(swarm);
+      apiKey = resolveSwarmCursorKey(swarm);
+    } catch (err) {
+      sink.close();
+      const message = err instanceof Error ? err.message : "No Cursor API key";
+      store.updateSwarmAgent(agent.id, { status: "idle", runStartedAt: null, lastError: message });
+      store.updateSwarm(swarm.id, { status: "paused", stopReason: "needs_key" });
+      store.insertSwarmEvent({ swarmId: swarm.id, agentId: agent.id, kind: "paused_no_key", message });
+      notifyEvent({
+        kind: "swarm_update",
+        title: `Swarm paused — no Cursor key: ${swarm.title}`,
+        text: message,
+        orgId: swarm.orgId ?? undefined,
+        meta: { swarmId: swarm.id },
+      });
+      return;
+    }
+
+    try {
       this.tokens.set(agent.id, mintSwarmAgentToken(agent.id));
       const agents = store.listSwarmAgents(swarm.id);
       const tasks = store.listSwarmTasks(swarm.id);

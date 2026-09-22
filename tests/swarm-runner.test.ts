@@ -210,6 +210,26 @@ describe("SwarmRunner", () => {
     expect(fake.prompts.length).toBe(before);
   });
 
+  it("pauses immediately with a clear reason when no Cursor key is configured", async () => {
+    const swarm = service.createSwarmForUser(userId, {
+      goal: "Research how swarms behave when the workspace has no Cursor key.",
+    });
+    const saved = process.env.CURSOR_API_KEY;
+    delete process.env.CURSOR_API_KEY;
+    try {
+      const fake = fakeFactory(scripts);
+      const runner = new runnerMod.SwarmRunner(fake.factory as never);
+      await round(runner, swarm.id);
+      const s = store.getSwarm(swarm.id)!;
+      expect(s.status).toBe("paused");
+      expect(s.stopReason).toBe("needs_key");
+      expect(fake.prompts).toHaveLength(0);
+      expect(store.listSwarmEvents(swarm.id).some((e) => e.kind === "paused_no_key")).toBe(true);
+    } finally {
+      process.env.CURSOR_API_KEY = saved;
+    }
+  });
+
   it("recovers agents left running by a crashed process and halts on stop", async () => {
     const swarm = service.createSwarmForUser(userId, {
       goal: "Research crash recovery semantics for long-running swarms.",

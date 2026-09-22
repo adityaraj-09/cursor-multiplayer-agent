@@ -67,7 +67,10 @@ Copy `.env.example` to `.env`:
 | `SARVAM_AGENT_VARIABLES` | (send all, drop 422 extras) | Optional comma-separated input variable names on the committed agent |
 | `SARVAM_CONNECTION_ID` / `SARVAM_AGENT_PHONE` | | Telephony connection + caller ID |
 | `SARVAM_WEBHOOK_SECRET` | | Shared secret for `/api/voice-approvals/decision` |
-| `API_PUBLIC_ORIGIN` | `APP_ORIGIN` | Public API URL Sarvam can reach |
+| `API_PUBLIC_ORIGIN` | `APP_ORIGIN` | Public API URL Sarvam and Cursor Cloud (swarm MCP board) can reach |
+| `SWARM_MCP_URL` | `API_PUBLIC_ORIGIN/api/swarm-mcp` | Override the swarm board URL Cursor's backend calls |
+| `SWARM_ACCOUNT_SLOTS` | `6` | Concurrent Cursor Cloud runs Steer allows per API-key scope (Pro plans cap at 8, shared with sessions and issues) |
+| `SWARM_STARTS_PER_MINUTE` | `10` | Swarm cycle starts per minute across all swarms (Cursor API rate limit headroom) |
 
 ## Features
 

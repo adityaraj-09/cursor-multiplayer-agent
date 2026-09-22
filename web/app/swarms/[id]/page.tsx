@@ -62,6 +62,7 @@ const PAUSE_REASONS: Record<string, string> = {
   budget: "The budget is used up. Raise it to let the swarm keep going.",
   needs_input: "The swarm needs direction. Post a directive on the board — it resumes automatically.",
   paused_by_user: "Paused. Running cycles finished; nothing new starts until you resume.",
+  needs_key: "No Cursor API key for this workspace. Add a team key or your BYOK key in Settings, then resume.",
 };
 
 const STOP_REASONS: Record<string, string> = {
