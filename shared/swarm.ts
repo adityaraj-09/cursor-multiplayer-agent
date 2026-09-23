@@ -513,6 +513,14 @@ export function swarmTitleFromGoal(goal: string): string {
   return clean.length > 80 ? `${clean.slice(0, 77).trimEnd()}…` : clean;
 }
 
+/** Compact label for a swarm's stored Cursor model id (no catalog required). */
+export function formatSwarmModelLabel(modelId: string | null | undefined): string {
+  const id = (modelId ?? "").trim();
+  if (!id || id === "auto") return "Auto";
+  const leaf = id.includes("/") ? id.split("/").pop() || id : id;
+  return leaf.length > 28 ? `${leaf.slice(0, 26).trimEnd()}…` : leaf;
+}
+
 function clip(text: string, max: number): string {
   const t = text.trim();
   return t.length > max ? `${t.slice(0, max - 1).trimEnd()}…` : t;

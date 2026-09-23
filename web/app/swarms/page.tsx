@@ -8,7 +8,7 @@ import DashboardShell from "../../components/DashboardShell";
 import CreateTeamCard from "../../components/CreateTeamCard";
 import EmptyState from "../../components/EmptyState";
 import SwarmComposeModal from "../../components/swarm/SwarmComposeModal";
-import { BudgetMeter, StatusPill, relativeTime } from "../../components/swarm/swarmUi";
+import { BudgetMeter, ModelChip, StatusPill, relativeTime } from "../../components/swarm/swarmUi";
 import { useAuth } from "../../components/AuthProvider";
 import { fetchSwarms, type SwarmInfo } from "../../lib/api";
 import { useWorkspaceScope } from "../../lib/useWorkspaceScope";
@@ -53,6 +53,7 @@ function SwarmRow({ swarm }: { swarm: SwarmInfo }) {
         <div className="flex items-center gap-2">
           <StatusPill status={swarm.status} />
           <p className="truncate text-[13px] font-medium text-[#e4e4e4] group-hover:text-white">{swarm.title}</p>
+          <ModelChip modelId={swarm.modelId} className="shrink-0" />
         </div>
         <p className="mt-1 line-clamp-1 text-[12px] text-[#6e6e6e]">{swarm.goal}</p>
       </div>

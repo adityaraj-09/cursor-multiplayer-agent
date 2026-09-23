@@ -4,9 +4,12 @@ import { useEffect, useRef, useState } from "react";
 import { ChevronDown, GitBranch, Network, X } from "lucide-react";
 import {
   createSwarm,
+  fetchAuthStatus,
+  fetchModels,
   fetchWorkspaceGithubRepos,
   type WorkspaceGithubRepo,
 } from "../../lib/api";
+import type { ModelInfo } from "../../../shared/events";
 import {
   DEFAULT_SWARM_BUDGET_USD,
   DEFAULT_SWARM_MAX_RUNNING,
@@ -14,6 +17,13 @@ import {
   MAX_SWARM_RUNNING,
   MAX_SWARM_WORKERS,
 } from "../../../shared/swarm";
+
+const AUTO_MODEL: ModelInfo = { id: "auto", displayName: "Auto" };
+
+function withAutoModel(models: ModelInfo[]): ModelInfo[] {
+  if (models.some((m) => m.id === "auto")) return models;
+  return [AUTO_MODEL, ...models];
+}
 
 const DEADLINES = [
   { hours: 6, label: "6 hours" },
@@ -95,6 +105,9 @@ export default function SwarmComposeModal({
   const [maxWorkers, setMaxWorkers] = useState(DEFAULT_SWARM_MAX_WORKERS);
   const [maxRunning, setMaxRunning] = useState(DEFAULT_SWARM_MAX_RUNNING);
   const [startNow, setStartNow] = useState(true);
+  const [modelId, setModelId] = useState("auto");
+  const [models, setModels] = useState<ModelInfo[]>([AUTO_MODEL]);
+  const [modelsLoading, setModelsLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -124,6 +137,37 @@ export default function SwarmComposeModal({
     };
   }, [orgId]);
 
+  useEffect(() => {
+    let cancelled = false;
+    setModelsLoading(true);
+    fetchAuthStatus({ orgId })
+      .then((status) => {
+        const authMode =
+          orgId && status.orgCursorKeyConfigured
+            ? "server"
+            : status.userByokConfigured
+              ? "byok"
+              : "server";
+        return fetchModels({ authMode, orgId });
+      })
+      .then((list) => {
+        if (cancelled) return;
+        const next = withAutoModel(list);
+        setModels(next.length ? next : [AUTO_MODEL]);
+        setModelId((prev) => (next.some((m) => m.id === prev) ? prev : "auto"));
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setModels([AUTO_MODEL]);
+      })
+      .finally(() => {
+        if (!cancelled) setModelsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [orgId]);
+
   const selectedRepo = repos.find((r) => r.url === repoUrl) || null;
   const budgetNumber = Number(budget);
   const canSubmit = goal.trim().length >= 20 && Number.isFinite(budgetNumber) && budgetNumber >= 1 && !busy;
@@ -139,6 +183,7 @@ export default function SwarmComposeModal({
         orgId: orgId || null,
         repoUrl: repoUrl || undefined,
         startingRef: repoUrl ? startingRef : undefined,
+        modelId,
         budgetUsd: budgetNumber,
         deadlineHours,
         maxWorkers,
@@ -299,6 +344,29 @@ export default function SwarmComposeModal({
             <Stepper label="Max workers" value={maxWorkers} min={1} max={MAX_SWARM_WORKERS} onChange={setMaxWorkers} />
             <Stepper label="Run in parallel" value={maxRunning} min={1} max={MAX_SWARM_RUNNING} onChange={setMaxRunning} />
           </div>
+          <label className="mt-3 flex flex-col gap-1 sm:max-w-sm">
+            <span className="text-[11px] text-[#6e6e6e]">Model</span>
+            <select
+              value={modelId}
+              onChange={(e) => setModelId(e.target.value)}
+              disabled={modelsLoading && models.length <= 1}
+              className="h-8 rounded-md border border-[#2b2b2b] bg-[#1a1a1a] px-2 text-[12px] text-[#e4e4e4] outline-none focus:border-[#4d9fff] disabled:opacity-60"
+            >
+              {models.map((model) => (
+                <option key={model.id} value={model.id}>
+                  {model.displayName || model.id}
+                </option>
+              ))}
+              {!models.some((m) => m.id === modelId) && (
+                <option value={modelId}>{modelId}</option>
+              )}
+            </select>
+            <span className="text-[11px] leading-5 text-[#6e6e6e]">
+              {modelsLoading
+                ? "Loading models from this workspace's Cursor key…"
+                : "Every agent uses this. Auto lets Cursor pick."}
+            </span>
+          </label>
           <p className="mt-2 text-[11px] leading-5 text-[#6e6e6e]">
             Runs on Cursor Cloud with this workspace&apos;s key. Multi-agent research uses roughly 15× the tokens of a single chat — the swarm pauses itself at the budget and stops at the deadline.
           </p>

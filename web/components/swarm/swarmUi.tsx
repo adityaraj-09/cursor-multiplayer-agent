@@ -1,7 +1,13 @@
 "use client";
 
 import { Check } from "lucide-react";
-import type { SwarmInfo, SwarmPostInfo, SwarmRole, SwarmStatus } from "../../../shared/swarm";
+import {
+  formatSwarmModelLabel,
+  type SwarmInfo,
+  type SwarmPostInfo,
+  type SwarmRole,
+  type SwarmStatus,
+} from "../../../shared/swarm";
 
 export const STATUS_META: Record<SwarmStatus, { label: string; tone: string; dot: string; live?: boolean }> = {
   draft: { label: "Draft", tone: "border-[#2b2b2b] bg-[#1a1a1a] text-[#a0a0a0]", dot: "bg-[#6e6e6e]" },
@@ -50,6 +56,24 @@ export function RoleBadge({ role }: { role: SwarmPostInfo["authorRole"] }) {
   return (
     <span className={`inline-flex h-5 items-center rounded border px-1.5 text-[10px] font-medium ${meta.bg} ${meta.color}`}>
       {meta.label}
+    </span>
+  );
+}
+
+export function ModelChip({
+  modelId,
+  className = "",
+}: {
+  modelId: string | null | undefined;
+  className?: string;
+}) {
+  const label = formatSwarmModelLabel(modelId);
+  return (
+    <span
+      className={`inline-flex h-5 max-w-[10rem] items-center truncate rounded border border-[#2b2b2b] bg-[#1a1a1a] px-1.5 text-[10px] text-[#a0a0a0] ${className}`}
+      title={modelId && modelId !== "auto" ? modelId : "Cursor Auto"}
+    >
+      {label}
     </span>
   );
 }
