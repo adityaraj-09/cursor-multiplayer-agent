@@ -13,10 +13,10 @@ export default function AgentUsageBadge({
   if (!usage || usage.totalTokens <= 0) return null;
   return (
     <span
-      className={`tabular-nums ${
+      className={`max-w-full truncate tabular-nums ${
         compact
           ? "text-[10px] text-[#6e6e6e]"
-          : "inline-flex items-center rounded-md border border-[#2b2b2b] bg-[#1a1a1a] px-1.5 py-0.5 text-[10px] text-[#a0a0a0]"
+          : "inline-flex max-w-[9.5rem] items-center rounded-md border border-[#2b2b2b] bg-[#1a1a1a] px-1.5 py-0.5 text-[10px] text-[#a0a0a0]"
       }`}
       title={formatAgentUsageDetail(usage)}
     >

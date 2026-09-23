@@ -9,13 +9,12 @@ import {
   LayoutGrid,
   LayoutList,
   Maximize2,
-  Pencil,
   Settings2,
   X,
 } from "lucide-react";
 import ChatPanel from "../ChatPanel";
 import PresenceBar from "../PresenceBar";
-import SteerInput, { type SteerInputHandle } from "../SteerInput";
+import SteerInput from "../SteerInput";
 import CursorSessionPicker from "../CursorSessionPicker";
 import DriverControls from "../DriverControls";
 import AgentTabs from "../AgentTabs";
@@ -36,7 +35,6 @@ import { isFeatureAgent, isIntegratorAgent } from "../../../shared/events";
 
 export default function RoomChatPane() {
   const shellRef = useRef<HTMLDivElement>(null);
-  const steerRef = useRef<SteerInputHandle>(null);
   const {
     active: fullscreen,
     supported: fullscreenSupported,
@@ -163,7 +161,6 @@ export default function RoomChatPane() {
   const tileMulti = tileAgents.length > 1;
   const steerComposer = (compact: boolean) => (
     <SteerInput
-      ref={steerRef}
       compact={compact}
       usage={selectedAgent?.usage}
       onSend={(text, attachmentIds) =>
@@ -499,15 +496,6 @@ export default function RoomChatPane() {
                 onToggle={() => void toggleFullscreen()}
               />
             )}
-            <button
-              type="button"
-              onClick={() => steerRef.current?.openDrawing()}
-              className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-[#a0a0a0] hover:text-[#e4e4e4] border border-[#2b2b2b] hover:border-[#3c3c3c] bg-[#1f1f1f] transition-colors"
-              title="Whiteboard"
-              aria-label="Open whiteboard"
-            >
-              <Pencil className="h-3.5 w-3.5" strokeWidth={1.75} />
-            </button>
             <button
               type="button"
               onClick={() => setSettingsOpen(true)}

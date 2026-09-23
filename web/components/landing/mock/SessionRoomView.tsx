@@ -103,15 +103,6 @@ export default function SessionRoomView({
           <span className="hidden h-8 items-center rounded-md border border-[#26405d] bg-[#17202a] px-2 text-[10px] text-[#8ec5ff] sm:inline-flex">
             Pull request
           </span>
-          <button
-            type="button"
-            onClick={() => setDrawingOpen(true)}
-            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-[#2b2b2b] bg-[#1f1f1f] text-[#a0a0a0] hover:text-[#e4e4e4]"
-            title="Whiteboard"
-            aria-label="Open whiteboard"
-          >
-            <Pencil className="h-3.5 w-3.5" strokeWidth={1.75} />
-          </button>
           <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-[#2b2b2b] bg-[#1f1f1f] text-[#a0a0a0]">
             <Settings2 className="h-3.5 w-3.5" strokeWidth={1.75} />
           </span>
@@ -204,7 +195,6 @@ export default function SessionRoomView({
                       </span>
                       <span className="mt-0.5 block text-[10px] text-[#6e6e6e]">
                         {agent.backend === "claude-code" ? "Claude" : "Cursor"} · {agent.model}
-                        {agent.usageLabel ? ` · ${agent.usageLabel}` : ""}
                       </span>
                     </span>
                   </button>
@@ -232,9 +222,6 @@ export default function SessionRoomView({
                   />
                   {agent.label}
                   <span className="text-[10px] text-[#6e6e6e]">{agent.model}</span>
-                  {agent.usageLabel && (
-                    <span className="ml-auto text-[10px] text-[#6e6e6e]">{agent.usageLabel}</span>
-                  )}
                 </div>
                 <div className="min-h-0 flex-1 overflow-auto px-3">
                   <DemoChatTimeline
@@ -302,7 +289,6 @@ export default function SessionRoomView({
             <div className="min-w-0 flex-1">
               <p className="text-[10px] text-[#6e6e6e]">
                 {target.label} · {target.model}
-                {target.usageLabel ? ` · ${target.usageLabel}` : ""}
               </p>
               <p className="text-[13px] text-[#6e6e6e]">Steer {target.label}…</p>
             </div>
