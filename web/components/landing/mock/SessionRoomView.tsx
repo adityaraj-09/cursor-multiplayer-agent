@@ -8,13 +8,16 @@ import {
   Home,
   Layers3,
   LayoutList,
+  Pencil,
   Plus,
   Radio,
   Settings2,
+  X,
 } from "lucide-react";
 import DemoChatTimeline from "./DemoChatTimeline";
 import { getDemoRoom, type DemoBoardTile } from "./demo-chat";
 import { DEMO_SESSIONS } from "./demo-data";
+import DrawingStudio from "../../drawing/DrawingStudio";
 
 export default function SessionRoomView({
   roomId,
@@ -28,6 +31,8 @@ export default function SessionRoomView({
   const [viewMode, setViewMode] = useState<"tabs" | "split">("tabs");
   const [filterId, setFilterId] = useState<string | null>(null);
   const [targetId, setTargetId] = useState(room?.agents[0]?.id ?? "cursor");
+  const [drawingOpen, setDrawingOpen] = useState(false);
+  const [drawingPreview, setDrawingPreview] = useState<string | null>(null);
 
   if (!room || !session) {
     return (
@@ -98,6 +103,15 @@ export default function SessionRoomView({
           <span className="hidden h-8 items-center rounded-md border border-[#26405d] bg-[#17202a] px-2 text-[10px] text-[#8ec5ff] sm:inline-flex">
             Pull request
           </span>
+          <button
+            type="button"
+            onClick={() => setDrawingOpen(true)}
+            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-[#2b2b2b] bg-[#1f1f1f] text-[#a0a0a0] hover:text-[#e4e4e4]"
+            title="Whiteboard"
+            aria-label="Open whiteboard"
+          >
+            <Pencil className="h-3.5 w-3.5" strokeWidth={1.75} />
+          </button>
           <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-[#2b2b2b] bg-[#1f1f1f] text-[#a0a0a0]">
             <Settings2 className="h-3.5 w-3.5" strokeWidth={1.75} />
           </span>
@@ -190,6 +204,7 @@ export default function SessionRoomView({
                       </span>
                       <span className="mt-0.5 block text-[10px] text-[#6e6e6e]">
                         {agent.backend === "claude-code" ? "Claude" : "Cursor"} · {agent.model}
+                        {agent.usageLabel ? ` · ${agent.usageLabel}` : ""}
                       </span>
                     </span>
                   </button>
@@ -217,6 +232,9 @@ export default function SessionRoomView({
                   />
                   {agent.label}
                   <span className="text-[10px] text-[#6e6e6e]">{agent.model}</span>
+                  {agent.usageLabel && (
+                    <span className="ml-auto text-[10px] text-[#6e6e6e]">{agent.usageLabel}</span>
+                  )}
                 </div>
                 <div className="min-h-0 flex-1 overflow-auto px-3">
                   <DemoChatTimeline
@@ -249,10 +267,42 @@ export default function SessionRoomView({
 
       {!split && (
         <footer className="shrink-0 border-t border-[#2b2b2b]/90 bg-[#171717]/95 px-3 py-2">
+          {drawingPreview && (
+            <div className="mb-2 flex items-center gap-2">
+              <div className="relative">
+                <img
+                  src={drawingPreview}
+                  alt="Whiteboard attachment"
+                  className="h-14 w-14 rounded-lg border border-[#2b2b2b] object-cover"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    URL.revokeObjectURL(drawingPreview);
+                    setDrawingPreview(null);
+                  }}
+                  className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-[#252525] text-[#a0a0a0]"
+                  aria-label="Remove drawing"
+                >
+                  <X className="h-3 w-3" strokeWidth={2} />
+                </button>
+              </div>
+              <p className="text-[11px] text-[#6e6e6e]">Attached whiteboard PNG</p>
+            </div>
+          )}
           <div className="flex items-end gap-2 rounded-xl border border-[#2b2b2b] bg-[#1a1a1a] px-3 py-2">
+            <button
+              type="button"
+              onClick={() => setDrawingOpen(true)}
+              className="grid size-8 place-items-center rounded-full text-[#a0a0a0] hover:bg-[#252525] hover:text-[#e4e4e4]"
+              aria-label="Open whiteboard"
+            >
+              <Pencil className="h-4 w-4" strokeWidth={1.75} />
+            </button>
             <div className="min-w-0 flex-1">
               <p className="text-[10px] text-[#6e6e6e]">
                 {target.label} · {target.model}
+                {target.usageLabel ? ` · ${target.usageLabel}` : ""}
               </p>
               <p className="text-[13px] text-[#6e6e6e]">Steer {target.label}…</p>
             </div>
@@ -262,6 +312,15 @@ export default function SessionRoomView({
           </div>
         </footer>
       )}
+      <DrawingStudio
+        roomId={`demo-${roomId}`}
+        open={drawingOpen}
+        onClose={() => setDrawingOpen(false)}
+        onAttach={(file) => {
+          if (drawingPreview) URL.revokeObjectURL(drawingPreview);
+          setDrawingPreview(URL.createObjectURL(file));
+        }}
+      />
     </div>
   );
 }

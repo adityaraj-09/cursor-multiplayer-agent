@@ -65,6 +65,8 @@ export interface PromptInputProps
   submitDisabled?: boolean;
   modelDisabled?: boolean;
   modelLockReason?: string;
+  /** Always-visible control after the + menu (e.g. whiteboard). */
+  toolbarExtra?: ReactNode;
 }
 
 const MENU_WIDTH = 224;
@@ -200,6 +202,7 @@ export function PromptInput({
   submitDisabled = false,
   modelDisabled = false,
   modelLockReason,
+  toolbarExtra,
   ...textareaProps
 }: PromptInputProps) {
   const reduce = useReducedMotion() ?? false;
@@ -388,6 +391,7 @@ export function PromptInput({
             </PromptMenu>
           </div>
         ) : null}
+        {toolbarExtra}
         {leadingAction}
         {models.length ? (
           <div className="relative min-w-0">

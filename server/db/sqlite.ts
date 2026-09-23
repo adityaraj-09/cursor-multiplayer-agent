@@ -8,6 +8,7 @@ import type {
   AgentBackendKind,
   AgentRuntime,
   AgentStatus,
+  AgentUsageInfo,
   AuthMode,
   ChatMessage,
   SteerLogEntry,
@@ -191,7 +192,8 @@ db.exec(`
     sort_order INTEGER NOT NULL DEFAULT 0,
     plan_mode INTEGER NOT NULL DEFAULT 0,
     auto_mem_cursor_ts INTEGER NOT NULL DEFAULT 0,
-    kind TEXT NOT NULL DEFAULT 'feature'
+    kind TEXT NOT NULL DEFAULT 'feature',
+    usage_json TEXT
   );
 
   CREATE TABLE IF NOT EXISTS agent_drivers (
@@ -330,6 +332,7 @@ const migrations = [
   `ALTER TABLE approval_requests ADD COLUMN voice_call_attempt_id TEXT`,
   `ALTER TABLE approval_requests ADD COLUMN voice_call_status TEXT`,
   `ALTER TABLE approval_requests ADD COLUMN voice_called_user_id TEXT`,
+  `ALTER TABLE agents ADD COLUMN usage_json TEXT`,
 ];
 
 for (const sql of migrations) {
@@ -753,6 +756,7 @@ const stmts = {
   ),
   updateAgentScope: db.prepare(`UPDATE agents SET scope_path = ? WHERE id = ?`),
   updateAgentPr: db.prepare(`UPDATE agents SET pr_url = ?, branch = ? WHERE id = ?`),
+  updateAgentUsage: db.prepare(`UPDATE agents SET usage_json = ? WHERE id = ?`),
   deleteAgent: db.prepare(`DELETE FROM agents WHERE id = ?`),
   setAgentDriver: db.prepare(`
     INSERT INTO agent_drivers (agent_id, user_id, granted_at) VALUES (?, ?, ?)
@@ -1463,6 +1467,7 @@ export interface AgentRow {
   plan_mode: number;
   auto_mem_cursor_ts?: number;
   kind?: string;
+  usage_json?: string | null;
 }
 
 export interface CreateAgentInput {
@@ -2238,6 +2243,7 @@ function rowToAgent(r: Record<string, unknown>): AgentRow {
     plan_mode: (r.plan_mode as number) ?? 0,
     auto_mem_cursor_ts: Number(r.auto_mem_cursor_ts ?? 0),
     kind: (r.kind as string) || "feature",
+    usage_json: typeof r.usage_json === "string" ? r.usage_json : null,
   };
 }
 
@@ -2322,6 +2328,10 @@ export function setAgentPr(
     branch !== undefined ? branch : (existing?.branch ?? null),
     id,
   );
+}
+
+export function setAgentUsage(id: string, usage: AgentUsageInfo | null): void {
+  stmts.updateAgentUsage.run(usage ? JSON.stringify(usage) : null, id);
 }
 
 export function deleteAgent(id: string): void {

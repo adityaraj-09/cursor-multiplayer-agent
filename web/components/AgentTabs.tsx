@@ -23,6 +23,7 @@ import type {
   Participant,
 } from "../../shared/events";
 import { isIntegratorAgent } from "../../shared/events";
+import AgentUsageBadge from "./AgentUsageBadge";
 
 interface AgentTabsProps {
   agents: AgentInfo[];
@@ -295,6 +296,12 @@ export default function AgentTabs({
                   <span className="truncate" title={agent.modelId}>
                     {modelLabel(agent.modelId, models)}
                   </span>
+                  {agent.usage && agent.usage.totalTokens > 0 && (
+                    <>
+                      <span className="text-[#3c3c3c]">·</span>
+                      <AgentUsageBadge usage={agent.usage} compact />
+                    </>
+                  )}
                 </span>
                 {agent.scopePath && (
                   <span
