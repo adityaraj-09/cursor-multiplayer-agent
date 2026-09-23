@@ -29,6 +29,7 @@ import {
 import { closeVisibleId } from "../lib/splitViewSettings";
 import ChatPanel from "./ChatPanel";
 import SteerInput from "./SteerInput";
+import AgentUsageBadge from "./AgentUsageBadge";
 
 function gridClass(count: number, enlarged: boolean): string {
   if (enlarged || count <= 1) return "grid-cols-1";
@@ -191,6 +192,7 @@ export default function AgentSplitGrid({
                     Driving
                   </span>
                 )}
+                <AgentUsageBadge usage={agent.usage} compact />
                 <span className="ml-auto text-[10px] text-[#6e6e6e] shrink-0">
                   {status === "running" ? "running" : status}
                 </span>
@@ -283,6 +285,7 @@ export default function AgentSplitGrid({
                   }
                   agentName={agent.label}
                   agentId={agent.id}
+                  usage={agent.usage}
                   onTyping={canSteer ? onTyping : undefined}
                   onTypingStop={canSteer ? onTypingStop : undefined}
                   typingIndicator={formatTypingIndicator(

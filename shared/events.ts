@@ -65,6 +65,19 @@ export type AgentStatus =
 /** feature = normal room agent; integrator = hidden merge agent for Integrate. */
 export type AgentKind = "feature" | "integrator";
 
+/** Billed token usage for a Cursor SDK agent, refreshed after each run. */
+export interface AgentUsageInfo {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  totalTokens: number;
+  reasoningTokens?: number;
+  rawCostCents?: number;
+  chargedCents?: number;
+  updatedAt: number;
+}
+
 export interface AgentInfo {
   id: string;
   roomId: string;
@@ -83,6 +96,8 @@ export interface AgentInfo {
   /** Plan mode = read-only explore/propose (Cursor --mode plan / Claude permission-mode plan). */
   planMode?: boolean;
   kind?: AgentKind;
+  /** Latest `agent.getUsage()` snapshot, when the runtime reports it. */
+  usage?: AgentUsageInfo;
 }
 
 export function isIntegratorAgent(agent: {

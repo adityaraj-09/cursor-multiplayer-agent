@@ -132,6 +132,7 @@ export const setAgentLabel = backend.setAgentLabel;
 export const setAgentPlanMode = backend.setAgentPlanMode;
 export const setAgentScope = backend.setAgentScope;
 export const setAgentPr = backend.setAgentPr;
+export const setAgentUsage = backend.setAgentUsage;
 export const deleteAgent = backend.deleteAgent;
 export const setAgentDriver = backend.setAgentDriver;
 export const clearAgentDriver = backend.clearAgentDriver;

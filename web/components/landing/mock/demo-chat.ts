@@ -57,6 +57,7 @@ export type DemoBoardAgent = {
   model: string;
   backend?: "cursor" | "claude-code";
   integrator?: boolean;
+  usageLabel?: string;
 };
 
 export type DemoBoardTile = {
@@ -74,8 +75,8 @@ export const DEMO_BOARD: DemoBoardTile[] = [
     name: "iOS startup",
     live: true,
     agents: [
-      { id: "cursor", label: "Cursor", running: true, model: "Opus 4.6", backend: "cursor" },
-      { id: "claude", label: "Claude Code", running: false, model: "Sonnet", backend: "claude-code" },
+      { id: "cursor", label: "Cursor", running: true, model: "Opus 4.6", backend: "cursor", usageLabel: "184k tok · $0.42" },
+      { id: "claude", label: "Claude Code", running: false, model: "Sonnet", backend: "claude-code", usageLabel: "41k tok" },
     ],
     placeholder: "Steer Cursor…",
     items: [

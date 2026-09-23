@@ -1,0 +1,253 @@
+"use client";
+
+import { useCallback, useEffect, useState } from "react";
+import dynamic from "next/dynamic";
+import { Pencil, Trash2, X } from "lucide-react";
+import "@excalidraw/excalidraw/index.css";
+
+type ScenePayload = {
+  elements: readonly unknown[];
+  appState?: Record<string, unknown>;
+  files?: Record<string, unknown>;
+};
+
+type ExcalidrawAPI = {
+  getSceneElements: () => readonly unknown[];
+  getAppState: () => Record<string, unknown>;
+  getFiles: () => Record<string, unknown>;
+  updateScene?: (opts: { elements: unknown[] }) => void;
+};
+
+const Excalidraw = dynamic(
+  async () => {
+    const mod = await import("@excalidraw/excalidraw");
+    return mod.Excalidraw;
+  },
+  {
+    ssr: false,
+    loading: () => (
+      <div className="flex h-full items-center justify-center text-[13px] text-[#6e6e6e]">
+        Loading whiteboard…
+      </div>
+    ),
+  },
+);
+
+function sceneKey(roomId: string): string {
+  return `steer-drawing:${roomId}`;
+}
+
+function loadScene(roomId: string): ScenePayload | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(sceneKey(roomId));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as ScenePayload;
+    if (!parsed || !Array.isArray(parsed.elements)) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function saveScene(roomId: string, scene: ScenePayload): void {
+  try {
+    window.localStorage.setItem(
+      sceneKey(roomId),
+      JSON.stringify({
+        elements: scene.elements,
+        files: scene.files || {},
+        appState: {
+          viewBackgroundColor: scene.appState?.viewBackgroundColor || "#121212",
+        },
+      }),
+    );
+  } catch {
+    // quota / private mode
+  }
+}
+
+export function drawingFileFromBlob(blob: Blob): File {
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  return new File([blob], `whiteboard-${stamp}.png`, { type: "image/png" });
+}
+
+export default function DrawingStudio({
+  roomId,
+  open,
+  canAttach = true,
+  onClose,
+  onAttach,
+}: {
+  roomId: string;
+  open: boolean;
+  canAttach?: boolean;
+  onClose: () => void;
+  onAttach: (file: File) => Promise<void> | void;
+}) {
+  const [api, setApi] = useState<ExcalidrawAPI | null>(null);
+  const [initial, setInitial] = useState<ScenePayload | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (!open) return;
+    setInitial(loadScene(roomId));
+    setError("");
+    setBusy(false);
+  }, [open, roomId]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+
+  const persist = useCallback(
+    (elements: readonly unknown[], appState: Record<string, unknown>, files: Record<string, unknown>) => {
+      saveScene(roomId, { elements, appState, files });
+    },
+    [roomId],
+  );
+
+  const handleClear = () => {
+    api?.updateScene?.({ elements: [] });
+    saveScene(roomId, { elements: [], files: {}, appState: { viewBackgroundColor: "#121212" } });
+  };
+
+  const handleAttach = async () => {
+    if (!api || !canAttach) return;
+    setBusy(true);
+    setError("");
+    try {
+      const { exportToBlob } = await import("@excalidraw/excalidraw");
+      const elements = api.getSceneElements();
+      if (!elements.length) {
+        setError("Draw something first, then attach it.");
+        return;
+      }
+      const blob = await exportToBlob({
+        elements,
+        appState: {
+          ...api.getAppState(),
+          exportWithDarkMode: true,
+        },
+        files: api.getFiles(),
+        mimeType: "image/png",
+      });
+      await onAttach(drawingFileFromBlob(blob));
+      onClose();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not export drawing");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!open) return null;
+
+  return (
+    <div
+      className="steer-drawing-overlay fixed inset-0 z-[90] flex flex-col bg-[#111111]/80 backdrop-blur-sm"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="steer-drawing-title"
+    >
+      <div className="mx-auto flex h-full w-full max-w-[1400px] flex-col px-3 py-3 sm:px-5 sm:py-4">
+        <header className="mb-2 flex items-center gap-2 rounded-xl border border-[#2b2b2b] bg-[#171717] px-3 py-2">
+          <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#1f1f1f] text-[#8ec5ff]">
+            <Pencil className="h-4 w-4" strokeWidth={1.75} />
+          </span>
+          <div className="min-w-0 flex-1">
+            <h2 id="steer-drawing-title" className="text-[13px] font-medium text-[#e4e4e4]">
+              Whiteboard
+            </h2>
+            <p className="truncate text-[11px] text-[#6e6e6e]">
+              Sketch in the session, then attach the image to your next message.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={handleClear}
+            className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[#2b2b2b] px-2.5 text-[12px] text-[#a0a0a0] hover:text-[#e4e4e4]"
+          >
+            <Trash2 className="h-3.5 w-3.5" strokeWidth={1.75} />
+            Clear
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-[#2b2b2b] text-[#a0a0a0] hover:text-[#e4e4e4]"
+            aria-label="Close whiteboard"
+          >
+            <X className="h-4 w-4" strokeWidth={1.75} />
+          </button>
+        </header>
+
+        <div className="steer-drawing-canvas min-h-0 flex-1 overflow-hidden rounded-xl border border-[#2b2b2b] bg-[#121212]">
+          <Excalidraw
+            excalidrawAPI={(next) => setApi(next as unknown as ExcalidrawAPI)}
+            initialData={
+              initial
+                ? {
+                    elements: initial.elements as never,
+                    appState: {
+                      viewBackgroundColor: "#121212",
+                      ...(initial.appState || {}),
+                    } as never,
+                    files: (initial.files || {}) as never,
+                  }
+                : {
+                    appState: { viewBackgroundColor: "#121212" },
+                  }
+            }
+            theme="dark"
+            UIOptions={{
+              canvasActions: {
+                loadScene: false,
+                saveToActiveFile: false,
+                toggleTheme: false,
+              },
+            }}
+            onChange={(elements, appState, files) => {
+              persist(
+                elements,
+                appState as unknown as Record<string, unknown>,
+                files as unknown as Record<string, unknown>,
+              );
+            }}
+          />
+        </div>
+
+        <footer className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[#2b2b2b] bg-[#171717] px-3 py-2">
+          <p className="min-w-0 text-[11px] text-[#6e6e6e]">
+            {error ||
+              (canAttach
+                ? "Attach exports a PNG into the composer. The board stays in this session."
+                : "View only — you cannot attach from this role.")}
+          </p>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="inline-flex h-8 items-center rounded-lg border border-[#2b2b2b] px-3 text-[12px] text-[#a0a0a0] hover:text-[#e4e4e4]"
+            >
+              Close
+            </button>
+            <button
+              type="button"
+              disabled={!canAttach || busy}
+              onClick={() => void handleAttach()}
+              className="inline-flex h-8 items-center rounded-lg bg-[#e4e4e4] px-3 text-[12px] font-medium text-[#141414] disabled:opacity-40"
+            >
+              {busy ? "Attaching…" : "Attach to composer"}
+            </button>
+          </div>
+        </footer>
+      </div>
+    </div>
+  );
+}

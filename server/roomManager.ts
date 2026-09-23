@@ -172,6 +172,7 @@ import {
   isIntegratorAgent,
   type IntegrationJobInfo,
 } from "../shared/events.js";
+import { agentUsageFromSdk, parseAgentUsageJson } from "../shared/agentUsage.js";
 
 const MAX_NAME_LENGTH = 30;
 
@@ -934,7 +935,28 @@ export class RoomManager {
       prUrl: row.pr_url || undefined,
       planMode: Boolean(row.plan_mode),
       kind: row.kind === "integrator" ? "integrator" : "feature",
+      usage: parseAgentUsageJson(row.usage_json),
     };
+  }
+
+  /** Best-effort Cursor SDK usage snapshot after a run settles. */
+  private async refreshAgentUsage(
+    room: RoomState,
+    agent: AgentState,
+  ): Promise<void> {
+    if (!(agent.backend instanceof SdkAgentSession)) return;
+    try {
+      const usage = agentUsageFromSdk(await agent.backend.getUsage());
+      if (!usage) return;
+      db.setAgentUsage(agent.row.id, usage);
+      agent.row.usage_json = JSON.stringify(usage);
+      this.broadcastAgents(room);
+    } catch (err) {
+      console.warn(
+        "[RoomManager] getUsage failed:",
+        err instanceof Error ? err.message : err,
+      );
+    }
   }
 
   /** Push the agent's persisted plan/agent mode onto its live backend. */
@@ -3364,12 +3386,14 @@ export class RoomManager {
       }
 
       agent.workerRunActive = false;
+      await this.refreshAgentUsage(room, agent);
       this.emitAgentStatus(room, agent.row.id, "idle");
       this.notifyRunFinished(room, agent, "completed");
     } catch (err) {
       if (!isCurrent()) return;
       const message = err instanceof Error ? err.message : String(err);
       emitAssistant(message, "error");
+      await this.refreshAgentUsage(room, agent);
       this.emitAgentStatus(room, agent.row.id, "error", message);
       this.emitAgentStatus(room, agent.row.id, "idle");
       this.notifyRunFinished(room, agent, "error", message);
@@ -4565,6 +4589,7 @@ export class RoomManager {
     };
     db.insertMessage(note);
     this.io.to(room.id).emit("chat-message", note);
+    await this.refreshAgentUsage(room, agent);
     this.emitAgentStatus(room, resolvedAgentId, "idle");
     this.notifyRunFinished(room, agent, "aborted");
     db.updateRoomActivity(room.id);

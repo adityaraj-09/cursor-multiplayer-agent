@@ -552,3 +552,16 @@ body {
 .animate-fade-up {
   animation: fade-up 0.2s ease;
 }
+
+.steer-drawing-canvas,
+.steer-drawing-canvas .excalidraw,
+.steer-drawing-canvas .excalidraw .excalidraw {
+  height: 100%;
+  min-height: 0;
+}
+
+.steer-drawing-overlay .excalidraw {
+  --color-primary: #4d9fff;
+  --color-primary-darker: #3a88e6;
+  font-family: var(--font-ui);
+}

@@ -1,7 +1,9 @@
 "use client";
 
 import {
+  forwardRef,
   useEffect,
+  useImperativeHandle,
   useRef,
   useState,
   type DragEvent,
@@ -14,13 +16,16 @@ import {
   Gem,
   ImagePlus,
   Orbit,
+  Pencil,
   Sparkles,
   X,
   Zap,
 } from "lucide-react";
-import type { ChatAttachment, ModelInfo } from "../../shared/events";
+import type { AgentUsageInfo, ChatAttachment, ModelInfo } from "../../shared/events";
 import { uploadRoomFile } from "../lib/api";
 import { PromptInput, type PromptAction } from "./agents/prompt-input";
+import AgentUsageBadge from "./AgentUsageBadge";
+import DrawingStudio from "./drawing/DrawingStudio";
 
 interface SteerInputProps {
   onSend: (text: string, attachmentIds?: string[]) => void;
@@ -57,7 +62,13 @@ interface SteerInputProps {
   compact?: boolean;
   /** Stop the in-flight run (Prompt Input stop state). */
   onStop?: () => void;
+  /** Latest billed usage for the selected agent. */
+  usage?: AgentUsageInfo | null;
 }
+
+export type SteerInputHandle = {
+  openDrawing: () => void;
+};
 
 const TYPING_THROTTLE_MS = 1500;
 const TYPING_IDLE_STOP_MS = 2000;
@@ -87,7 +98,8 @@ function ModelGlyph({ id, name }: { id: string; name: string }) {
   return <Bot className={cls} strokeWidth={1.75} />;
 }
 
-export default function SteerInput({
+const SteerInput = forwardRef<SteerInputHandle, SteerInputProps>(function SteerInput(
+  {
   onSend,
   roomId,
   planMode = false,
@@ -109,13 +121,17 @@ export default function SteerInput({
   typingIndicator,
   compact = false,
   onStop,
-}: SteerInputProps) {
+  usage,
+}: SteerInputProps,
+  ref,
+) {
   const [text, setText] = useState("");
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
   const [previews, setPreviews] = useState<Record<string, string>>({});
   const [uploading, setUploading] = useState(false);
   const [attachError, setAttachError] = useState("");
   const [dragActive, setDragActive] = useState(false);
+  const [drawingOpen, setDrawingOpen] = useState(false);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const lastTypingEmitRef = useRef(0);
@@ -171,6 +187,12 @@ export default function SteerInput({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connected]);
 
+  useImperativeHandle(ref, () => ({
+    openDrawing: () => {
+      if (roomId) setDrawingOpen(true);
+    },
+  }));
+
   const statusHint = !connected
     ? "Reconnecting…"
     : !canSteer
@@ -198,21 +220,26 @@ export default function SteerInput({
     setAttachError("");
   };
 
+  const addUploadedFile = async (file: File) => {
+    if (!roomId) return;
+    const att = await uploadRoomFile(roomId, file);
+    setAttachments((prev) => {
+      if (prev.some((p) => p.id === att.id) || prev.length >= 6) return prev;
+      return [...prev, att];
+    });
+    if (file.type.startsWith("image/")) {
+      const url = URL.createObjectURL(file);
+      setPreviews((prev) => ({ ...prev, [att.id]: url }));
+    }
+  };
+
   const handleFiles = async (files: FileList | null) => {
     if (!files?.length || !roomId) return;
     setUploading(true);
     setAttachError("");
     try {
       for (const file of Array.from(files).slice(0, 6)) {
-        const att = await uploadRoomFile(roomId, file);
-        setAttachments((prev) => {
-          if (prev.some((p) => p.id === att.id) || prev.length >= 6) return prev;
-          return [...prev, att];
-        });
-        if (file.type.startsWith("image/")) {
-          const url = URL.createObjectURL(file);
-          setPreviews((prev) => ({ ...prev, [att.id]: url }));
-        }
+        await addUploadedFile(file);
       }
     } catch (err) {
       setAttachError(err instanceof Error ? err.message : "Upload failed");
@@ -264,6 +291,13 @@ export default function SteerInput({
         : placeholder;
 
   const actions: PromptAction[] = [
+    {
+      value: "draw",
+      label: "Draw whiteboard",
+      description: "Sketch with Excalidraw and attach the image.",
+      icon: <Pencil className="size-4" strokeWidth={1.75} />,
+      disabled: !roomId || uploading,
+    },
     {
       value: "image",
       label: "Attach image",
@@ -357,9 +391,22 @@ export default function SteerInput({
           modelLockReason={modelLockReason}
           actions={actions}
           onAction={(action) => {
-            if (action === "image") imageInputRef.current?.click();
+            if (action === "draw") setDrawingOpen(true);
+            else if (action === "image") imageInputRef.current?.click();
             else fileInputRef.current?.click();
           }}
+          toolbarExtra={
+            <button
+              type="button"
+              disabled={!roomId || uploading}
+              onClick={() => setDrawingOpen(true)}
+              className="grid size-8 place-items-center rounded-full text-[#a0a0a0] outline-none transition-colors hover:bg-[#252525] hover:text-[#e4e4e4] disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-[#4d9fff]"
+              title="Open whiteboard"
+              aria-label="Open whiteboard"
+            >
+              <Pencil className="size-4" strokeWidth={1.75} />
+            </button>
+          }
           minRows={compact ? 1 : 2}
           maxRows={compact ? 3 : 8}
           placeholder={livePlaceholder}
@@ -427,8 +474,38 @@ export default function SteerInput({
           className={`${compact ? "mt-1" : "mt-2"} px-1 flex items-center justify-between gap-2 min-h-[1rem]`}
         >
           <p className="text-[11px] text-[#6e6e6e] truncate">{hint}</p>
+          <AgentUsageBadge usage={usage} />
         </div>
       )}
+      {!showHint && usage && usage.totalTokens > 0 && (
+        <div className={`${compact ? "mt-1" : "mt-2"} px-1 flex justify-end`}>
+          <AgentUsageBadge usage={usage} />
+        </div>
+      )}
+      {roomId ? (
+        <DrawingStudio
+          roomId={roomId}
+          open={drawingOpen}
+          canAttach={canSteer}
+          onClose={() => setDrawingOpen(false)}
+          onAttach={async (file) => {
+            setUploading(true);
+            setAttachError("");
+            try {
+              await addUploadedFile(file);
+            } catch (err) {
+              setAttachError(err instanceof Error ? err.message : "Upload failed");
+              throw err;
+            } finally {
+              setUploading(false);
+            }
+          }}
+        />
+      ) : null}
     </div>
   );
-}
+});
+
+SteerInput.displayName = "SteerInput";
+
+export default SteerInput;

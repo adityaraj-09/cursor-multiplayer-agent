@@ -6,6 +6,7 @@ import type {
   AgentBackendKind,
   AgentRuntime,
   AgentStatus,
+  AgentUsageInfo,
   AuthMode,
   ChatMessage,
   SteerLogEntry,
@@ -164,7 +165,8 @@ async function initSchema() {
       sort_order INTEGER NOT NULL DEFAULT 0,
       plan_mode INTEGER NOT NULL DEFAULT 0,
       auto_mem_cursor_ts BIGINT NOT NULL DEFAULT 0,
-      kind TEXT NOT NULL DEFAULT 'feature'
+      kind TEXT NOT NULL DEFAULT 'feature',
+      usage_json TEXT
     );
 
     CREATE TABLE IF NOT EXISTS agent_drivers (
@@ -473,6 +475,7 @@ async function initSchema() {
     `ALTER TABLE approval_requests ADD COLUMN IF NOT EXISTS voice_call_attempt_id TEXT`,
     `ALTER TABLE approval_requests ADD COLUMN IF NOT EXISTS voice_call_status TEXT`,
     `ALTER TABLE approval_requests ADD COLUMN IF NOT EXISTS voice_called_user_id TEXT`,
+    `ALTER TABLE agents ADD COLUMN IF NOT EXISTS usage_json TEXT`,
   ];
 
   for (const sql of migrations) {
@@ -752,6 +755,7 @@ export interface AgentRow {
   plan_mode: number;
   auto_mem_cursor_ts?: number;
   kind?: string;
+  usage_json?: string | null;
 }
 
 export interface CreateAgentInput {
@@ -1803,6 +1807,7 @@ function rowToAgent(r: Record<string, unknown>): AgentRow {
     plan_mode: num(r.plan_mode as string) ?? 0,
     auto_mem_cursor_ts: num(r.auto_mem_cursor_ts as string | number) ?? 0,
     kind: (r.kind as string) || "feature",
+    usage_json: typeof r.usage_json === "string" ? r.usage_json : null,
   };
 }
 
@@ -1908,6 +1913,13 @@ export function setAgentPr(
   syncQuery(`UPDATE agents SET pr_url = $1, branch = $2 WHERE id = $3`, [
     prUrl,
     branch !== undefined ? branch : (existing?.branch ?? null),
+    id,
+  ]);
+}
+
+export function setAgentUsage(id: string, usage: AgentUsageInfo | null): void {
+  syncQuery(`UPDATE agents SET usage_json = $1 WHERE id = $2`, [
+    usage ? JSON.stringify(usage) : null,
     id,
   ]);
 }
