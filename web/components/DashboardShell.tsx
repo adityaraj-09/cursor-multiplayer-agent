@@ -8,6 +8,7 @@ import {
   LayoutGrid,
   Layers3,
   Menu,
+  Network,
   Plus,
   Settings2,
   Terminal,
@@ -84,6 +85,13 @@ export default function DashboardShell({
           icon={CircleDot}
         >
           Issues
+        </NavItem>
+        <NavItem
+          href="/swarms"
+          active={pathname === "/swarms" || pathname.startsWith("/swarms/")}
+          icon={Network}
+        >
+          Swarms
         </NavItem>
         <NavItem href="/board" active={pathname === "/board"} icon={LayoutGrid}>
           Board

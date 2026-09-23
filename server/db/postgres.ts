@@ -1,6 +1,7 @@
 import pg from "pg";
 import { randomBytes } from "crypto";
 import { repoMapNodePk } from "./repoMapIds.js";
+import { SWARM_SCHEMA_SQL } from "./swarmSchema.js";
 import type {
   AgentBackendKind,
   AgentRuntime,
@@ -503,6 +504,8 @@ async function initSchema() {
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_rooms_org ON rooms(org_id);
   `);
+
+  await pool.query(SWARM_SCHEMA_SQL);
 }
 
 const ready = initSchema();
@@ -3538,4 +3541,39 @@ function syncQuery<T = Record<string, unknown>>(
       `pg syncQuery failed: ${err.stderr || err.message}`,
     );
   }
+}
+
+/** Rewrites `?` placeholders (outside string literals) to `$1..$n`. */
+function toPgPlaceholders(sql: string): string {
+  let out = "";
+  let n = 0;
+  let inString = false;
+  for (const ch of sql) {
+    if (ch === "'") inString = !inString;
+    if (ch === "?" && !inString) {
+      n += 1;
+      out += `$${n}`;
+    } else {
+      out += ch;
+    }
+  }
+  return out;
+}
+
+/** Portable escape hatch for server/swarm/store.ts (`?` placeholders). */
+export function swarmQueryAll<T = Record<string, unknown>>(
+  sql: string,
+  params: unknown[] = [],
+): T[] {
+  return syncQuery<T>(toPgPlaceholders(sql), params);
+}
+
+export function swarmQueryRun(sql: string, params: unknown[] = []): number {
+  const text = toPgPlaceholders(sql).trim();
+  const mutating = /^(insert|update|delete)\b/i.test(text);
+  if (mutating && !/\breturning\b/i.test(text)) {
+    return syncQuery(`${text} RETURNING 1 AS affected`, params).length;
+  }
+  syncQuery(text, params);
+  return 0;
 }

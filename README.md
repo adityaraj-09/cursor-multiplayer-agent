@@ -67,7 +67,10 @@ Copy `.env.example` to `.env`:
 | `SARVAM_AGENT_VARIABLES` | (send all, drop 422 extras) | Optional comma-separated input variable names on the committed agent |
 | `SARVAM_CONNECTION_ID` / `SARVAM_AGENT_PHONE` | | Telephony connection + caller ID |
 | `SARVAM_WEBHOOK_SECRET` | | Shared secret for `/api/voice-approvals/decision` |
-| `API_PUBLIC_ORIGIN` | `APP_ORIGIN` | Public API URL Sarvam can reach |
+| `API_PUBLIC_ORIGIN` | `APP_ORIGIN` | Public API URL Sarvam and Cursor Cloud (swarm MCP board) can reach |
+| `SWARM_MCP_URL` | `API_PUBLIC_ORIGIN/api/swarm-mcp` | Override the swarm board URL Cursor's backend calls |
+| `SWARM_ACCOUNT_SLOTS` | `6` | Concurrent Cursor Cloud runs Steer allows per API-key scope (Pro plans cap at 8, shared with sessions and issues) |
+| `SWARM_STARTS_PER_MINUTE` | `10` | Swarm cycle starts per minute across all swarms (Cursor API rate limit headroom) |
 
 ## Features
 
@@ -81,6 +84,7 @@ Copy `.env.example` to `.env`:
 - **BYOK** — Per-user saved Cursor and Anthropic API keys
 - **Shared memory** — Room-scoped goals, decisions, constraints, discoveries, and handoffs, plus a budgeted repo map injected into every agent runtime
 - **Issues** — Linear-style tickets. After a configurable delay (default 10 minutes), a headless Cursor Cloud agent opens a PR and stores a markdown writeup in the database. These runs never create rooms and do not appear in Sessions.
+- **Swarms** — Give a team of Cursor Cloud agents a hard, open-ended goal. An orchestrator plans a task graph and spawns researchers, critics, a ranker, a synthesizer, and a verifier who coordinate on a Steer-hosted MCP message board (posts, tasks, ledger, Elo hypothesis tournament, artifacts). They work in resumable cycles for hours or days until the verifier passes the report, the budget pauses them, or the deadline stops them. With a repository, the swarm can ask you to approve a build phase that ends in a pull request. Personal or team-scoped.
 - **Voice approvals** — Opt in with a phone number. When a tool hits an approval gate, Sarvam calls you; say approve or deny. The in-room button still works.
 
 ## Design proposals

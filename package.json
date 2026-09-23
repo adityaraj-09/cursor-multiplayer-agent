@@ -19,7 +19,8 @@
   },
   "dependencies": {
     "@clerk/backend": "^3.13.1",
-    "@cursor/sdk": "^1.0.24",
+    "@cursor/sdk": "^1.0.32",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "@socket.io/redis-adapter": "^8.3.0",
     "better-sqlite3": "^13.0.1",
     "chokidar": "^4.0.0",
@@ -32,7 +33,8 @@
     "pg": "^8.22.0",
     "redis": "^6.1.0",
     "simple-git": "^3.27.0",
-    "socket.io": "^4.8.0"
+    "socket.io": "^4.8.0",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
