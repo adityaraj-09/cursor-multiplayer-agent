@@ -184,6 +184,17 @@ describe("swarm board tools", () => {
     expect(done.finishedAt).not.toBeNull();
   });
 
+  it("exposes the attached repo on team_list so agents do not think repoUrl is null", () => {
+    const withRepo = makeSwarm({ repoUrl: "https://github.com/acme/serve" });
+    const listed = tools.runSwarmTool(ctxFor(withRepo.id, orchestrator(withRepo.id).id), "team_list", {});
+    expect(listed).toContain("https://github.com/acme/serve");
+    expect(listed).toMatch(/Attached repository: https:\/\/github.com\/acme\/serve/);
+    const bare = makeSwarm();
+    expect(tools.runSwarmTool(ctxFor(bare.id, orchestrator(bare.id).id), "team_list", {})).toContain(
+      "Attached repository: none",
+    );
+  });
+
   it("tracks stalls from the progress ledger and requests build approval", () => {
     const swarm = makeSwarm({ repoUrl: "https://github.com/acme/serve" });
     const orch = orchestrator(swarm.id);

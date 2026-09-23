@@ -28,6 +28,7 @@ export const ROLE_BRIEFS: Record<SwarmRole, string> = {
   researcher: [
     "You investigate one angle deeply. Search the web, read papers, docs, and source code of relevant open-source projects.",
     "Turn what you learn into hypotheses (hypothesis_propose) with concrete evidence and URLs. When refining or combining existing top hypotheses, pass parent_ids — that is how ideas evolve.",
+    "If the swarm has an attached repository, start there — that is the user's current implementation. Read it on GitHub / the web unless you have a local checkout.",
     "Post notable findings to #findings with sources. Prefer primary sources; mark estimates as estimates.",
   ].join("\n"),
   critic: [
@@ -67,7 +68,26 @@ export function swarmIntegrationBranch(swarmId: string): string {
   return `steer/swarm-${swarmId.replace(/[^A-Za-z0-9]/g, "").slice(-10)}-integration`;
 }
 
-function rulesBlock(role: SwarmRole, hasRepo: boolean): string {
+function repoRule(swarm: SwarmRow, hasCheckout: boolean): string {
+  if (hasCheckout) {
+    return `You have a local checkout of ${swarm.repoUrl} (base \`${swarm.startingRef}\`). Only change code for your claimed build task.`;
+  }
+  if (swarm.repoUrl) {
+    return (
+      `This swarm is attached to ${swarm.repoUrl} (base \`${swarm.startingRef}\`). ` +
+      "You do not have a local checkout this cycle — do not clone, commit, or push. " +
+      "That repository is the user's current implementation. Read it on GitHub / the web. " +
+      "Do not request_human for the URL, branch, commit, or file paths — they already picked this repo when they created the swarm. " +
+      "Engineers get a checkout only after humans approve the build phase."
+    );
+  }
+  return (
+    "This swarm has no attached repository. Do not try to clone or push code; record durable work with artifact_put. " +
+    "Only request_human for a repo if the goal is impossible without private code."
+  );
+}
+
+function rulesBlock(role: SwarmRole, swarm: SwarmRow, hasCheckout: boolean): string {
   return [
     "<steer_swarm_rules>",
     "You are one agent in a long-running Steer research swarm. You work in cycles: each prompt is ONE focused unit of work (roughly 20–60 tool calls), then you end your turn with a short summary. The Steer runner schedules your next cycle.",
@@ -78,9 +98,7 @@ function rulesBlock(role: SwarmRole, hasRepo: boolean): string {
     "Do not ask the user clarifying questions — use ask_orchestrator (workers) or request_human (for decisions only humans can make).",
     "No GPU is available. Never claim measured GPU throughput or latency you did not measure; reason from published benchmarks, CPU-scale prototypes, and analysis, and label estimates.",
     "Cite sources with URLs. Do not fabricate papers, repos, numbers, or quotes.",
-    hasRepo
-      ? "You have a repository checkout. Only change code for your claimed build task."
-      : "You have no repository. Do not try to clone or push code; record durable work with artifact_put.",
+    repoRule(swarm, hasCheckout),
     role === "orchestrator"
       ? "You own the plan: #plan directives, decisions, tasks, spawns, the ledger, and the finish gates."
       : "Only the orchestrator posts directives or decisions. Claim tasks that match your role before working on them.",
@@ -105,6 +123,7 @@ function budgetLine(swarm: SwarmRow, now: number): string {
     `Phase: ${swarm.phase}`,
     `budget $${left.toFixed(2)} of $${swarm.budgetUsd.toFixed(2)} left`,
     `cycle ${swarm.cyclesDone + 1} of max ${swarm.maxCycles}`,
+    swarm.repoUrl ? `repo ${swarm.repoUrl} @ ${swarm.startingRef}` : "no attached repository",
   ];
   if (swarm.deadlineAt) {
     const hours = Math.max(0, (swarm.deadlineAt - now) / 3_600_000);
@@ -125,6 +144,9 @@ function orchestratorSection(input: CyclePromptInput): string {
         "## First cycle — plan the swarm",
         "1. Decompose the goal. Call update_ledger with facts (given/verified), guesses, a phased plan, open questions, and a progress check.",
         "2. Create 4–8 initial tasks (create_task) covering distinct angles, each with objective / output format / sources / boundaries.",
+        swarm.repoUrl
+          ? `2b. One of those tasks MUST map the current implementation in ${swarm.repoUrl} (key files, classes, functions). Do not request_human for that URL or for file paths.`
+          : "2b. There is no attached repository. Research from public sources unless a human later attaches one.",
         `3. Spawn the opening team (spawn_worker) within the ${swarm.maxWorkers}-worker cap.`,
         "4. Post a short directive to #plan describing the strategy.",
       ].join("\n"),
@@ -181,6 +203,17 @@ function workerSection(input: CyclePromptInput): string {
   ].join("\n");
 }
 
+function attachedRepoSection(input: CyclePromptInput): string {
+  const { swarm, agent } = input;
+  if (!swarm.repoUrl || agent.hasRepo) return "";
+  return [
+    "## Attached repository",
+    `${swarm.repoUrl} (base \`${swarm.startingRef}\`)`,
+    "The human already selected this repo when they created the swarm. It is the current implementation. " +
+      "Point researchers at it. Do not request_human for the URL, branch, commit, or a file listing.",
+  ].join("\n");
+}
+
 function buildSection(input: CyclePromptInput): string {
   const { swarm, agent } = input;
   if (!agent.hasRepo) return "";
@@ -202,13 +235,14 @@ function buildSection(input: CyclePromptInput): string {
 export function buildCyclePrompt(input: CyclePromptInput): string {
   const { swarm, agent } = input;
   const sections = [
-    rulesBlock(agent.role, agent.hasRepo),
+    rulesBlock(agent.role, swarm, agent.hasRepo),
     `You are @${agent.label}, the **${agent.role}** in the Steer swarm "${swarm.title}".`,
     `## Mission\n${clip(swarm.goal, 6000)}`,
     `## Your role\n${ROLE_BRIEFS[agent.role]}${agent.brief ? `\n\nBrief from the orchestrator:\n${clip(agent.brief, 3000)}` : ""}`,
     `## Status\n${budgetLine(swarm, input.now)} · your cycle ${agent.cycles + 1}`,
     `## Your notes from previous cycles\n${agent.notesMd ? clip(agent.notesMd, 6000) : "_none yet_"}`,
     agent.role === "orchestrator" ? orchestratorSection(input) : workerSection(input),
+    attachedRepoSection(input),
     buildSection(input),
     `## Board digest\n${wrapUntrustedDigest(input.digest)}`,
     "Work now. End this cycle with notes_write plus task_complete or a progress post, then a 2–4 sentence summary of what you did.",
