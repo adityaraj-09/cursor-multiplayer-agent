@@ -84,7 +84,8 @@ function saveScene(roomId: string, scene: ScenePayload): void {
         elements: scene.elements,
         files: scene.files || {},
         appState: {
-          viewBackgroundColor: scene.appState?.viewBackgroundColor || "#121212",
+          viewBackgroundColor: "#121212",
+          theme: "dark",
         },
       }),
     );
@@ -114,6 +115,7 @@ export default function DrawingStudio({
   const [mounted, setMounted] = useState(false);
   const [api, setApi] = useState<ExcalidrawAPI | null>(null);
   const [initial, setInitial] = useState<ScenePayload | null>(null);
+  const [sceneReady, setSceneReady] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -122,10 +124,15 @@ export default function DrawingStudio({
   }, []);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      setSceneReady(false);
+      setApi(null);
+      return;
+    }
     setInitial(loadScene(roomId));
     setError("");
     setBusy(false);
+    setSceneReady(true);
   }, [open, roomId]);
 
   useEffect(() => {
@@ -151,7 +158,7 @@ export default function DrawingStudio({
 
   const handleClear = () => {
     api?.updateScene?.({ elements: [] });
-    saveScene(roomId, { elements: [], files: {}, appState: { viewBackgroundColor: "#121212" } });
+    saveScene(roomId, { elements: [], files: {}, appState: { viewBackgroundColor: "#121212", theme: "dark" } });
   };
 
   const handleAttach = async () => {
@@ -243,38 +250,46 @@ export default function DrawingStudio({
               </div>
             )}
           >
-            <Excalidraw
-              excalidrawAPI={(next) => setApi(next as unknown as ExcalidrawAPI)}
-              initialData={
-                initial
-                  ? {
-                      elements: initial.elements as never,
-                      appState: {
-                        viewBackgroundColor: "#121212",
-                        ...(initial.appState || {}),
-                      } as never,
-                      files: (initial.files || {}) as never,
-                    }
-                  : {
-                      appState: { viewBackgroundColor: "#121212" },
-                    }
-              }
-              theme="dark"
-              UIOptions={{
-                canvasActions: {
-                  loadScene: false,
-                  saveToActiveFile: false,
-                  toggleTheme: false,
-                },
-              }}
-              onChange={(elements, appState, files) => {
-                persist(
-                  elements,
-                  appState as unknown as Record<string, unknown>,
-                  files as unknown as Record<string, unknown>,
-                );
-              }}
-            />
+            {sceneReady ? (
+              <Excalidraw
+                key={`${roomId}-board`}
+                excalidrawAPI={(next) => setApi(next as unknown as ExcalidrawAPI)}
+                initialData={
+                  initial
+                    ? {
+                        elements: initial.elements as never,
+                        appState: {
+                          ...(initial.appState || {}),
+                          viewBackgroundColor: "#121212",
+                          theme: "dark",
+                        } as never,
+                        files: (initial.files || {}) as never,
+                      }
+                    : {
+                        appState: { viewBackgroundColor: "#121212", theme: "dark" },
+                      }
+                }
+                theme="dark"
+                UIOptions={{
+                  canvasActions: {
+                    loadScene: false,
+                    saveToActiveFile: false,
+                    toggleTheme: false,
+                  },
+                }}
+                onChange={(elements, appState, files) => {
+                  persist(
+                    elements,
+                    appState as unknown as Record<string, unknown>,
+                    files as unknown as Record<string, unknown>,
+                  );
+                }}
+              />
+            ) : (
+              <div className="flex h-full min-h-[240px] items-center justify-center text-[13px] text-[#6e6e6e]">
+                Loading whiteboard…
+              </div>
+            )}
           </WhiteboardErrorBoundary>
         </div>
 
@@ -295,6 +310,7 @@ export default function DrawingStudio({
             </button>
             <button
               type="button"
+              data-testid="steer-drawing-attach"
               disabled={!canAttach || busy}
               onClick={() => void handleAttach()}
               className="inline-flex h-8 items-center rounded-lg bg-[#e4e4e4] px-3 text-[12px] font-medium text-[#141414] disabled:opacity-40"

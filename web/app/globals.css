@@ -584,5 +584,21 @@ body {
 .steer-drawing-overlay .excalidraw {
   --color-primary: #4d9fff;
   --color-primary-darker: #3a88e6;
+  --default-bg-color: #121212;
   font-family: var(--font-ui);
+  background: #121212;
+}
+
+/* Our chrome owns the dialog footer; hide Excalidraw's overlapping islands. */
+.steer-drawing-overlay .excalidraw .layer-ui__wrapper__footer,
+.steer-drawing-overlay .excalidraw .layer-ui__wrapper__footer-left,
+.steer-drawing-overlay .excalidraw .layer-ui__wrapper__footer-right,
+.steer-drawing-overlay .excalidraw .footer-center {
+  display: none !important;
+}
+
+.steer-drawing-overlay header,
+.steer-drawing-overlay footer {
+  position: relative;
+  z-index: 2;
 }
