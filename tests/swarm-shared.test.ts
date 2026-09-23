@@ -6,6 +6,7 @@ import {
   evaluateDoneGate,
   evaluateSwarmLimits,
   extractMentions,
+  formatSwarmModelLabel,
   isSwarmChannel,
   nextEloRatings,
   roleAllowedInPhase,
@@ -91,6 +92,10 @@ describe("swarm domain helpers", () => {
     expect(extractMentions("email a@b.com")).toEqual([]);
     expect(slugifySwarmLabel("  KV Cache Scout!! ")).toBe("kv-cache-scout");
     expect(swarmTitleFromGoal("Find a new way to host LLMs\nmore detail")).toBe("Find a new way to host LLMs");
+    expect(formatSwarmModelLabel("auto")).toBe("Auto");
+    expect(formatSwarmModelLabel("")).toBe("Auto");
+    expect(formatSwarmModelLabel("claude-4.5-sonnet")).toBe("claude-4.5-sonnet");
+    expect(formatSwarmModelLabel("cursor/composer-1")).toBe("composer-1");
     expect(clampSwarmBudgetUsd(-5)).toBe(1);
     expect(clampSwarmMaxWorkers(99)).toBe(8);
   });

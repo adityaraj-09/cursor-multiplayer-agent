@@ -31,6 +31,7 @@ import {
 } from "../../../components/swarm/SwarmPanels";
 import {
   BudgetMeter,
+  ModelChip,
   PhaseStepper,
   StatusPill,
   formatUsd,
@@ -215,6 +216,7 @@ export default function SwarmDetailPage() {
                 </div>
                 <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-[#6e6e6e]">
                   <span>{workspace.activeOrg?.name || (swarm.orgId ? "Team" : "Personal")}</span>
+                  <ModelChip modelId={swarm.modelId} />
                   {swarm.repoUrl && (
                     <span className="inline-flex items-center gap-1">
                       <GitBranch className="h-3 w-3" strokeWidth={1.75} />
