@@ -216,7 +216,6 @@ export default function DrawingStudio({
                   }
             }
             theme="dark"
-            welcomeScreen={false}
             UIOptions={{
               canvasActions: {
                 loadScene: false,
