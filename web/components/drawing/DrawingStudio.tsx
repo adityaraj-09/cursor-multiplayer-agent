@@ -11,6 +11,7 @@ import {
 import { createPortal } from "react-dom";
 import dynamic from "next/dynamic";
 import { Pencil, Trash2, X } from "lucide-react";
+import "@excalidraw/excalidraw/index.css";
 
 type ScenePayload = {
   elements: readonly unknown[];
@@ -27,11 +28,8 @@ type ExcalidrawAPI = {
 
 const Excalidraw = dynamic(
   async () => {
-    const [{ Excalidraw: Editor }] = await Promise.all([
-      import("@excalidraw/excalidraw"),
-      import("@excalidraw/excalidraw/index.css"),
-    ]);
-    return Editor;
+    const mod = await import("@excalidraw/excalidraw");
+    return mod.Excalidraw;
   },
   {
     ssr: false,
