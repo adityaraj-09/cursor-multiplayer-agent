@@ -4,6 +4,7 @@ import { useState } from "react";
 import { ChevronRight, Download, FileText, Trophy, X } from "lucide-react";
 import Markdown from "../Markdown";
 import {
+  downloadSwarmExport,
   fetchSwarmArtifact,
   type SwarmAgentInfo,
   type SwarmArtifactInfo,
@@ -236,6 +237,8 @@ export function SwarmArtifacts({
 }) {
   const [viewing, setViewing] = useState<(SwarmArtifactInfo & { content: string }) | null>(null);
   const [error, setError] = useState("");
+  const [downloadingId, setDownloadingId] = useState<string | null>(null);
+  const [downloadingAll, setDownloadingAll] = useState(false);
   if (!artifacts.length) return <Empty>No artifacts yet. The synthesizer saves report.md here; workers save surveys, notes, and data.</Empty>;
 
   const open = async (id: string) => {
@@ -247,36 +250,91 @@ export function SwarmArtifacts({
     }
   };
 
-  const download = (artifact: SwarmArtifactInfo & { content: string }) => {
-    const blob = new Blob([artifact.content], { type: "text/plain;charset=utf-8" });
+  const saveText = (name: string, content: string) => {
+    const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = artifact.name.split("/").pop() || "artifact.md";
+    a.download = name.split("/").pop() || "artifact.md";
+    document.body.appendChild(a);
     a.click();
+    a.remove();
     URL.revokeObjectURL(url);
+  };
+
+  const downloadOne = async (id: string) => {
+    setError("");
+    setDownloadingId(id);
+    try {
+      const artifact = await fetchSwarmArtifact(swarmId, id);
+      saveText(artifact.name, artifact.content);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to download");
+    } finally {
+      setDownloadingId(null);
+    }
+  };
+
+  const downloadAll = async () => {
+    setError("");
+    setDownloadingAll(true);
+    try {
+      await downloadSwarmExport(swarmId, "artifacts");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to download artifacts");
+    } finally {
+      setDownloadingAll(false);
+    }
   };
 
   const sorted = [...artifacts].sort((a, b) => (a.kind === "report" ? -1 : b.kind === "report" ? 1 : b.updatedAt - a.updatedAt));
   return (
     <div>
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <p className="text-[11px] text-[#6e6e6e]">
+          {artifacts.length} file{artifacts.length === 1 ? "" : "s"}
+        </p>
+        <button
+          type="button"
+          disabled={downloadingAll}
+          onClick={() => void downloadAll()}
+          className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[#2b2b2b] px-2.5 text-[12px] text-[#e4e4e4] hover:border-[#3c3c3c] disabled:opacity-50"
+        >
+          <Download className="h-3.5 w-3.5" strokeWidth={1.75} />
+          {downloadingAll ? "Preparing…" : "Download all"}
+        </button>
+      </div>
       {error && <p className="mb-2 text-[12px] text-[#f07070]">{error}</p>}
       <div className="overflow-hidden rounded-xl border border-[#2b2b2b]">
         {sorted.map((a) => (
-          <button
+          <div
             key={a.id}
-            type="button"
-            onClick={() => void open(a.id)}
-            className="flex w-full items-center gap-3 border-b border-[#1f1f1f] px-4 py-3 text-left last:border-b-0 hover:bg-[#1a1a1a]"
+            className="flex items-center gap-2 border-b border-[#1f1f1f] last:border-b-0 hover:bg-[#1a1a1a]"
           >
-            <FileText className={`h-4 w-4 ${a.kind === "report" ? "text-[#7ee2c4]" : "text-[#6e6e6e]"}`} strokeWidth={1.75} />
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-[13px] text-[#e4e4e4]">{a.name}</p>
-              <p className="text-[11px] text-[#6e6e6e]">
-                {a.kind} · {(a.size / 1024).toFixed(1)} KB · {labelFor(agents, a.agentId)} · {relativeTime(a.updatedAt)}
-              </p>
-            </div>
-          </button>
+            <button
+              type="button"
+              onClick={() => void open(a.id)}
+              className="flex min-w-0 flex-1 items-center gap-3 px-4 py-3 text-left"
+            >
+              <FileText className={`h-4 w-4 ${a.kind === "report" ? "text-[#7ee2c4]" : "text-[#6e6e6e]"}`} strokeWidth={1.75} />
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-[13px] text-[#e4e4e4]">{a.name}</p>
+                <p className="text-[11px] text-[#6e6e6e]">
+                  {a.kind} · {(a.size / 1024).toFixed(1)} KB · {labelFor(agents, a.agentId)} · {relativeTime(a.updatedAt)}
+                </p>
+              </div>
+            </button>
+            <button
+              type="button"
+              disabled={downloadingId === a.id}
+              onClick={() => void downloadOne(a.id)}
+              className="mr-2 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[#6e6e6e] hover:bg-[#222] hover:text-[#e4e4e4] disabled:opacity-50"
+              aria-label={`Download ${a.name}`}
+              title={`Download ${a.name}`}
+            >
+              <Download className="h-3.5 w-3.5" strokeWidth={1.75} />
+            </button>
+          </div>
         ))}
       </div>
       {viewing && (
@@ -286,7 +344,7 @@ export function SwarmArtifacts({
               <p className="min-w-0 flex-1 truncate text-[13px] font-medium text-[#e4e4e4]">{viewing.name}</p>
               <button
                 type="button"
-                onClick={() => download(viewing)}
+                onClick={() => saveText(viewing.name, viewing.content)}
                 className="inline-flex h-7 items-center gap-1.5 rounded-md border border-[#2b2b2b] px-2.5 text-[11px] text-[#a0a0a0] hover:text-[#e4e4e4]"
               >
                 <Download className="h-3.5 w-3.5" strokeWidth={1.75} />

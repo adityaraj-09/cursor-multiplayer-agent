@@ -7,6 +7,7 @@ import {
   Activity,
   BookOpen,
   Bot,
+  Download,
   FileText,
   GitBranch,
   ListChecks,
@@ -39,6 +40,7 @@ import {
 } from "../../../components/swarm/swarmUi";
 import {
   deleteSwarm,
+  downloadSwarmExport,
   fetchSwarm,
   swarmAction,
   updateSwarm,
@@ -236,8 +238,25 @@ export default function SwarmDetailPage() {
 
               <div className="flex w-full flex-col gap-3 lg:w-80">
                 <BudgetMeter spent={swarm.spentUsd} budget={swarm.budgetUsd} />
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={busy === "export"}
+                    title="Zip of the mission, agents, transcripts, board, questions, tasks, hypotheses, ledger, artifacts, and activity"
+                    onClick={() => {
+                      setBusy("export");
+                      setError("");
+                      void downloadSwarmExport(id)
+                        .catch((err) => setError(err instanceof Error ? err.message : "Export failed"))
+                        .finally(() => setBusy(null));
+                    }}
+                    className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[#2b2b2b] px-3 text-[12px] text-[#e4e4e4] hover:border-[#3c3c3c] disabled:opacity-50"
+                  >
+                    <Download className="h-3.5 w-3.5" strokeWidth={1.75} />
+                    {busy === "export" ? "Exporting…" : "Export"}
+                  </button>
                 {snap.canEdit && (
-                  <div className="flex flex-wrap items-center gap-2">
+                  <>
                     {canStartSwarm(swarm.status) && (
                       <button
                         type="button"
@@ -286,8 +305,9 @@ export default function SwarmDetailPage() {
                     >
                       <Settings2 className="h-4 w-4" strokeWidth={1.75} />
                     </button>
-                  </div>
+                  </>
                 )}
+                </div>
               </div>
             </header>
 

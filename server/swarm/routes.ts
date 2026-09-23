@@ -3,6 +3,7 @@ import { requireAuth } from "../auth.js";
 import * as db from "../db.js";
 import { logError } from "../logger.js";
 import * as store from "./store.js";
+import { buildSwarmExport, type SwarmExportScope } from "./exportBundle.js";
 import {
   SwarmServiceError,
   actorCanViewSwarm,
@@ -127,6 +128,21 @@ router.get("/:id/agents/:agentId/messages", requireAuth, (req, res) => {
     return;
   }
   res.json({ notesMd: agent.notesMd, messages: store.listSwarmMessages(agent.id, 600) });
+});
+
+router.get("/:id/export", requireAuth, (req, res) => {
+  const swarm = viewable(req, res);
+  if (!swarm) return;
+  const scope: SwarmExportScope = req.query.scope === "artifacts" ? "artifacts" : "full";
+  try {
+    const file = buildSwarmExport(swarm, scope);
+    res.setHeader("Content-Type", "application/zip");
+    res.setHeader("Content-Disposition", `attachment; filename="${file.filename}"`);
+    res.setHeader("Content-Length", String(file.body.length));
+    res.send(file.body);
+  } catch (err) {
+    fail(res, err, "Failed to export swarm");
+  }
 });
 
 router.get("/:id/artifacts/:artifactId", requireAuth, (req, res) => {
