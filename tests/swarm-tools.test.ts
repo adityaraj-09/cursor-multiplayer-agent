@@ -184,6 +184,17 @@ describe("swarm board tools", () => {
     expect(done.finishedAt).not.toBeNull();
   });
 
+  it("exposes the attached repo on team_list so agents do not think repoUrl is null", () => {
+    const withRepo = makeSwarm({ repoUrl: "https://github.com/acme/serve" });
+    const listed = tools.runSwarmTool(ctxFor(withRepo.id, orchestrator(withRepo.id).id), "team_list", {});
+    expect(listed).toContain("https://github.com/acme/serve");
+    expect(listed).toMatch(/Attached repository: https:\/\/github.com\/acme\/serve/);
+    const bare = makeSwarm();
+    expect(tools.runSwarmTool(ctxFor(bare.id, orchestrator(bare.id).id), "team_list", {})).toContain(
+      "Attached repository: none",
+    );
+  });
+
   it("tracks stalls from the progress ledger and requests build approval", () => {
     const swarm = makeSwarm({ repoUrl: "https://github.com/acme/serve" });
     const orch = orchestrator(swarm.id);
@@ -239,5 +250,23 @@ describe("swarm board tools", () => {
     expect(JSON.stringify(snap)).not.toContain("leaseOwner");
     service.deleteSwarmForUser(swarm.id, userId);
     expect(store.getSwarm(swarm.id)).toBeUndefined();
+  });
+
+  it("mounts the picked repo on the orchestrator and every spawned worker", () => {
+    const swarm = makeSwarm({ repoUrl: "https://github.com/acme/serve" });
+    expect(swarm.repoUrl).toBe("https://github.com/acme/serve");
+    expect(orchestrator(swarm.id).hasRepo).toBe(true);
+    const run = (name: string, args: unknown) =>
+      tools.runSwarmTool(ctxFor(swarm.id, orchestrator(swarm.id).id), name, args);
+    expect(
+      run("spawn_worker", {
+        role: "researcher",
+        label: "scout",
+        brief: "Map the current demand-based addressed-token implementation in the checkout.",
+      }),
+    ).toMatch(/@scout/);
+    expect(store.listSwarmAgents(swarm.id).find((a) => a.label === "scout")!.hasRepo).toBe(true);
+    const bare = makeSwarm();
+    expect(orchestrator(bare.id).hasRepo).toBe(false);
   });
 });

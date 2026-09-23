@@ -30,7 +30,7 @@ export const SWARM_ROLES = [
 ] as const;
 export type SwarmRole = (typeof SWARM_ROLES)[number];
 
-/** Roles that need a git checkout; everything else runs as a no-repo cloud agent. */
+/** Roles that write code and can only be spawned in the build phase. */
 export const REPO_ROLES: readonly SwarmRole[] = ["engineer", "integrator"];
 export const WORKER_ROLES: readonly SwarmRole[] = SWARM_ROLES.filter(
   (role) => role !== "orchestrator",
@@ -346,6 +346,14 @@ export function isSwarmChannel(value: unknown): value is string {
 
 export function roleNeedsRepo(role: SwarmRole): boolean {
   return REPO_ROLES.includes(role);
+}
+
+/** When the human attached a repo, every agent gets a checkout so they can read it. */
+export function swarmAgentUsesRepo(
+  swarm: Pick<SwarmInfo, "repoUrl">,
+  _role?: SwarmRole,
+): boolean {
+  return Boolean(swarm.repoUrl);
 }
 
 /** Engineers / integrators only exist once the research report is approved. */

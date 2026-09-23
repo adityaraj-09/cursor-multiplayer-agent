@@ -21,6 +21,7 @@ import {
   roleAllowedInPhase,
   roleNeedsRepo,
   slugifySwarmLabel,
+  swarmAgentUsesRepo,
   taskDependenciesMet,
   taskMatchesRole,
   type SwarmPostInfo,
@@ -161,12 +162,16 @@ export const SWARM_TOOLS: SwarmToolDef[] = [
     input: {},
     handler: (ctx) => {
       const agents = store.listSwarmAgents(ctx.swarm.id).filter((a) => a.status !== "retired");
-      return agents
-        .map(
+      const repo = ctx.swarm.repoUrl
+        ? `Attached repository: ${ctx.swarm.repoUrl} @ ${ctx.swarm.startingRef}`
+        : "Attached repository: none";
+      return [
+        repo,
+        ...agents.map(
           (a) =>
             `- @${a.label} (${a.id}) — ${a.role} · ${a.status}${a.currentTaskId ? ` · task ${a.currentTaskId}` : ""}${a.id === ctx.agent.id ? " · you" : ""}`,
-        )
-        .join("\n");
+        ),
+      ].join("\n");
     },
   }),
   tool({
@@ -264,7 +269,7 @@ export const SWARM_TOOLS: SwarmToolDef[] = [
   tool({
     name: "request_human",
     description:
-      "Escalate to the humans who own this swarm (Slack/notification). Orchestrator may set blocking=true to pause the swarm until they answer.",
+      "Escalate to the humans who own this swarm (Slack/notification) for a decision only they can make (budget, build approval, policy). Do not use this to re-ask for the attached repository, goal, model, or other settings they already chose. Orchestrator may set blocking=true to pause the swarm until they answer.",
     roles: "all",
     input: {
       question: z.string().min(1).max(MAX_SWARM_POST),
@@ -723,7 +728,7 @@ export const SWARM_TOOLS: SwarmToolDef[] = [
         role: args.role,
         label,
         brief: requireText(args.brief, MAX_SWARM_BRIEF, "brief"),
-        hasRepo: roleNeedsRepo(args.role),
+        hasRepo: swarmAgentUsesRepo(ctx.swarm, args.role),
         spawnedBy: ctx.agent.id,
       });
       store.insertSwarmEvent({

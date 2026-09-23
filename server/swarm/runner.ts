@@ -10,6 +10,7 @@ import {
   evaluateSwarmLimits,
   isTerminalSwarmStatus,
   shouldWarnBudget,
+  swarmAgentUsesRepo,
 } from "../../shared/swarm.js";
 import * as store from "./store.js";
 import { SWARM_MCP_SERVER_NAME, swarmMcpUrl } from "./mcp.js";
@@ -225,6 +226,7 @@ export class SwarmRunner {
     }
 
     this.maybeWarnBudget(swarm);
+    this.mountAttachedRepo(swarm);
     const verdict = evaluateSwarmLimits(swarm, now);
     if (verdict.action !== "continue") {
       this.applyLimit(swarm, verdict);
@@ -354,6 +356,30 @@ export class SwarmRunner {
       orgId: swarm.orgId ?? undefined,
       meta: { swarmId: swarm.id },
     });
+  }
+
+  /** Existing research agents were created with noRepo; remount so they can read the picked repo. */
+  private mountAttachedRepo(swarm: store.SwarmRow): void {
+    if (!swarm.repoUrl) return;
+    for (const agent of store.listSwarmAgents(swarm.id)) {
+      if (agent.status === "retired" || agent.hasRepo || !swarmAgentUsesRepo(swarm, agent.role)) continue;
+      const hadCursorAgent = Boolean(agent.cursorAgentId);
+      store.updateSwarmAgent(agent.id, {
+        hasRepo: true,
+        cursorAgentId: hadCursorAgent ? null : agent.cursorAgentId,
+      });
+      const cached = this.sessions.get(agent.id);
+      if (cached) {
+        this.sessions.delete(agent.id);
+        void cached.dispose();
+      }
+      store.insertSwarmEvent({
+        swarmId: swarm.id,
+        agentId: agent.id,
+        kind: "repo_mounted",
+        message: `Mounted ${swarm.repoUrl} for @${agent.label}${hadCursorAgent ? " (replaced the no-repo Cursor run)" : ""}`,
+      });
+    }
   }
 
   private sessionFor(swarm: store.SwarmRow, agent: store.SwarmAgentRow, apiKey: string): Session {

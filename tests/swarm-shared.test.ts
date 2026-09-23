@@ -11,6 +11,7 @@ import {
   nextEloRatings,
   roleAllowedInPhase,
   shouldWarnBudget,
+  swarmAgentUsesRepo,
   slugifySwarmLabel,
   swarmTitleFromGoal,
   taskDependenciesMet,
@@ -103,6 +104,8 @@ describe("swarm domain helpers", () => {
   it("gates code roles to the build phase and matches tasks to roles", () => {
     expect(roleAllowedInPhase("engineer", "research")).toBe(false);
     expect(roleAllowedInPhase("engineer", "build")).toBe(true);
+    expect(swarmAgentUsesRepo({ repoUrl: "https://github.com/acme/engine" })).toBe(true);
+    expect(swarmAgentUsesRepo({ repoUrl: null })).toBe(false);
     expect(roleAllowedInPhase("critic", "research")).toBe(true);
     expect(taskMatchesRole({ kind: "critique", roleHint: null }, "critic")).toBe(true);
     expect(taskMatchesRole({ kind: "research", roleHint: "synthesizer" }, "researcher")).toBe(false);
