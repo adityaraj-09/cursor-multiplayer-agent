@@ -473,8 +473,10 @@ const SteerInput = forwardRef<SteerInputHandle, SteerInputProps>(function SteerI
         <div
           className={`${compact ? "mt-1" : "mt-2"} px-1 flex items-center justify-between gap-2 min-h-[1rem]`}
         >
-          <p className="text-[11px] text-[#6e6e6e] truncate">{hint}</p>
-          <AgentUsageBadge usage={usage} />
+          <p className="text-[11px] text-[#6e6e6e] truncate min-w-0 flex-1">{hint}</p>
+          <span className="shrink-0">
+            <AgentUsageBadge usage={usage} />
+          </span>
         </div>
       )}
       {!showHint && usage && usage.totalTokens > 0 && (

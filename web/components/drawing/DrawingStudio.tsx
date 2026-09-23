@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import dynamic from "next/dynamic";
 import { Pencil, Trash2, X } from "lucide-react";
 import "@excalidraw/excalidraw/index.css";
@@ -85,10 +86,15 @@ export default function DrawingStudio({
   onClose: () => void;
   onAttach: (file: File) => Promise<void> | void;
 }) {
+  const [mounted, setMounted] = useState(false);
   const [api, setApi] = useState<ExcalidrawAPI | null>(null);
   const [initial, setInitial] = useState<ScenePayload | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   useEffect(() => {
     if (!open) return;
@@ -99,11 +105,16 @@ export default function DrawingStudio({
 
   useEffect(() => {
     if (!open) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
     };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    return () => {
+      document.body.style.overflow = prev;
+      window.removeEventListener("keydown", onKey);
+    };
   }, [open, onClose]);
 
   const persist = useCallback(
@@ -147,17 +158,17 @@ export default function DrawingStudio({
     }
   };
 
-  if (!open) return null;
+  if (!open || !mounted) return null;
 
-  return (
+  return createPortal(
     <div
-      className="steer-drawing-overlay fixed inset-0 z-[90] flex flex-col bg-[#111111]/80 backdrop-blur-sm"
+      className="steer-drawing-overlay"
       role="dialog"
       aria-modal="true"
       aria-labelledby="steer-drawing-title"
     >
-      <div className="mx-auto flex h-full w-full max-w-[1400px] flex-col px-3 py-3 sm:px-5 sm:py-4">
-        <header className="mb-2 flex items-center gap-2 rounded-xl border border-[#2b2b2b] bg-[#171717] px-3 py-2">
+      <div className="flex h-full min-h-0 w-full flex-col px-3 py-3 sm:px-5 sm:py-4">
+        <header className="mb-2 flex shrink-0 items-center gap-2 rounded-xl border border-[#2b2b2b] bg-[#171717] px-3 py-2">
           <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#1f1f1f] text-[#8ec5ff]">
             <Pencil className="h-4 w-4" strokeWidth={1.75} />
           </span>
@@ -187,7 +198,7 @@ export default function DrawingStudio({
           </button>
         </header>
 
-        <div className="steer-drawing-canvas min-h-0 flex-1 overflow-hidden rounded-xl border border-[#2b2b2b] bg-[#121212]">
+        <div className="steer-drawing-canvas">
           <Excalidraw
             excalidrawAPI={(next) => setApi(next as unknown as ExcalidrawAPI)}
             initialData={
@@ -222,14 +233,14 @@ export default function DrawingStudio({
           />
         </div>
 
-        <footer className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[#2b2b2b] bg-[#171717] px-3 py-2">
-          <p className="min-w-0 text-[11px] text-[#6e6e6e]">
+        <footer className="mt-2 flex shrink-0 flex-wrap items-center justify-between gap-2 rounded-xl border border-[#2b2b2b] bg-[#171717] px-3 py-2">
+          <p className="min-w-0 flex-1 truncate text-[11px] text-[#6e6e6e]">
             {error ||
               (canAttach
                 ? "Attach exports a PNG into the composer. The board stays in this session."
                 : "View only — you cannot attach from this role.")}
           </p>
-          <div className="flex items-center gap-2">
+          <div className="flex shrink-0 items-center gap-2">
             <button
               type="button"
               onClick={onClose}
@@ -248,6 +259,7 @@ export default function DrawingStudio({
           </div>
         </footer>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
