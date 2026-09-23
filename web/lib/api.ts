@@ -1903,6 +1903,36 @@ export async function fetchSwarmAgentMessages(
   return res.json();
 }
 
+function saveBlob(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+/** Zip of the whole swarm, or only its artifacts. */
+export async function downloadSwarmExport(
+  id: string,
+  scope: "full" | "artifacts" = "full",
+): Promise<void> {
+  const res = await fetch(
+    `${API_BASE}/swarms/${encodeURIComponent(id)}/export?scope=${scope}`,
+    { headers: await authHeaders() },
+  );
+  if (!res.ok) throw new Error(await parseApiError(res, "Failed to export swarm"));
+  const blob = await res.blob();
+  const header = res.headers.get("Content-Disposition") || "";
+  const match = /filename="([^"]+)"/.exec(header);
+  saveBlob(
+    blob,
+    match?.[1] || (scope === "artifacts" ? "swarm-artifacts.zip" : "swarm-export.zip"),
+  );
+}
+
 export async function fetchSwarmArtifact(
   swarmId: string,
   artifactId: string,

@@ -695,7 +695,7 @@ export function listSwarmPosts(
     where.push("created_at > ?");
     params.push(opts.since);
   }
-  const limit = Math.min(Math.max(opts.limit ?? 200, 1), 1000);
+  const limit = Math.min(Math.max(opts.limit ?? 200, 1), 5000);
   const rows = all(
     `SELECT * FROM swarm_posts WHERE ${where.join(" AND ")} ORDER BY created_at DESC LIMIT ${limit}`,
     params,
@@ -844,7 +844,7 @@ export function saveSwarmLedger(
 
 export function listSwarmLedgerRevisions(swarmId: string, limit = 50): SwarmLedgerInfo[] {
   return all(
-    `SELECT *, created_at AS updated_at FROM swarm_ledger_revisions WHERE swarm_id = ? ORDER BY revision DESC LIMIT ${Math.min(limit, 200)}`,
+    `SELECT *, created_at AS updated_at FROM swarm_ledger_revisions WHERE swarm_id = ? ORDER BY revision DESC LIMIT ${Math.min(Math.max(limit, 1), 1000)}`,
     [swarmId],
   ).map(toLedger);
 }
@@ -982,7 +982,7 @@ export function insertSwarmCritique(input: {
 
 export function listSwarmCritiques(swarmId: string, limit = 300): SwarmCritiqueInfo[] {
   return all(
-    `SELECT * FROM swarm_critiques WHERE swarm_id = ? ORDER BY created_at DESC LIMIT ${Math.min(limit, 1000)}`,
+    `SELECT * FROM swarm_critiques WHERE swarm_id = ? ORDER BY created_at DESC LIMIT ${Math.min(Math.max(limit, 1), 5000)}`,
     [swarmId],
   ).map(toCritique);
 }
@@ -1011,6 +1011,33 @@ export function insertSwarmMatch(input: {
     ],
   );
   return id;
+}
+
+export interface SwarmMatchRow {
+  id: string;
+  swarmId: string;
+  hypothesisA: string;
+  hypothesisB: string;
+  winner: "a" | "b" | "draw";
+  rationale: string;
+  judgeAgentId: string | null;
+  createdAt: number;
+}
+
+export function listSwarmMatches(swarmId: string, limit = 2000): SwarmMatchRow[] {
+  return all(
+    `SELECT * FROM swarm_matches WHERE swarm_id = ? ORDER BY created_at ASC LIMIT ${Math.min(Math.max(limit, 1), 5000)}`,
+    [swarmId],
+  ).map((r) => ({
+    id: s(r.id),
+    swarmId: s(r.swarm_id),
+    hypothesisA: s(r.hypothesis_a),
+    hypothesisB: s(r.hypothesis_b),
+    winner: (["a", "b", "draw"].includes(s(r.winner)) ? s(r.winner) : "draw") as SwarmMatchRow["winner"],
+    rationale: s(r.rationale),
+    judgeAgentId: sn(r.judge_agent_id),
+    createdAt: n(r.created_at),
+  }));
 }
 
 export function countSwarmMatchesBetween(swarmId: string, a: string, b: string): number {
@@ -1087,6 +1114,14 @@ export function getSwarmArtifactContent(
   return r ? { ...toArtifact(r), content: s(r.content) } : undefined;
 }
 
+export function listSwarmArtifactContents(
+  swarmId: string,
+): Array<SwarmArtifactInfo & { content: string }> {
+  return all(`SELECT * FROM swarm_artifacts WHERE swarm_id = ? ORDER BY kind ASC, name ASC`, [swarmId]).map(
+    (r) => ({ ...toArtifact(r), content: s(r.content) }),
+  );
+}
+
 export function listSwarmArtifacts(swarmId: string): SwarmArtifactInfo[] {
   return all(
     `SELECT id, swarm_id, agent_id, kind, name, size, created_at, updated_at FROM swarm_artifacts
@@ -1135,7 +1170,7 @@ export function insertSwarmEvent(input: {
 
 export function listSwarmEvents(swarmId: string, limit = 80): SwarmEventInfo[] {
   return all(
-    `SELECT * FROM swarm_events WHERE swarm_id = ? ORDER BY created_at DESC LIMIT ${Math.min(limit, 500)}`,
+    `SELECT * FROM swarm_events WHERE swarm_id = ? ORDER BY created_at DESC LIMIT ${Math.min(Math.max(limit, 1), 5000)}`,
     [swarmId],
   ).map(toEvent);
 }
@@ -1186,7 +1221,7 @@ export function upsertSwarmMessages(swarmId: string, messages: SwarmMessageInfo[
 
 export function listSwarmMessages(agentId: string, limit = 400): SwarmMessageInfo[] {
   return all(
-    `SELECT * FROM swarm_messages WHERE agent_id = ? ORDER BY ts DESC LIMIT ${Math.min(limit, 2000)}`,
+    `SELECT * FROM swarm_messages WHERE agent_id = ? ORDER BY ts DESC LIMIT ${Math.min(Math.max(limit, 1), 8000)}`,
     [agentId],
   )
     .map(toMessage)
