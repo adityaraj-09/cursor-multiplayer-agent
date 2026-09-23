@@ -51,7 +51,7 @@ export default function SessionRoomView({
   const featureAgents = room.agents.filter((agent) => !agent.integrator);
 
   return (
-    <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-[#141414]">
+    <div className="relative flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-[#141414]">
       <header className="relative z-20 flex h-12 shrink-0 items-center justify-between gap-3 border-b border-[#2b2b2b]/90 bg-[#171717]/95 px-3">
         <div className="flex min-w-0 flex-1 items-center gap-2.5">
           <button

@@ -13,6 +13,7 @@ if (process.env.VERCEL && !API_URL) {
 }
 
 const nextConfig: NextConfig = {
+  allowedDevOrigins: ["127.0.0.1", "localhost"],
   transpilePackages: ["thinking-orbs", "@excalidraw/excalidraw"],
   // standalone is for Docker; Vercel uses its own bundler
   ...(process.env.VERCEL ? {} : { output: "standalone" as const }),

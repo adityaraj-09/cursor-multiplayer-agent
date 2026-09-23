@@ -1,10 +1,16 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import {
+  Component,
+  useCallback,
+  useLayoutEffect,
+  useEffect,
+  useState,
+  type ReactNode,
+} from "react";
 import { createPortal } from "react-dom";
 import dynamic from "next/dynamic";
 import { Pencil, Trash2, X } from "lucide-react";
-import "@excalidraw/excalidraw/index.css";
 
 type ScenePayload = {
   elements: readonly unknown[];
@@ -21,18 +27,39 @@ type ExcalidrawAPI = {
 
 const Excalidraw = dynamic(
   async () => {
-    const mod = await import("@excalidraw/excalidraw");
-    return mod.Excalidraw;
+    const [{ Excalidraw: Editor }] = await Promise.all([
+      import("@excalidraw/excalidraw"),
+      import("@excalidraw/excalidraw/index.css"),
+    ]);
+    return Editor;
   },
   {
     ssr: false,
     loading: () => (
-      <div className="flex h-full items-center justify-center text-[13px] text-[#6e6e6e]">
+      <div className="flex h-full min-h-[240px] items-center justify-center text-[13px] text-[#6e6e6e]">
         Loading whiteboard…
       </div>
     ),
   },
 );
+
+class WhiteboardErrorBoundary extends Component<
+  { children: ReactNode; fallback: (message: string) => ReactNode },
+  { message: string | null }
+> {
+  state = { message: null as string | null };
+
+  static getDerivedStateFromError(error: unknown) {
+    return {
+      message: error instanceof Error ? error.message : "Whiteboard failed to load",
+    };
+  }
+
+  render() {
+    if (this.state.message) return this.props.fallback(this.state.message);
+    return this.props.children;
+  }
+}
 
 function sceneKey(roomId: string): string {
   return `steer-drawing:${roomId}`;
@@ -92,7 +119,7 @@ export default function DrawingStudio({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     setMounted(true);
   }, []);
 
@@ -163,9 +190,20 @@ export default function DrawingStudio({
   return createPortal(
     <div
       className="steer-drawing-overlay"
+      data-testid="steer-drawing-overlay"
       role="dialog"
       aria-modal="true"
       aria-labelledby="steer-drawing-title"
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 200,
+        display: "flex",
+        flexDirection: "column",
+        height: "100dvh",
+        width: "100vw",
+        background: "#111111",
+      }}
     >
       <div className="flex h-full min-h-0 w-full flex-col px-3 py-3 sm:px-5 sm:py-4">
         <header className="mb-2 flex shrink-0 items-center gap-2 rounded-xl border border-[#2b2b2b] bg-[#171717] px-3 py-2">
@@ -198,39 +236,48 @@ export default function DrawingStudio({
           </button>
         </header>
 
-        <div className="steer-drawing-canvas">
-          <Excalidraw
-            excalidrawAPI={(next) => setApi(next as unknown as ExcalidrawAPI)}
-            initialData={
-              initial
-                ? {
-                    elements: initial.elements as never,
-                    appState: {
-                      viewBackgroundColor: "#121212",
-                      ...(initial.appState || {}),
-                    } as never,
-                    files: (initial.files || {}) as never,
-                  }
-                : {
-                    appState: { viewBackgroundColor: "#121212" },
-                  }
-            }
-            theme="dark"
-            UIOptions={{
-              canvasActions: {
-                loadScene: false,
-                saveToActiveFile: false,
-                toggleTheme: false,
-              },
-            }}
-            onChange={(elements, appState, files) => {
-              persist(
-                elements,
-                appState as unknown as Record<string, unknown>,
-                files as unknown as Record<string, unknown>,
-              );
-            }}
-          />
+        <div className="steer-drawing-canvas" style={{ minHeight: 240 }}>
+          <WhiteboardErrorBoundary
+            fallback={(message) => (
+              <div className="flex h-full min-h-[240px] flex-col items-center justify-center gap-2 px-6 text-center">
+                <p className="text-[13px] text-[#e4e4e4]">Whiteboard could not load</p>
+                <p className="max-w-md text-[12px] text-[#f07070]">{message}</p>
+              </div>
+            )}
+          >
+            <Excalidraw
+              excalidrawAPI={(next) => setApi(next as unknown as ExcalidrawAPI)}
+              initialData={
+                initial
+                  ? {
+                      elements: initial.elements as never,
+                      appState: {
+                        viewBackgroundColor: "#121212",
+                        ...(initial.appState || {}),
+                      } as never,
+                      files: (initial.files || {}) as never,
+                    }
+                  : {
+                      appState: { viewBackgroundColor: "#121212" },
+                    }
+              }
+              theme="dark"
+              UIOptions={{
+                canvasActions: {
+                  loadScene: false,
+                  saveToActiveFile: false,
+                  toggleTheme: false,
+                },
+              }}
+              onChange={(elements, appState, files) => {
+                persist(
+                  elements,
+                  appState as unknown as Record<string, unknown>,
+                  files as unknown as Record<string, unknown>,
+                );
+              }}
+            />
+          </WhiteboardErrorBoundary>
         </div>
 
         <footer className="mt-2 flex shrink-0 flex-wrap items-center justify-between gap-2 rounded-xl border border-[#2b2b2b] bg-[#171717] px-3 py-2">
