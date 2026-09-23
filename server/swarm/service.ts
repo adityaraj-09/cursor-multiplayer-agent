@@ -15,6 +15,7 @@ import {
   clampSwarmMaxWorkers,
   extractMentions,
   isActiveSwarmStatus,
+  swarmAgentUsesRepo,
   swarmTitleFromGoal,
   type SwarmInfo,
   type SwarmSnapshot,
@@ -157,7 +158,7 @@ export function createSwarmForUser(userId: string, body: CreateSwarmRequest): st
     role: "orchestrator",
     label: "orchestrator",
     brief: "",
-    hasRepo: false,
+    hasRepo: swarmAgentUsesRepo({ repoUrl }),
   });
   store.insertSwarmEvent({
     swarmId: swarm.id,

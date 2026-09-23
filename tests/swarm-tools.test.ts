@@ -251,4 +251,22 @@ describe("swarm board tools", () => {
     service.deleteSwarmForUser(swarm.id, userId);
     expect(store.getSwarm(swarm.id)).toBeUndefined();
   });
+
+  it("mounts the picked repo on the orchestrator and every spawned worker", () => {
+    const swarm = makeSwarm({ repoUrl: "https://github.com/acme/serve" });
+    expect(swarm.repoUrl).toBe("https://github.com/acme/serve");
+    expect(orchestrator(swarm.id).hasRepo).toBe(true);
+    const run = (name: string, args: unknown) =>
+      tools.runSwarmTool(ctxFor(swarm.id, orchestrator(swarm.id).id), name, args);
+    expect(
+      run("spawn_worker", {
+        role: "researcher",
+        label: "scout",
+        brief: "Map the current demand-based addressed-token implementation in the checkout.",
+      }),
+    ).toMatch(/@scout/);
+    expect(store.listSwarmAgents(swarm.id).find((a) => a.label === "scout")!.hasRepo).toBe(true);
+    const bare = makeSwarm();
+    expect(orchestrator(bare.id).hasRepo).toBe(false);
+  });
 });

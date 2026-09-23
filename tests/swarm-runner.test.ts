@@ -19,6 +19,7 @@ interface FakeConfig {
   metadata?: Record<string, string>;
   mcpServers?: () => Record<string, { headers?: Record<string, string> }> | undefined;
   noRepo?: boolean;
+  repoUrl?: string;
 }
 
 /** Simulates a Cursor Cloud agent: resolves its board token from mcpServers and calls tools. */
@@ -180,6 +181,25 @@ describe("SwarmRunner", () => {
     expect(store.listSwarmEvents(swarm.id).some((e) => e.kind === "limit_budget")).toBe(true);
     expect(store.listSwarmEvents(swarm.id).some((e) => e.kind === "budget_warning")).toBe(true);
     expect(store.listSwarmHypotheses(swarm.id).some((h) => h.critiques > 0)).toBe(true);
+  });
+
+  it("mounts the picked repo on the orchestrator, including a leftover no-repo run", async () => {
+    const swarm = service.createSwarmForUser(userId, {
+      goal: "Compare demand-based addressed tokens to the current implementation in this repo.",
+      repoUrl: "https://github.com/acme/engine",
+    });
+    const orch = store.listSwarmAgents(swarm.id)[0]!;
+    expect(orch.hasRepo).toBe(true);
+    store.updateSwarmAgent(orch.id, { hasRepo: false, cursorAgentId: "bc-old-norepo" });
+    const fake = fakeFactory(scripts);
+    const runner = new runnerMod.SwarmRunner(fake.factory as never);
+    await round(runner, swarm.id);
+    expect(store.getSwarmAgent(orch.id)!.hasRepo).toBe(true);
+    expect(store.listSwarmEvents(swarm.id).some((e) => e.kind === "repo_mounted")).toBe(true);
+    expect(fake.created[0]!.noRepo).toBe(false);
+    expect(fake.created[0]!.repoUrl).toBe("https://github.com/acme/engine");
+    expect(fake.prompts[0]).toContain("local checkout of https://github.com/acme/engine");
+    expect(fake.prompts[0]).not.toContain("You have no repository");
   });
 
   it("relays output when an agent never reaches the board", async () => {

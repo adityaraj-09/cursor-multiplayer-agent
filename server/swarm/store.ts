@@ -459,6 +459,7 @@ const AGENT_COLUMNS: Record<string, string> = {
   lastBoardCallAt: "last_board_call_at",
   runStartedAt: "run_started_at",
   lastError: "last_error",
+  hasRepo: "has_repo",
 };
 
 export type SwarmAgentPatch = Partial<{
@@ -479,6 +480,7 @@ export type SwarmAgentPatch = Partial<{
   lastBoardCallAt: number | null;
   runStartedAt: number | null;
   lastError: string | null;
+  hasRepo: boolean;
 }>;
 
 export function updateSwarmAgent(id: string, patch: SwarmAgentPatch): SwarmAgentRow | undefined {

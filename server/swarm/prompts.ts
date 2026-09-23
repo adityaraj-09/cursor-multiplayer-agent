@@ -68,17 +68,22 @@ export function swarmIntegrationBranch(swarmId: string): string {
   return `steer/swarm-${swarmId.replace(/[^A-Za-z0-9]/g, "").slice(-10)}-integration`;
 }
 
-function repoRule(swarm: SwarmRow, hasCheckout: boolean): string {
-  if (hasCheckout) {
-    return `You have a local checkout of ${swarm.repoUrl} (base \`${swarm.startingRef}\`). Only change code for your claimed build task.`;
+function repoReadOnly(swarm: SwarmRow, role: SwarmRole): boolean {
+  return swarm.phase !== "build" || (role !== "engineer" && role !== "integrator");
+}
+
+function repoRule(swarm: SwarmRow, role: SwarmRole, hasCheckout: boolean): string {
+  if (hasCheckout && swarm.repoUrl) {
+    return repoReadOnly(swarm, role)
+      ? `You have a local checkout of ${swarm.repoUrl} (base \`${swarm.startingRef}\`). The repository is mounted — do not tell the human repoUrl is null, and do not request_human for the URL, branch, commit, or file paths. READ-ONLY this cycle: do not commit, push, or open a PR. Map the current implementation from the tree.`
+      : `You have a local checkout of ${swarm.repoUrl} (base \`${swarm.startingRef}\`). Only change code for your claimed build task.`;
   }
   if (swarm.repoUrl) {
     return (
       `This swarm is attached to ${swarm.repoUrl} (base \`${swarm.startingRef}\`). ` +
       "You do not have a local checkout this cycle — do not clone, commit, or push. " +
       "That repository is the user's current implementation. Read it on GitHub / the web. " +
-      "Do not request_human for the URL, branch, commit, or file paths — they already picked this repo when they created the swarm. " +
-      "Engineers get a checkout only after humans approve the build phase."
+      "Do not request_human for the URL, branch, commit, or file paths — they already picked this repo when they created the swarm."
     );
   }
   return (
@@ -98,7 +103,7 @@ function rulesBlock(role: SwarmRole, swarm: SwarmRow, hasCheckout: boolean): str
     "Do not ask the user clarifying questions — use ask_orchestrator (workers) or request_human (for decisions only humans can make).",
     "No GPU is available. Never claim measured GPU throughput or latency you did not measure; reason from published benchmarks, CPU-scale prototypes, and analysis, and label estimates.",
     "Cite sources with URLs. Do not fabricate papers, repos, numbers, or quotes.",
-    repoRule(swarm, hasCheckout),
+    repoRule(swarm, role, hasCheckout),
     role === "orchestrator"
       ? "You own the plan: #plan directives, decisions, tasks, spawns, the ledger, and the finish gates."
       : "Only the orchestrator posts directives or decisions. Claim tasks that match your role before working on them.",
@@ -145,7 +150,7 @@ function orchestratorSection(input: CyclePromptInput): string {
         "1. Decompose the goal. Call update_ledger with facts (given/verified), guesses, a phased plan, open questions, and a progress check.",
         "2. Create 4–8 initial tasks (create_task) covering distinct angles, each with objective / output format / sources / boundaries.",
         swarm.repoUrl
-          ? `2b. One of those tasks MUST map the current implementation in ${swarm.repoUrl} (key files, classes, functions). Do not request_human for that URL or for file paths.`
+          ? `2b. One of those tasks MUST map the current implementation in the mounted checkout of ${swarm.repoUrl} (key files, classes, functions). Do not request_human for that URL or for file paths.`
           : "2b. There is no attached repository. Research from public sources unless a human later attaches one.",
         `3. Spawn the opening team (spawn_worker) within the ${swarm.maxWorkers}-worker cap.`,
         "4. Post a short directive to #plan describing the strategy.",
@@ -216,7 +221,14 @@ function attachedRepoSection(input: CyclePromptInput): string {
 
 function buildSection(input: CyclePromptInput): string {
   const { swarm, agent } = input;
-  if (!agent.hasRepo) return "";
+  if (!agent.hasRepo || !swarm.repoUrl) return "";
+  if (repoReadOnly(swarm, agent.role)) {
+    return [
+      "## Repository",
+      `${swarm.repoUrl} (base \`${swarm.startingRef}\`)`,
+      "This checkout is already mounted. Explore the tree (grep, read files) to map the current implementation. Do not commit, push, or open a PR.",
+    ].join("\n");
+  }
   const gitRules = buildFeatureAgentGitRules({
     agentLabel: agent.label,
     assignedBranch: agent.role === "integrator" ? swarmIntegrationBranch(swarm.id) : agent.branch,

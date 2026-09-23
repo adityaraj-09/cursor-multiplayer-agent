@@ -80,6 +80,16 @@ function prompt(row: SwarmRow, orch: SwarmAgentRow) {
 }
 
 describe("swarm cycle prompts", () => {
+  it("tells a mounted orchestrator the checkout is already there and not to request_human", () => {
+    const text = prompt(swarm(), agent({ hasRepo: true }));
+    expect(text).toContain("You have a local checkout of https://github.com/acme/engine");
+    expect(text).toContain("READ-ONLY this cycle");
+    expect(text).toContain("do not tell the human repoUrl is null");
+    expect(text).toContain("## Repository");
+    expect(text).not.toContain("## Attached repository");
+    expect(text).not.toMatch(/You have no repository/);
+  });
+
   it("tells the no-checkout orchestrator about the attached repo and not to request_human for it", () => {
     const text = prompt(swarm(), agent());
     expect(text).toContain("https://github.com/acme/engine");

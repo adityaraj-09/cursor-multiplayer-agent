@@ -21,6 +21,7 @@ import {
   roleAllowedInPhase,
   roleNeedsRepo,
   slugifySwarmLabel,
+  swarmAgentUsesRepo,
   taskDependenciesMet,
   taskMatchesRole,
   type SwarmPostInfo,
@@ -727,7 +728,7 @@ export const SWARM_TOOLS: SwarmToolDef[] = [
         role: args.role,
         label,
         brief: requireText(args.brief, MAX_SWARM_BRIEF, "brief"),
-        hasRepo: roleNeedsRepo(args.role),
+        hasRepo: swarmAgentUsesRepo(ctx.swarm, args.role),
         spawnedBy: ctx.agent.id,
       });
       store.insertSwarmEvent({
