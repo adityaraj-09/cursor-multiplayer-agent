@@ -215,6 +215,14 @@ Otherwise: **request_phase_change** to build (if repo attached), **request_human
 - **Approve / reject** build — `POST .../approve` or `.../reject` with optional note
 - **Pause / resume / stop** — lifecycle actions on the swarm detail page
 
+### Quality and token cost
+
+Cycle prompts are versioned (`swarm-v2`). A **new** Cursor session gets the full mission, role brief, and repo rules. Later cycles on the same `cursorAgentId` get a **continuation** prompt (status + notes + role-routed digest) so the swarm does not re-pay for the mission every turn. Digests are **role-aware**: researchers see findings, critics see critiques/hypotheses, engineers skip the tournament.
+
+The orchestrator is instructed to **scale the team to the goal** (often 1–2 researchers + a critic first) instead of spawning a full specialist roster on cycle one.
+
+Further gains (not yet in code): a cheaper model for token-heavy researchers vs a stronger orchestrator/synthesizer; periodic note compaction; prompt-cache-friendly static prefixes if the Cursor Cloud API exposes cache keys.
+
 ### Export
 
 - **Full zip** — `GET /api/swarms/:id/export?scope=full` — board posts, tasks, hypotheses, ledger, agent notes/messages, artifacts, activity, JSON snapshots (folder layout under a slug from the title)

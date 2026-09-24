@@ -94,7 +94,7 @@ function resolveMentions(swarmId: string, labels: string[]): string[] {
   return [...new Set(ids)];
 }
 
-function formatPost(p: SwarmPostInfo, max = 1500): string {
+function formatPost(p: SwarmPostInfo, max = 700): string {
   const when = new Date(p.createdAt).toISOString();
   const refs = p.refs.length ? ` refs=${p.refs.join(",")}` : "";
   return `- ${p.id} · ${when} · #${p.channel} · ${p.kind} · ${p.authorLabel} (${p.authorRole})${refs}\n  ${clip(p.bodyMd, max).replace(/\n/g, "\n  ")}`;
@@ -184,8 +184,9 @@ export const SWARM_TOOLS: SwarmToolDef[] = [
       buildBoardDigest({
         agentId: ctx.agent.id,
         agentLabel: ctx.agent.label,
+        role: ctx.agent.role,
         since: ctx.agent.lastCycleAt ?? 0,
-        posts: store.listSwarmPosts(ctx.swarm.id, { limit: 300 }),
+        posts: store.listSwarmPosts(ctx.swarm.id, { limit: ctx.agent.role === "orchestrator" ? 180 : 80 }),
         tasks: store.listSwarmTasks(ctx.swarm.id),
         hypotheses: store.listSwarmHypotheses(ctx.swarm.id),
         agents: store.listSwarmAgents(ctx.swarm.id),
@@ -208,7 +209,7 @@ export const SWARM_TOOLS: SwarmToolDef[] = [
       const posts = store.listSwarmPosts(ctx.swarm.id, {
         channel: args.channel,
         since: args.since_minutes ? ctx.now - args.since_minutes * 60_000 : undefined,
-        limit: args.limit ?? 25,
+        limit: args.limit ?? 12,
       });
       if (!posts.length) return "No posts match.";
       return `<swarm_board untrusted="true">\n${posts.map((p) => formatPost(p)).join("\n")}\n</swarm_board>`;
@@ -318,11 +319,11 @@ export const SWARM_TOOLS: SwarmToolDef[] = [
       });
       if (!filtered.length) return "No tasks match.";
       return filtered
-        .slice(0, 40)
+        .slice(0, 20)
         .map((t) => {
           const ready = t.status === "pending" && taskDependenciesMet(t, byId);
           const forYou = t.status === "pending" && ready && taskMatchesRole(t, ctx.agent.role);
-          return `- ${t.id} [${t.kind} · ${t.status}${t.roleHint ? ` · for ${t.roleHint}` : ""}${t.blockedBy.length ? ` · blocked_by ${t.blockedBy.join(",")}` : ""}${forYou ? " · claimable by you" : ""}] p${t.priority} ${t.title}\n  ${clip(t.spec.replace(/\n/g, " "), 400)}`;
+          return `- ${t.id} [${t.kind} · ${t.status}${t.roleHint ? ` · for ${t.roleHint}` : ""}${t.blockedBy.length ? ` · blocked_by ${t.blockedBy.join(",")}` : ""}${forYou ? " · claimable by you" : ""}] p${t.priority} ${t.title}\n  ${clip(t.spec.replace(/\n/g, " "), 220)}`;
         })
         .join("\n");
     },
@@ -384,7 +385,7 @@ export const SWARM_TOOLS: SwarmToolDef[] = [
   tool({
     name: "notes_write",
     description:
-      "Replace your private working notes. They are shown to you at the start of every cycle — keep what you learned, what you tried, and what to do next.",
+      "Replace your private working notes (keep under ~2000 characters). They are shown at the start of every cycle — learned, tried, next. Drop stale transcripts.",
     roles: "all",
     input: { notes: z.string().max(MAX_SWARM_NOTES) },
     handler: (ctx, args) => {
@@ -402,10 +403,10 @@ export const SWARM_TOOLS: SwarmToolDef[] = [
       if (!ledger) return "The ledger is empty — the orchestrator has not planned yet.";
       return [
         `Revision ${ledger.revision}`,
-        `## Facts\n${ledger.factsMd || "_none_"}`,
-        `## Educated guesses\n${ledger.guessesMd || "_none_"}`,
-        `## Plan\n${ledger.planMd || "_none_"}`,
-        `## Open questions\n${ledger.openQuestionsMd || "_none_"}`,
+        `## Facts\n${clip(ledger.factsMd || "_none_", 2_400)}`,
+        `## Educated guesses\n${clip(ledger.guessesMd || "_none_", 1_600)}`,
+        `## Plan\n${clip(ledger.planMd || "_none_", 2_400)}`,
+        `## Open questions\n${clip(ledger.openQuestionsMd || "_none_", 1_200)}`,
         ledger.progress ? `## Latest progress check\n${JSON.stringify(ledger.progress)}` : "",
       ]
         .filter(Boolean)
@@ -462,7 +463,7 @@ export const SWARM_TOOLS: SwarmToolDef[] = [
     handler: (ctx, args) => {
       const a = store.getSwarmArtifactContent(ctx.swarm.id, args.name);
       if (!a) throw new SwarmToolError("Artifact not found");
-      return `# ${a.name} (${a.kind})\n\n${clip(a.content, 60_000)}`;
+      return `# ${a.name} (${a.kind})\n\n${clip(a.content, 24_000)}`;
     },
   }),
   tool({

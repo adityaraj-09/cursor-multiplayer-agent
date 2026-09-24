@@ -471,8 +471,9 @@ export class SwarmRunner {
         digest: buildBoardDigest({
           agentId: agent.id,
           agentLabel: agent.label,
+          role: agent.role,
           since: agent.lastCycleAt ?? 0,
-          posts: store.listSwarmPosts(swarm.id, { limit: 300 }),
+          posts: store.listSwarmPosts(swarm.id, { limit: agent.role === "orchestrator" ? 180 : 80 }),
           tasks,
           hypotheses: store.listSwarmHypotheses(swarm.id),
           agents,

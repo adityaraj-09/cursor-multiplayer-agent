@@ -545,40 +545,176 @@ export interface SwarmDigestInput {
   tasks: Pick<SwarmTaskInfo, "id" | "title" | "status" | "ownerAgentId" | "kind">[];
   hypotheses: Pick<SwarmHypothesisInfo, "id" | "title" | "elo" | "critiques" | "status">[];
   agents: Pick<SwarmAgentInfo, "id" | "label" | "role" | "status">[];
+  /** When set, only role-relevant board slices are included (token routing). */
+  role?: SwarmRole;
   maxChars?: number;
+}
+
+export interface SwarmDigestProfile {
+  maxChars: number;
+  directives: number;
+  decisions: number;
+  forMe: number;
+  fresh: number;
+  questions: number;
+  hypotheses: number;
+  tasks: number;
+  line: number;
+  freshKinds: readonly SwarmPostKind[];
+  includeHypotheses: boolean;
+  includeQuestions: boolean;
+  taskKinds: readonly SwarmTaskKind[] | null;
+}
+
+/** Role-aware token budgets for the cycle digest (RCR-style routing). */
+export function swarmDigestProfile(role?: SwarmRole): SwarmDigestProfile {
+  switch (role) {
+    case "researcher":
+      return {
+        maxChars: 4_200,
+        directives: 3,
+        decisions: 3,
+        forMe: 6,
+        fresh: 8,
+        questions: 4,
+        hypotheses: 5,
+        tasks: 6,
+        line: 280,
+        freshKinds: ["finding", "proposal"],
+        includeHypotheses: true,
+        includeQuestions: true,
+        taskKinds: ["research"],
+      };
+    case "critic":
+      return {
+        maxChars: 3_800,
+        directives: 2,
+        decisions: 3,
+        forMe: 6,
+        fresh: 6,
+        questions: 2,
+        hypotheses: 8,
+        tasks: 5,
+        line: 260,
+        freshKinds: ["critique", "proposal"],
+        includeHypotheses: true,
+        includeQuestions: false,
+        taskKinds: ["critique"],
+      };
+    case "ranker":
+      return {
+        maxChars: 3_400,
+        directives: 2,
+        decisions: 3,
+        forMe: 4,
+        fresh: 4,
+        questions: 2,
+        hypotheses: 8,
+        tasks: 4,
+        line: 220,
+        freshKinds: ["proposal"],
+        includeHypotheses: true,
+        includeQuestions: false,
+        taskKinds: ["rank"],
+      };
+    case "synthesizer":
+      return {
+        maxChars: 5_200,
+        directives: 3,
+        decisions: 5,
+        forMe: 6,
+        fresh: 8,
+        questions: 3,
+        hypotheses: 8,
+        tasks: 3,
+        line: 320,
+        freshKinds: ["finding", "critique", "proposal", "decision"],
+        includeHypotheses: true,
+        includeQuestions: true,
+        taskKinds: ["synthesize"],
+      };
+    case "verifier":
+      return {
+        maxChars: 3_600,
+        directives: 2,
+        decisions: 4,
+        forMe: 4,
+        fresh: 4,
+        questions: 2,
+        hypotheses: 4,
+        tasks: 3,
+        line: 260,
+        freshKinds: ["finding", "decision"],
+        includeHypotheses: true,
+        includeQuestions: false,
+        taskKinds: ["verify"],
+      };
+    case "engineer":
+    case "integrator":
+      return {
+        maxChars: 3_200,
+        directives: 4,
+        decisions: 4,
+        forMe: 6,
+        fresh: 4,
+        questions: 3,
+        hypotheses: 0,
+        tasks: 8,
+        line: 240,
+        freshKinds: ["progress", "directive"],
+        includeHypotheses: false,
+        includeQuestions: true,
+        taskKinds: role === "integrator" ? ["integrate", "build"] : ["build"],
+      };
+    case "orchestrator":
+    default:
+      return {
+        maxChars: 7_000,
+        directives: 5,
+        decisions: 5,
+        forMe: 8,
+        fresh: 8,
+        questions: 5,
+        hypotheses: 6,
+        tasks: 10,
+        line: 360,
+        freshKinds: ["finding", "critique", "proposal"],
+        includeHypotheses: true,
+        includeQuestions: true,
+        taskKinds: null,
+      };
+  }
 }
 
 /**
  * Deterministic board digest injected into every cycle prompt. Agents get the
  * decisions, directives, and anything addressed to them — not the whole board.
+ * When `role` is set, slices are routed so workers do not pay for other roles' state.
  */
 export function buildBoardDigest(input: SwarmDigestInput): string {
-  const maxChars = input.maxChars ?? 9_000;
+  const profile = swarmDigestProfile(input.role);
+  const maxChars = input.maxChars ?? profile.maxChars;
   const labelLc = input.agentLabel.toLowerCase();
   const sorted = [...input.posts].sort((a, b) => a.createdAt - b.createdAt);
   const directives = sorted
     .filter((p) => p.kind === "directive" || p.channel === "plan")
-    .slice(-6);
-  const decisions = sorted.filter((p) => p.kind === "decision").slice(-5);
+    .slice(-profile.directives);
+  const decisions = sorted.filter((p) => p.kind === "decision").slice(-profile.decisions);
   const forMe = sorted
     .filter(
       (p) =>
         p.createdAt > input.since &&
         (p.mentions.includes(input.agentId) || p.mentions.includes(labelLc)),
     )
-    .slice(-8);
+    .slice(-profile.forMe);
   const fresh = sorted
-    .filter(
-      (p) =>
-        p.createdAt > input.since &&
-        (p.kind === "finding" || p.kind === "critique" || p.kind === "proposal"),
-    )
-    .slice(-10);
-  const openQuestions = sorted
-    .filter((p) => p.kind === "question" && p.createdAt > input.since)
-    .slice(-5);
+    .filter((p) => p.createdAt > input.since && profile.freshKinds.includes(p.kind))
+    .slice(-profile.fresh);
+  const openQuestions = profile.includeQuestions
+    ? sorted.filter((p) => p.kind === "question" && p.createdAt > input.since).slice(-profile.questions)
+    : [];
 
-  const line = (p: SwarmDigestInput["posts"][number], max = 420) =>
+  const line = (p: SwarmDigestInput["posts"][number], max = profile.line) =>
     `- [${p.kind} · #${p.channel} · ${p.authorLabel}] ${clip(p.bodyMd.replace(/\s+/g, " "), max)} (post ${p.id})`;
 
   const sections: string[] = [];
@@ -589,13 +725,13 @@ export function buildBoardDigest(input: SwarmDigestInput): string {
       .join("\n")}`,
   );
   if (directives.length) {
-    sections.push(`### Current directives\n${directives.map((p) => line(p, 600)).join("\n")}`);
+    sections.push(`### Current directives\n${directives.map((p) => line(p)).join("\n")}`);
   }
   if (decisions.length) {
     sections.push(`### Decisions\n${decisions.map((p) => line(p)).join("\n")}`);
   }
   if (forMe.length) {
-    sections.push(`### Addressed to you\n${forMe.map((p) => line(p, 600)).join("\n")}`);
+    sections.push(`### Addressed to you\n${forMe.map((p) => line(p)).join("\n")}`);
   }
   if (fresh.length) {
     sections.push(`### New since your last cycle\n${fresh.map((p) => line(p)).join("\n")}`);
@@ -603,22 +739,29 @@ export function buildBoardDigest(input: SwarmDigestInput): string {
   if (openQuestions.length) {
     sections.push(`### Open questions\n${openQuestions.map((p) => line(p)).join("\n")}`);
   }
-  const top = [...input.hypotheses]
-    .filter((h) => h.status !== "rejected")
-    .sort((a, b) => b.elo - a.elo)
-    .slice(0, 8);
-  if (top.length) {
-    sections.push(
-      `### Hypothesis leaderboard\n${top
-        .map((h, i) => `${i + 1}. ${clip(h.title, 140)} — Elo ${Math.round(h.elo)}, ${h.critiques} critique(s) (${h.id})`)
-        .join("\n")}`,
-    );
+  if (profile.includeHypotheses && profile.hypotheses > 0) {
+    const top = [...input.hypotheses]
+      .filter((h) => h.status !== "rejected")
+      .sort((a, b) => b.elo - a.elo)
+      .slice(0, profile.hypotheses);
+    if (top.length) {
+      sections.push(
+        `### Hypothesis leaderboard\n${top
+          .map((h, i) => `${i + 1}. ${clip(h.title, 140)} — Elo ${Math.round(h.elo)}, ${h.critiques} critique(s) (${h.id})`)
+          .join("\n")}`,
+      );
+    }
   }
-  const openTasks = input.tasks.filter((t) => t.status === "pending" || t.status === "claimed");
+  const openTasks = input.tasks.filter((t) => {
+    if (t.status !== "pending" && t.status !== "claimed") return false;
+    if (t.ownerAgentId === input.agentId) return true;
+    if (!profile.taskKinds) return true;
+    return profile.taskKinds.includes(t.kind);
+  });
   if (openTasks.length) {
     sections.push(
       `### Open tasks\n${openTasks
-        .slice(0, 14)
+        .slice(0, profile.tasks)
         .map((t) => `- ${t.id} [${t.kind} · ${t.status}${t.ownerAgentId === input.agentId ? " · yours" : ""}] ${clip(t.title, 140)}`)
         .join("\n")}`,
     );

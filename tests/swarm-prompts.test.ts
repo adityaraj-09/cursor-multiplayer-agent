@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildCyclePrompt } from "../server/swarm/prompts.js";
+import { buildCyclePrompt, swarmNeedsFullPrompt } from "../server/swarm/prompts.js";
 import type { SwarmAgentRow, SwarmRow } from "../server/swarm/store.js";
 
 function swarm(overrides: Partial<SwarmRow> = {}): SwarmRow {
@@ -130,5 +130,33 @@ describe("swarm cycle prompts", () => {
     expect(text).toContain("You have a local checkout of https://github.com/acme/engine");
     expect(text).toContain("## Repository");
     expect(text).not.toContain("## Attached repository");
+  });
+
+  it("uses a short continuation prompt once the Cursor session already exists", () => {
+    const orch = agent({ cycles: 2, cursorAgentId: "bc_existing", notesMd: "Mapped src/cache.ts. Next: spawn critic." });
+    expect(swarmNeedsFullPrompt(orch)).toBe(false);
+    const text = prompt(swarm(), orch);
+    expect(text).toContain("Continuation cycle");
+    expect(text).toContain("## Your notes");
+    expect(text).not.toContain("## Mission");
+    expect(text).not.toContain("## Your role");
+    expect(text).not.toContain("## First cycle — plan the swarm");
+    expect(text.length).toBeLessThan(prompt(swarm(), agent()).length);
+  });
+
+  it("re-sends the full prompt after a remount wipes the Cursor agent id", () => {
+    const orch = agent({ cycles: 4, cursorAgentId: null });
+    expect(swarmNeedsFullPrompt(orch)).toBe(true);
+    const text = prompt(swarm(), orch);
+    expect(text).toContain("## Mission");
+    expect(text).toContain("## Your role");
+    expect(text).not.toContain("Continuation cycle");
+  });
+
+  it("tells the orchestrator to scale the opening team instead of spawning everyone", () => {
+    const text = prompt(swarm(), agent());
+    expect(text).toContain("Create 2–5 initial tasks");
+    expect(text).toContain("Leave ranker/synthesizer/verifier unspawned");
+    expect(text).toContain("Scale the team to the goal");
   });
 });

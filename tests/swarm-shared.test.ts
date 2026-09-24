@@ -146,6 +146,37 @@ describe("swarm domain helpers", () => {
     expect(digest).toContain("· yours");
     expect(digest).not.toContain("] old");
   });
+
+  it("routes digest slices so build agents skip the hypothesis tournament", () => {
+    const digest = buildBoardDigest({
+      agentId: "sa_eng",
+      agentLabel: "coder",
+      role: "engineer",
+      since: 100,
+      agents: [{ id: "sa_eng", label: "coder", role: "engineer", status: "idle" }],
+      posts: [
+        {
+          id: "p1",
+          authorLabel: "researcher",
+          authorRole: "researcher",
+          channel: "findings",
+          kind: "finding",
+          bodyMd: "Long literature review nobody coding should re-read",
+          mentions: [],
+          createdAt: 150,
+        },
+      ],
+      tasks: [
+        { id: "st_b", title: "Implement cache", status: "pending", ownerAgentId: null, kind: "build" },
+        { id: "st_r", title: "Survey papers", status: "pending", ownerAgentId: null, kind: "research" },
+      ],
+      hypotheses: [{ id: "h1", title: "Disaggregated prefill", elo: 1400, critiques: 3, status: "proposed" }],
+    });
+    expect(digest).toContain("Implement cache");
+    expect(digest).not.toContain("Survey papers");
+    expect(digest).not.toContain("Hypothesis leaderboard");
+    expect(digest).not.toContain("Long literature review");
+  });
 });
 
 describe("swarm scheduler", () => {
