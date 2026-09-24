@@ -129,6 +129,9 @@ export default function RoomChatPane() {
     fileLocks,
     lastBlocked,
     agentError,
+    hasMoreHistory,
+    loadingOlderHistory,
+    loadOlderHistory,
   } = ctx;
 
   const canDecideApproval = (agentId: string) => {
@@ -244,6 +247,9 @@ export default function RoomChatPane() {
         revertChanges({ messageId, agentId });
       }}
       {...approvalChatProps}
+      hasMoreHistory={hasMoreHistory}
+      loadingOlderHistory={loadingOlderHistory}
+      loadOlderHistory={loadOlderHistory}
       visibleIds={visibleIds}
       onVisibleIdsChange={setVisibleIds}
       canIntegrate={canManage && Boolean(roomInfo?.repoUrl)}
@@ -275,6 +281,9 @@ export default function RoomChatPane() {
       }}
       {...approvalChatProps}
       statusByAgent={statusByAgent}
+      hasMoreHistory={hasMoreHistory}
+      loadingOlderHistory={loadingOlderHistory}
+      loadOlderHistory={loadOlderHistory}
     />
   );
 

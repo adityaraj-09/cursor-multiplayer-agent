@@ -78,6 +78,9 @@ export default function AgentSplitGrid({
   onDecideApproval,
   onAbort,
   stopping,
+  hasMoreHistory,
+  loadingOlderHistory,
+  loadOlderHistory,
 }: {
   agents: AgentInfo[];
   messages: ChatMessage[];
@@ -116,6 +119,9 @@ export default function AgentSplitGrid({
   ) => void;
   onAbort?: (agentId: string) => void;
   stopping?: boolean;
+  hasMoreHistory?: boolean;
+  loadingOlderHistory?: boolean;
+  loadOlderHistory?: () => void;
 }) {
   const liveAgents = useMemo(
     () => agents.filter((a) => a.status !== "stopped"),
@@ -250,6 +256,9 @@ export default function AgentSplitGrid({
                 canDecideApproval={canDecideApproval}
                 onDecideApproval={onDecideApproval}
                 statusByAgent={statusByAgent}
+                hasMoreHistory={hasMoreHistory}
+                loadingOlderHistory={loadingOlderHistory}
+                loadOlderHistory={loadOlderHistory}
               />
               <div className="shrink-0 border-t border-[#2b2b2b] bg-[#171717] overflow-visible">
                 <SteerInput

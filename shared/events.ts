@@ -332,10 +332,35 @@ export interface TypingUser {
   agentId: string;
 }
 
+export interface ChatHistoryPage {
+  messages: ChatMessage[];
+  hasMore: boolean;
+}
+
+export interface RoomJoinSnapshot {
+  messages: ChatMessage[];
+  hasMoreHistory: boolean;
+  agents: AgentInfo[];
+  conflicts: AgentConflict[];
+  fileLocks: FileLease[];
+  pendingApprovals: ApprovalRequestInfo[];
+  openPings: PingInfo[];
+  roomContext: RoomContextSnapshot;
+  cloudMeta: CloudMeta | null;
+  members: RoomMemberInfo[];
+}
+
 export interface ServerToClientEvents {
   "chat-history": (messages: ChatMessage[]) => void;
+  "chat-history-page": (page: ChatHistoryPage) => void;
+  "room-snapshot": (snapshot: RoomJoinSnapshot) => void;
   "chat-message": (message: ChatMessage) => void;
-  "chat-delta": (id: string, content: string, status?: ChatStatus) => void;
+  "chat-delta": (
+    id: string,
+    content: string,
+    status?: ChatStatus,
+    meta?: { append?: boolean },
+  ) => void;
   /** @deprecated Prefer agents snapshot + agent-status(agentId, …). Kept for single-agent rooms. */
   "agent-status": (
     statusOrAgentId: AgentRunStatus | string,
@@ -468,6 +493,10 @@ export interface ClientToServerEvents {
   "dismiss-review": (pingId: string) => void;
   "leave-room": () => void;
   "remove-member": (userId: string) => void;
+  /** Older chat messages before the given cursor (join only sent a page). */
+  "load-chat-history": (cursor: { beforeTs: number; beforeId: string }) => void;
+  /** Ask the server for the latest stored diff (skipped on join). */
+  "request-diff": (agentId?: string) => void;
 }
 
 /** Worker ↔ Server events (Socket.IO /worker namespace) */

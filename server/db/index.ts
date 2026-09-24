@@ -55,6 +55,7 @@ export const updateMessageReverted = backend.updateMessageReverted;
 export const updateMessagePlanStatus = backend.updateMessagePlanStatus;
 export const getMessage = backend.getMessage;
 export const getMessages = backend.getMessages;
+export const getMessagesPage = backend.getMessagesPage;
 export const deleteRoom = backend.deleteRoom;
 export const getSetting = backend.getSetting;
 export const setSetting = backend.setSetting;

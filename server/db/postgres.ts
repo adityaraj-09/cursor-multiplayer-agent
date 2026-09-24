@@ -1094,12 +1094,32 @@ export function updateMessageReverted(id: string, reverted = true): void {
 }
 
 export function getMessages(roomId: string, limit = 500): ChatMessage[] {
-  // Newest-first so LIMIT keeps recent history; reverse for chronological UI.
-  const rows = syncQuery<Record<string, unknown>>(
-    `SELECT * FROM messages WHERE room_id = $1 ORDER BY ts DESC, id DESC LIMIT $2`,
-    [roomId, limit],
-  );
-  return rows.map(rowToMessage).reverse();
+  return getMessagesPage(roomId, { limit }).messages;
+}
+
+export function getMessagesPage(
+  roomId: string,
+  opts: { limit: number; beforeTs?: number; beforeId?: string } = { limit: 80 },
+): { messages: ChatMessage[]; hasMore: boolean } {
+  const limit = Math.max(1, Math.min(200, Math.floor(opts.limit) || 80));
+  const fetch = limit + 1;
+  const beforeTs = opts.beforeTs;
+  const beforeId = opts.beforeId?.trim() || "";
+  const rows =
+    beforeTs != null && beforeId
+      ? syncQuery<Record<string, unknown>>(
+          `SELECT * FROM messages WHERE room_id = $1
+             AND (ts < $2 OR (ts = $2 AND id < $3))
+           ORDER BY ts DESC, id DESC LIMIT $4`,
+          [roomId, beforeTs, beforeId, fetch],
+        )
+      : syncQuery<Record<string, unknown>>(
+          `SELECT * FROM messages WHERE room_id = $1 ORDER BY ts DESC, id DESC LIMIT $2`,
+          [roomId, fetch],
+        );
+  const hasMore = rows.length > limit;
+  const page = hasMore ? rows.slice(0, limit) : rows;
+  return { messages: page.map(rowToMessage).reverse(), hasMore };
 }
 
 export function deleteRoom(id: string): void {

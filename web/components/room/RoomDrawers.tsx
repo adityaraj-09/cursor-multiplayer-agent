@@ -88,6 +88,7 @@ export default function RoomDrawers() {
     handleExport,
     handleStopSession,
     handleAddAgent,
+    requestDiff,
   } = useRoomContext();
 
   const featureAgentCount = agents.filter(isFeatureAgent).length;
@@ -132,6 +133,7 @@ export default function RoomDrawers() {
           integrationBranch={roomInfo?.integrationBranch}
           integrationPrUrl={roomInfo?.integrationPrUrl}
           agentId={selectedAgentId}
+          onRequestDiff={requestDiff}
           mobile
           onClose={() => setChangesOpen(false)}
         />

@@ -2,6 +2,7 @@ import { Server, Socket } from "socket.io";
 import { nanoid } from "nanoid";
 import { resolve } from "path";
 import { existsSync } from "fs";
+import { createAssistantStreamSink } from "./streamFlush.js";
 import { AgentRunner } from "./agentRunner.js";
 import {
   SdkAgentSession,
@@ -1701,6 +1702,31 @@ export class RoomManager {
     this.broadcastConflicts(room);
   }
 
+  private assistantStreamSink(
+    room: RoomState,
+    getId: () => string | null,
+  ): ReturnType<typeof createAssistantStreamSink> {
+    return createAssistantStreamSink({
+      persist: (content, status) => {
+        const id = getId();
+        if (id) db.updateMessageContent(id, content, status);
+      },
+      emit: (content, status, append, chunk) => {
+        const id = getId();
+        if (!id) return;
+        this.io
+          .to(room.id)
+          .emit(
+            "chat-delta",
+            id,
+            append ? chunk : content,
+            status,
+            append ? { append: true } : undefined,
+          );
+      },
+    });
+  }
+
   private emitAgentDiff(room: RoomState, agent: AgentState): void {
     const parts: string[] = [];
     for (const patch of agent.filePatches.values()) {
@@ -1847,41 +1873,49 @@ export class RoomManager {
       room.driverSocketId = socket.id;
     }
 
-    socket.emit("chat-history", db.getMessages(roomId, 500));
-
-    // Emit agents snapshot and conflicts
+    const history = db.getMessagesPage(roomId, { limit: 80 });
     const agentInfos: AgentInfo[] = [];
     for (const a of room.agents.values()) {
       agentInfos.push(this.toAgentInfo(a.row));
-
-      if (a.diffWatcher) {
-        const lastPatch = a.diffWatcher.getLastPatch();
-        if (lastPatch) socket.emit("diff-update", lastPatch, a.row.id);
-      }
     }
-    socket.emit("agents", agentInfos);
-
     const conflictData = [...room.agents.values()].map((a) => ({
       id: a.row.id,
       status: a.row.status,
       scopePath: a.row.scope_path,
       touchedPaths: a.touchedPaths,
     }));
-    socket.emit("agent-conflicts", detectAgentConflicts(conflictData));
-    socket.emit("file-locks", this.fileLocks.list(roomId));
-    socket.emit(
-      "tool-approvals",
-      db.listPendingApprovals(roomId).map((r) => this.approvalRowToInfo(r)),
-    );
-    socket.emit(
-      "room-pings",
-      db.listOpenRoomPings(roomId).map((r) => this.pingRowToInfo(r)),
-    );
-    socket.emit("room-context", this.getRoomContextSnapshot(roomId));
+    const conflicts = detectAgentConflicts(conflictData);
+    const pendingApprovals = db
+      .listPendingApprovals(roomId)
+      .map((r) => this.approvalRowToInfo(r));
+    const openPings = db
+      .listOpenRoomPings(roomId)
+      .map((r) => this.pingRowToInfo(r));
+    const roomContext = this.getRoomContextSnapshot(roomId);
+    const members = this.listMembers(roomId);
+    const fileLocks = this.fileLocks.list(roomId);
+    const cloudMeta = room.row.runtime === "cloud" ? room.cloudMeta : null;
 
-    if (room.row.runtime === "cloud") {
-      socket.emit("cloud-meta", room.cloudMeta);
-    }
+    socket.emit("room-snapshot", {
+      messages: history.messages,
+      hasMoreHistory: history.hasMore,
+      agents: agentInfos,
+      conflicts,
+      fileLocks,
+      pendingApprovals,
+      openPings,
+      roomContext,
+      cloudMeta,
+      members,
+    });
+    socket.emit("chat-history", history.messages);
+    socket.emit("agents", agentInfos);
+    socket.emit("agent-conflicts", conflicts);
+    socket.emit("file-locks", fileLocks);
+    socket.emit("tool-approvals", pendingApprovals);
+    socket.emit("room-pings", openPings);
+    socket.emit("room-context", roomContext);
+    if (cloudMeta) socket.emit("cloud-meta", cloudMeta);
 
     // Emit per-agent status
     for (const [agentId, agent] of room.agents) {
@@ -1902,10 +1936,53 @@ export class RoomManager {
 
     this.broadcastPresence(room);
     this.broadcastMembers(roomId);
-    socket.emit("members-updated", this.listMembers(roomId));
+    socket.emit("members-updated", members);
     db.updateRoomActivity(roomId);
     log("room", "joined", { name, roomId, socketId: socket.id });
     return true;
+  }
+
+  handleLoadChatHistory(
+    socket: Socket,
+    cursor: { beforeTs?: number; beforeId?: string },
+  ): void {
+    const roomId = this.socketRooms.get(socket.id);
+    if (!roomId) return;
+    const beforeTs = Number(cursor?.beforeTs);
+    const beforeId = String(cursor?.beforeId || "").trim();
+    if (!Number.isFinite(beforeTs) || !beforeId) return;
+    const page = db.getMessagesPage(roomId, {
+      limit: 80,
+      beforeTs,
+      beforeId,
+    });
+    socket.emit("chat-history-page", page);
+  }
+
+  handleRequestDiff(socket: Socket, agentId?: string): void {
+    const roomId = this.socketRooms.get(socket.id);
+    const room = roomId ? this.rooms.get(roomId) : undefined;
+    if (!room) return;
+    const send = (agent: AgentState) => {
+      const fromWatcher = agent.diffWatcher?.getLastPatch()?.trim() || "";
+      if (fromWatcher) {
+        socket.emit("diff-update", fromWatcher, agent.row.id);
+        return;
+      }
+      const parts: string[] = [];
+      for (const patch of agent.filePatches.values()) {
+        if (patch) parts.push(patch);
+      }
+      const combined = parts.join("\n");
+      if (combined) socket.emit("diff-update", combined, agent.row.id);
+    };
+    const wanted = String(agentId || "").trim();
+    if (wanted) {
+      const agent = room.agents.get(wanted);
+      if (agent) send(agent);
+      return;
+    }
+    for (const agent of room.agents.values()) send(agent);
   }
 
   // -----------------------------------------------------------------------
@@ -2576,6 +2653,7 @@ export class RoomManager {
     let bubbleBaseLen = 0;
     let afterTools = false;
     let finished = false;
+    const assistantSink = this.assistantStreamSink(room, () => assistantId);
     agent.toolMsgIds.clear();
     agent.toolPaths.clear();
     agent.lastToolMsgId = null;
@@ -2621,10 +2699,7 @@ export class RoomManager {
 
     const closeAssistant = (status: ChatMessage["status"] = "done") => {
       if (!assistantId) return;
-      db.updateMessageContent(assistantId, assistantContent, status);
-      this.io
-        .to(room.id)
-        .emit("chat-delta", assistantId, assistantContent, status);
+      assistantSink.update(assistantContent, status);
       this.markAssistantPlan(room, agent, assistantId, assistantContent, status);
       assistantId = null;
       assistantContent = "";
@@ -2689,10 +2764,7 @@ export class RoomManager {
         display = assistantContent;
       }
       assistantContent = display || assistantContent;
-      db.updateMessageContent(assistantId, assistantContent, status);
-      this.io
-        .to(room.id)
-        .emit("chat-delta", assistantId, assistantContent, status);
+      assistantSink.update(assistantContent, status);
     };
 
     const unsubEvent = this.workerRelay.onAgentEvent(
@@ -3018,6 +3090,7 @@ export class RoomManager {
     let seenFullText = "";
     let bubbleBaseLen = 0;
     let afterTools = false;
+    const assistantSink = this.assistantStreamSink(room, () => assistantId);
     agent.toolMsgIds.clear();
     agent.toolPaths.clear();
     agent.lastToolMsgId = null;
@@ -3067,10 +3140,7 @@ export class RoomManager {
 
     const closeAssistant = (status: ChatMessage["status"] = "done") => {
       if (!assistantId) return;
-      db.updateMessageContent(assistantId, assistantContent, status);
-      this.io
-        .to(room.id)
-        .emit("chat-delta", assistantId, assistantContent, status);
+      assistantSink.update(assistantContent, status);
       this.markAssistantPlan(room, agent, assistantId, assistantContent, status);
       assistantId = null;
       assistantContent = "";
@@ -3142,10 +3212,7 @@ export class RoomManager {
       }
 
       assistantContent = display || assistantContent;
-      db.updateMessageContent(assistantId, assistantContent, status);
-      this.io
-        .to(room.id)
-        .emit("chat-delta", assistantId, assistantContent, status);
+      assistantSink.update(assistantContent, status);
     };
 
     try {

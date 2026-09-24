@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Cloud, GitBranch, GitCompare, X } from "lucide-react";
 import DiffViewer from "./DiffViewer";
 import type { AppSocket } from "../lib/socket";
@@ -27,6 +27,7 @@ interface SidePanelProps {
   mobile?: boolean;
   onClose?: () => void;
   agentId?: string | null;
+  onRequestDiff?: (agentId?: string) => void;
 }
 
 export default function SidePanel({
@@ -40,8 +41,10 @@ export default function SidePanel({
   mobile = false,
   onClose,
   agentId = null,
+  onRequestDiff,
 }: SidePanelProps) {
   const [collapsed, setCollapsed] = useState(true);
+  const requestedKey = useRef("");
 
   useEffect(() => {
     const stored = readStoredCollapsed();
@@ -151,6 +154,14 @@ export default function SidePanel({
   );
 
   const showContent = mobile || !collapsed;
+
+  useEffect(() => {
+    if (!showContent || !onRequestDiff) return;
+    const key = `${agentId ?? ""}`;
+    if (requestedKey.current === key) return;
+    requestedKey.current = key;
+    onRequestDiff(agentId || undefined);
+  }, [showContent, onRequestDiff, agentId]);
 
   const content = showContent && (
     <div className="flex-1 min-h-0 overflow-hidden relative">

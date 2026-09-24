@@ -101,6 +101,41 @@ try {
   }
 }
 
+const AUTH_CACHE_TTL_MS = 8_000;
+const AUTH_CACHE_MAX = 400;
+
+type AuthCacheEntry = { user: AuthUser | null; exp: number };
+const authTokenCache = new Map<string, AuthCacheEntry>();
+
+function authCacheKey(token: string): string {
+  return createHash("sha256").update(token).digest("hex");
+}
+
+function readAuthCache(token: string): AuthUser | null | undefined {
+  const hit = authTokenCache.get(authCacheKey(token));
+  if (!hit) return undefined;
+  if (hit.exp <= Date.now()) {
+    authTokenCache.delete(authCacheKey(token));
+    return undefined;
+  }
+  return hit.user;
+}
+
+function writeAuthCache(token: string, user: AuthUser | null): void {
+  if (authTokenCache.size >= AUTH_CACHE_MAX) {
+    const first = authTokenCache.keys().next().value;
+    if (first) authTokenCache.delete(first);
+  }
+  authTokenCache.set(authCacheKey(token), {
+    user,
+    exp: Date.now() + AUTH_CACHE_TTL_MS,
+  });
+}
+
+export function resetAuthTokenCache(): void {
+  authTokenCache.clear();
+}
+
 function resolveSessionUser(token: string): AuthUser | null {
   const session =
     db.getSession(hashSessionToken(token)) || db.getSession(token);
@@ -119,9 +154,14 @@ export async function resolveAuthToken(
 ): Promise<AuthUser | null> {
   if (!token?.trim()) return null;
   const t = token.trim();
+  const cached = readAuthCache(t);
+  if (cached !== undefined) return cached;
   try {
-    if (looksLikeJwt(t)) return await resolveClerkUser(t);
-    return resolveSessionUser(t);
+    const user = looksLikeJwt(t)
+      ? await resolveClerkUser(t)
+      : resolveSessionUser(t);
+    writeAuthCache(t, user);
+    return user;
   } catch (err) {
     console.warn("[auth] token resolve failed:", err);
     return null;

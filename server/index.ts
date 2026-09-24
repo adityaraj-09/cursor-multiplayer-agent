@@ -111,9 +111,17 @@ app.use(
     ],
   }),
 );
-app.use(express.json({ limit: "12mb" }));
+const jsonSmall = express.json({ limit: "256kb" });
+const jsonLarge = express.json({ limit: "12mb" });
+app.use((req, res, next) => {
+  const path = req.path || "";
+  const large =
+    req.method === "POST" &&
+    (path.endsWith("/uploads") || path.endsWith("/attachments"));
+  return (large ? jsonLarge : jsonSmall)(req, res, next);
+});
 app.use(express.urlencoded({ extended: true }));
-app.use(express.text({ type: ["text/plain"], limit: "1mb" }));
+app.use(express.text({ type: ["text/plain"], limit: "64kb" }));
 
 // Swarm board MCP — called by Cursor's backend with a per-agent swarm token,
 // so it sits before user auth (those tokens are not user sessions).
@@ -1572,6 +1580,12 @@ io.on("connection", (socket) => {
   socket.on("leave-room", () => roomManager.handleLeaveRoom(socket));
   socket.on("remove-member", (targetUserId) =>
     roomManager.handleRemoveMember(socket, targetUserId),
+  );
+  socket.on("load-chat-history", (cursor) =>
+    roomManager.handleLoadChatHistory(socket, cursor || {}),
+  );
+  socket.on("request-diff", (agentId) =>
+    roomManager.handleRequestDiff(socket, agentId),
   );
   socket.on("disconnect", () => roomManager.leaveRoom(socket));
 });

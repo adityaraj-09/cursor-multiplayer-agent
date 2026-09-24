@@ -59,6 +59,10 @@ export type RoomContextValue = {
   pendingRequest: { socketId: string; name: string; agentId?: string } | null;
   pendingOutgoingDrive: { agentId?: string } | null;
   lastDiff: string;
+  hasMoreHistory: boolean;
+  loadingOlderHistory: boolean;
+  loadOlderHistory: () => void;
+  requestDiff: (agentId?: string) => void;
   cloudMeta: CloudMeta | null;
   sendSteer: (text: string, agentId?: string, attachmentIds?: string[]) => void;
   revertChanges: (opts?: {

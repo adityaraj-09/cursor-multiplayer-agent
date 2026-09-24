@@ -9,15 +9,21 @@ import type {
   AgentInfo,
   AgentRunStatus,
   ApprovalRequestInfo,
+  ChatHistoryPage,
   ChatMessage,
   CloudMeta,
   FileLease,
   Participant,
 
   PingInfo,
+  RoomJoinSnapshot,
   RoomMemberInfo,
   TypingUser,
 } from "../../shared/events";
+import {
+  applyChatDelta,
+  resetStreamContents,
+} from "../lib/streamContents";
 import type {
   AgentContextReceiptInfo,
   MemoryEntryInfo,
@@ -57,6 +63,10 @@ interface UseSocketReturn {
   /** Local user is waiting for drive approval. */
   pendingOutgoingDrive: { agentId?: string } | null;
   lastDiff: string;
+  hasMoreHistory: boolean;
+  loadingOlderHistory: boolean;
+  loadOlderHistory: () => void;
+  requestDiff: (agentId?: string) => void;
   cloudMeta: CloudMeta | null;
   modelId: string | null;
   sendSteer: (text: string, agentId?: string, attachmentIds?: string[]) => void;
@@ -158,6 +168,9 @@ export function useSocket(
   } | null>(null);
   const [members, setMembers] = useState<RoomMemberInfo[]>([]);
   const [lastDiff, setLastDiff] = useState("");
+  const [hasMoreHistory, setHasMoreHistory] = useState(false);
+  const [loadingOlderHistory, setLoadingOlderHistory] = useState(false);
+  const messagesRef = useRef<ChatMessage[]>([]);
   const [cloudMeta, setCloudMeta] = useState<CloudMeta | null>(null);
   const [modelId, setModelId] = useState<string | null>(null);
   const [typingByAgent, setTypingByAgent] = useState<
@@ -215,39 +228,81 @@ export function useSocket(
         return changed ? next : prev;
       });
     };
+    const commitMessages = (next: ChatMessage[]) => {
+      messagesRef.current = next;
+      setMessages(next);
+    };
+    const onRoomSnapshot = (snap: RoomJoinSnapshot) => {
+      if (!snap) return;
+      gotHistory = true;
+      commitMessages(Array.isArray(snap.messages) ? snap.messages : []);
+      setHasMoreHistory(Boolean(snap.hasMoreHistory));
+      setAgents(Array.isArray(snap.agents) ? snap.agents : []);
+      setConflicts(Array.isArray(snap.conflicts) ? snap.conflicts : []);
+      setFileLocks(Array.isArray(snap.fileLocks) ? snap.fileLocks : []);
+      setPendingApprovals(
+        Array.isArray(snap.pendingApprovals) ? snap.pendingApprovals : [],
+      );
+      setOpenPings(Array.isArray(snap.openPings) ? snap.openPings : []);
+      if (snap.roomContext) setRoomContext(snap.roomContext);
+      if (snap.cloudMeta) setCloudMeta(snap.cloudMeta);
+      if (Array.isArray(snap.members)) setMembers(snap.members);
+    };
     const onChatHistory = (history: ChatMessage[]) => {
       if (gotHistory && history.length === 0) return;
       gotHistory = true;
-      setMessages(history);
+      commitMessages(history);
+    };
+    const onChatHistoryPage = (page: ChatHistoryPage) => {
+      setLoadingOlderHistory(false);
+      const incoming = Array.isArray(page?.messages) ? page.messages : [];
+      setHasMoreHistory(Boolean(page?.hasMore));
+      if (incoming.length === 0) return;
+      const seen = new Set(messagesRef.current.map((m) => m.id));
+      const older = incoming.filter((m) => !seen.has(m.id));
+      if (older.length === 0) return;
+      commitMessages([...older, ...messagesRef.current]);
     };
     const onChatMessage = (msg: ChatMessage) => {
       setMessages((prev) => {
         const idx = prev.findIndex((m) => m.id === msg.id);
+        let next: ChatMessage[];
         if (idx >= 0) {
-          const next = [...prev];
+          next = [...prev];
           // Omit undefined fields so a later file-diff update doesn't wipe
           // structured todos (or vice versa) that were already on the message.
           const patch = Object.fromEntries(
             Object.entries(msg).filter(([, v]) => v !== undefined),
           ) as ChatMessage;
           next[idx] = { ...next[idx], ...patch };
-          return next;
+        } else {
+          next = [...prev, msg];
         }
-        return [...prev, msg];
+        messagesRef.current = next;
+        return next;
       });
     };
     const onChatDelta = (
       id: string,
       content: string,
       status?: ChatMessage["status"],
+      meta?: { append?: boolean },
     ) => {
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === id
-            ? { ...m, content, status: status ?? "streaming" }
-            : m,
-        ),
-      );
+      const live = applyChatDelta(id, content, status, meta?.append);
+      const prev = messagesRef.current;
+      const idx = prev.findIndex((m) => m.id === id);
+      if (idx >= 0) {
+        const next = [...prev];
+        next[idx] = {
+          ...next[idx],
+          content: live.content,
+          status: live.status,
+        };
+        messagesRef.current = next;
+      }
+      if (live.status && live.status !== "streaming") {
+        setMessages(messagesRef.current);
+      }
     };
     const onAgentStatus = (
       statusOrAgentId: string,
@@ -553,7 +608,9 @@ export function useSocket(
       s.on("connect", onConnect);
       s.on("disconnect", onDisconnect);
       s.on("presence", onPresence);
+      s.on("room-snapshot", onRoomSnapshot);
       s.on("chat-history", onChatHistory);
+      s.on("chat-history-page", onChatHistoryPage);
       s.on("chat-message", onChatMessage);
       s.on("chat-delta", onChatDelta);
       s.on("agent-status", onAgentStatus);
@@ -595,7 +652,9 @@ export function useSocket(
         attached.off("connect", onConnect);
         attached.off("disconnect", onDisconnect);
         attached.off("presence", onPresence);
+        attached.off("room-snapshot", onRoomSnapshot);
         attached.off("chat-history", onChatHistory);
+        attached.off("chat-history-page", onChatHistoryPage);
         attached.off("chat-message", onChatMessage);
         attached.off("chat-delta", onChatDelta);
         attached.off("agent-status", onAgentStatus);
@@ -636,6 +695,10 @@ export function useSocket(
       setSocket(null);
       setConnected(false);
       setParticipants([]);
+      messagesRef.current = [];
+      setHasMoreHistory(false);
+      setLoadingOlderHistory(false);
+      resetStreamContents();
       setLastDiff("");
       setCloudMeta(null);
       setMySocketId(null);
@@ -665,10 +728,28 @@ export function useSocket(
 
   useEffect(() => {
     setMessages([]);
+    messagesRef.current = [];
+    setHasMoreHistory(false);
+    setLoadingOlderHistory(false);
+    resetStreamContents();
     setModelId(null);
     setPendingRequest(null);
     setTypingByAgent({});
   }, [roomId]);
+
+  const loadOlderHistory = useCallback(() => {
+    const first = messagesRef.current[0];
+    if (!first || loadingOlderHistory || !hasMoreHistory) return;
+    setLoadingOlderHistory(true);
+    socketRef.current?.emit("load-chat-history", {
+      beforeTs: first.ts,
+      beforeId: first.id,
+    });
+  }, [hasMoreHistory, loadingOlderHistory]);
+
+  const requestDiff = useCallback((agentId?: string) => {
+    socketRef.current?.emit("request-diff", agentId);
+  }, []);
 
   const sendSteer = useCallback(
     (text: string, agentId?: string, attachmentIds?: string[]) => {
@@ -800,6 +881,10 @@ export function useSocket(
     pendingRequest,
     pendingOutgoingDrive,
     lastDiff,
+    hasMoreHistory,
+    loadingOlderHistory,
+    loadOlderHistory,
+    requestDiff,
     cloudMeta,
     modelId,
     sendSteer,

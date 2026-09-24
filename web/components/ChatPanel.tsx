@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, useCallback } from "react";
 import {
   AlertTriangle,
   Bot,
@@ -42,6 +42,7 @@ import {
   toolCategoryFor,
   type ToolCategoryKey,
 } from "../lib/toolMessages";
+import { useStreamContent } from "../lib/streamContents";
 
 interface ChatPanelProps {
   messages: ChatMessage[];
@@ -66,6 +67,9 @@ interface ChatPanelProps {
     alwaysAllow?: boolean,
   ) => void;
   statusByAgent?: Record<string, AgentRunStatus>;
+  hasMoreHistory?: boolean;
+  loadingOlderHistory?: boolean;
+  loadOlderHistory?: () => void;
 }
 
 function busyOrbState(messages: ChatMessage[]): OrbState {
@@ -145,6 +149,9 @@ export default function ChatPanel({
   decidingApprovalId = null,
   canDecideApproval,
   onDecideApproval,
+  hasMoreHistory = false,
+  loadingOlderHistory = false,
+  loadOlderHistory,
 }: ChatPanelProps) {
   const scrollerRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
@@ -153,11 +160,14 @@ export default function ChatPanel({
   const pinnedOnce = useRef(false);
   const pinKey = `${roomId ?? ""}:${filterAgentId ?? ""}`;
   const lastPinKey = useRef(pinKey);
+  const firstIdRef = useRef<string | undefined>(undefined);
+  const prependAnchorRef = useRef(0);
   if (lastPinKey.current !== pinKey) {
     lastPinKey.current = pinKey;
     pinnedOnce.current = false;
     stickToBottom.current = true;
     lastMessageCount.current = 0;
+    firstIdRef.current = undefined;
   }
 
   const agentLabel = (id?: string) =>
@@ -214,6 +224,7 @@ export default function ChatPanel({
     const onScroll = () => {
       if (!pinnedOnce.current) return;
       updateStickFromScroll();
+      if (el.scrollTop < 64) loadOlderHistory?.();
     };
     // Unpin immediately on intentional upward gestures — don't wait for the
     // next scroll event after a streaming re-pin race.
@@ -240,7 +251,7 @@ export default function ChatPanel({
       el.removeEventListener("touchstart", onTouchStart);
       el.removeEventListener("touchmove", onTouchMove);
     };
-  }, [filtered.length > 0, pinKey]);
+  }, [filtered.length > 0, pinKey, loadOlderHistory]);
 
   useEffect(() => {
     const scroller = scrollerRef.current;
@@ -288,6 +299,17 @@ export default function ChatPanel({
     return () => ro.disconnect();
   }, [filtered.length > 0, pinKey]);
 
+  useLayoutEffect(() => {
+    const el = scrollerRef.current;
+    const firstId = filtered[0]?.id;
+    if (!el) return;
+    if (firstId && firstIdRef.current && firstId !== firstIdRef.current) {
+      el.scrollTop = el.scrollHeight - prependAnchorRef.current;
+    }
+    firstIdRef.current = firstId;
+    prependAnchorRef.current = el.scrollHeight - el.scrollTop;
+  }, [filtered]);
+
   if (filtered.length === 0) {
     return (
       <div className="flex-1 min-h-0 h-full overflow-hidden flex flex-col items-center justify-center px-4 sm:px-6">
@@ -334,6 +356,18 @@ export default function ChatPanel({
         className="room-chat-scroll flex-1 min-h-0 h-full overflow-y-auto overscroll-contain"
       >
         <div className="max-w-4xl mx-auto px-3 sm:px-5 py-4 sm:py-6 space-y-4">
+          {hasMoreHistory && (
+            <div className="flex justify-center">
+              <button
+                type="button"
+                onClick={() => loadOlderHistory?.()}
+                disabled={loadingOlderHistory}
+                className="h-8 px-3 rounded-lg border border-[#2b2b2b] bg-[#1a1a1a] text-[12px] text-[#a0a0a0] hover:text-[#e4e4e4] hover:bg-[#222] disabled:opacity-50"
+              >
+                {loadingOlderHistory ? "Loading earlier messages…" : "Load earlier messages"}
+              </button>
+            </div>
+          )}
           {items.map((item) => {
             if (item.type === "todos") {
               return (
@@ -763,17 +797,20 @@ function MessageBubble({
   onAnswerQuestions?: (messageId: string, answers: Record<string, string>) => void;
 }) {
   const [copied, setCopied] = useState(false);
+  const stream = useStreamContent(message.id, message.content, message.status);
+  const content = stream.content;
+  const status = stream.status ?? message.status;
 
   const handleCopy = useCallback(async () => {
-    if (!message.content) return;
+    if (!content) return;
     try {
-      await navigator.clipboard.writeText(message.content);
+      await navigator.clipboard.writeText(content);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
       // fallback for environments without clipboard API
       const el = document.createElement("textarea");
-      el.value = message.content;
+      el.value = content;
       el.style.position = "fixed";
       el.style.opacity = "0";
       document.body.appendChild(el);
@@ -783,7 +820,7 @@ function MessageBubble({
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     }
-  }, [message.content]);
+  }, [content]);
 
   if (message.role === "user") {
     return (
@@ -812,9 +849,9 @@ function MessageBubble({
               attachments={message.attachments}
             />
           )}
-          {message.content && message.content !== "(attached files)" && (
+          {content && content !== "(attached files)" && (
             <p className="text-[13px] text-[#f0f0f0] leading-relaxed whitespace-pre-wrap break-words">
-              {message.content}
+              {content}
             </p>
           )}
         </div>
@@ -849,22 +886,22 @@ function MessageBubble({
           <span className="text-[10px] text-[#4a4a4a] font-mono">
             {formatTime(message.ts)}
           </span>
-          {message.status === "streaming" && (
+          {status === "streaming" && (
             <span className="text-[10px] text-[#4d9fff]">Streaming…</span>
           )}
-          {message.status === "error" && (
+          {status === "error" && (
             <span className="inline-flex items-center gap-1 text-[10px] text-[#f07070]">
               <AlertTriangle className="h-3 w-3" strokeWidth={1.8} />
               error
             </span>
           )}
         </div>
-        {message.content ? (
+        {content ? (
           <Markdown
-            content={message.content}
+            content={content}
             roomId={roomId}
             pendingArtifacts={
-              message.status === "streaming" || Boolean(agentBusy)
+              status === "streaming" || Boolean(agentBusy)
             }
           />
         ) : (
@@ -893,7 +930,7 @@ function MessageBubble({
             onDismiss={onDismissPlan}
           />
         )}
-        {message.content && message.status !== "streaming" && message.role === "assistant" && (
+        {content && status !== "streaming" && message.role === "assistant" && (
           <div className="mt-2 flex items-center gap-1">
             <button
               type="button"

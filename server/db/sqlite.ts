@@ -728,6 +728,11 @@ const stmts = {
     SELECT * FROM messages WHERE room_id = ?
     ORDER BY ts DESC, rowid DESC LIMIT ?
   `),
+  getMessagesBefore: db.prepare(`
+    SELECT * FROM messages WHERE room_id = ?
+      AND (ts < ? OR (ts = ? AND id < ?))
+    ORDER BY ts DESC, rowid DESC LIMIT ?
+  `),
   deleteRoom: db.prepare(`DELETE FROM rooms WHERE id = ?`),
   getSetting: db.prepare(`SELECT value FROM settings WHERE key = ?`),
   setSetting: db.prepare(`
@@ -1748,7 +1753,22 @@ export function updateMessageReverted(id: string, reverted = true): void {
 }
 
 export function getMessages(roomId: string, limit = 500): ChatMessage[] {
-  const rows = stmts.getMessages.all(roomId, limit) as Array<{
+  return getMessagesPage(roomId, { limit }).messages;
+}
+
+export function getMessagesPage(
+  roomId: string,
+  opts: { limit: number; beforeTs?: number; beforeId?: string } = { limit: 80 },
+): { messages: ChatMessage[]; hasMore: boolean } {
+  const limit = Math.max(1, Math.min(200, Math.floor(opts.limit) || 80));
+  const fetch = limit + 1;
+  const beforeTs = opts.beforeTs;
+  const beforeId = opts.beforeId?.trim() || "";
+  const rows = (
+    beforeTs != null && beforeId
+      ? stmts.getMessagesBefore.all(roomId, beforeTs, beforeTs, beforeId, fetch)
+      : stmts.getMessages.all(roomId, fetch)
+  ) as Array<{
     id: string;
     room_id: string;
     role: string;
@@ -1762,8 +1782,9 @@ export function getMessages(roomId: string, limit = 500): ChatMessage[] {
     agent_id: string | null;
     sender_user_id: string | null;
   }>;
-  // Query is newest-first (LIMIT); chat UI expects chronological order.
-  return rows.map(rowToMessage).reverse();
+  const hasMore = rows.length > limit;
+  const page = hasMore ? rows.slice(0, limit) : rows;
+  return { messages: page.map(rowToMessage).reverse(), hasMore };
 }
 
 export function deleteRoom(id: string): void {
