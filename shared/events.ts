@@ -335,11 +335,13 @@ export interface TypingUser {
 export interface ChatHistoryPage {
   messages: ChatMessage[];
   hasMore: boolean;
+  agentId?: string;
 }
 
 export interface RoomJoinSnapshot {
   messages: ChatMessage[];
   hasMoreHistory: boolean;
+  hasMoreByAgent?: Record<string, boolean>;
   agents: AgentInfo[];
   conflicts: AgentConflict[];
   fileLocks: FileLease[];
@@ -494,7 +496,11 @@ export interface ClientToServerEvents {
   "leave-room": () => void;
   "remove-member": (userId: string) => void;
   /** Older chat messages before the given cursor (join only sent a page). */
-  "load-chat-history": (cursor: { beforeTs: number; beforeId: string }) => void;
+  "load-chat-history": (cursor: {
+    beforeTs?: number;
+    beforeId?: string;
+    agentId?: string;
+  }) => void;
   /** Ask the server for the latest stored diff (skipped on join). */
   "request-diff": (agentId?: string) => void;
 }

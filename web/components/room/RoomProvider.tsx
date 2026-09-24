@@ -110,6 +110,7 @@ export default function RoomProvider({
     pendingOutgoingDrive,
     lastDiff,
     hasMoreHistory,
+    hasMoreByAgent,
     loadingOlderHistory,
     loadOlderHistory,
     requestDiff,
@@ -237,6 +238,13 @@ export default function RoomProvider({
     const frame = requestAnimationFrame(() => setSelectedAgentId(next));
     return () => cancelAnimationFrame(frame);
   }, [agents, selectedAgentId, roomId]);
+
+  useEffect(() => {
+    if (!chatFilterAgentId || !agents.length) return;
+    if (agents.some((agent) => agent.id === chatFilterAgentId)) return;
+    const frame = requestAnimationFrame(() => setChatFilterAgentId(null));
+    return () => cancelAnimationFrame(frame);
+  }, [agents, chatFilterAgentId]);
 
   const selectedAgent =
     agents.find((a) => a.id === selectedAgentId) || agents[0] || null;
@@ -871,6 +879,7 @@ export default function RoomProvider({
         pendingOutgoingDrive,
         lastDiff,
         hasMoreHistory,
+        hasMoreByAgent,
         loadingOlderHistory,
         loadOlderHistory,
         requestDiff,

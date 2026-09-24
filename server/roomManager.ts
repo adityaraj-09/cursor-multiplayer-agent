@@ -1873,11 +1873,15 @@ export class RoomManager {
       room.driverSocketId = socket.id;
     }
 
-    const history = db.getMessagesPage(roomId, { limit: 80 });
     const agentInfos: AgentInfo[] = [];
     for (const a of room.agents.values()) {
       agentInfos.push(this.toAgentInfo(a.row));
     }
+    const history = db.getJoinMessages(
+      roomId,
+      agentInfos.map((agent) => agent.id),
+      80,
+    );
     const conflictData = [...room.agents.values()].map((a) => ({
       id: a.row.id,
       status: a.row.status,
@@ -1899,6 +1903,7 @@ export class RoomManager {
     socket.emit("room-snapshot", {
       messages: history.messages,
       hasMoreHistory: history.hasMore,
+      hasMoreByAgent: history.hasMoreByAgent,
       agents: agentInfos,
       conflicts,
       fileLocks,
@@ -1944,19 +1949,21 @@ export class RoomManager {
 
   handleLoadChatHistory(
     socket: Socket,
-    cursor: { beforeTs?: number; beforeId?: string },
+    cursor: { beforeTs?: number; beforeId?: string; agentId?: string },
   ): void {
     const roomId = this.socketRooms.get(socket.id);
     if (!roomId) return;
+    const agentId = String(cursor?.agentId || "").trim() || undefined;
     const beforeTs = Number(cursor?.beforeTs);
     const beforeId = String(cursor?.beforeId || "").trim();
-    if (!Number.isFinite(beforeTs) || !beforeId) return;
+    const hasCursor = Number.isFinite(beforeTs) && Boolean(beforeId);
+    if (!agentId && !hasCursor) return;
     const page = db.getMessagesPage(roomId, {
       limit: 80,
-      beforeTs,
-      beforeId,
+      agentId,
+      ...(hasCursor ? { beforeTs, beforeId } : {}),
     });
-    socket.emit("chat-history-page", page);
+    socket.emit("chat-history-page", { ...page, agentId });
   }
 
   handleRequestDiff(socket: Socket, agentId?: string): void {

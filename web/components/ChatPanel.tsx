@@ -180,6 +180,18 @@ export default function ChatPanel({
         )
       : messages;
 
+  useEffect(() => {
+    if (filtered.length > 0) return;
+    if (!hasMoreHistory || loadingOlderHistory) return;
+    loadOlderHistory?.();
+  }, [
+    filterAgentId,
+    filtered.length,
+    hasMoreHistory,
+    loadingOlderHistory,
+    loadOlderHistory,
+  ]);
+
   const approvalById = new Map<string, ApprovalRequestInfo>();
   for (const message of filtered) {
     if (message.approval) approvalById.set(message.approval.id, message.approval);
@@ -311,6 +323,20 @@ export default function ChatPanel({
   }, [filtered]);
 
   if (filtered.length === 0) {
+    if (hasMoreHistory || loadingOlderHistory) {
+      return (
+        <div className="flex-1 min-h-0 h-full overflow-hidden flex flex-col items-center justify-center px-4 sm:px-6">
+          <button
+            type="button"
+            onClick={() => loadOlderHistory?.()}
+            disabled={loadingOlderHistory}
+            className="h-8 px-3 rounded-lg border border-[#2b2b2b] bg-[#1a1a1a] text-[12px] text-[#a0a0a0] hover:text-[#e4e4e4] hover:bg-[#222] disabled:opacity-50"
+          >
+            {loadingOlderHistory ? "Loading earlier messages…" : "Load earlier messages"}
+          </button>
+        </div>
+      );
+    }
     return (
       <div className="flex-1 min-h-0 h-full overflow-hidden flex flex-col items-center justify-center px-4 sm:px-6">
         <div className="max-w-md w-full rounded-2xl border border-[#2b2b2b] bg-[#181818]/90 p-6 shadow-[0_24px_70px_rgba(0,0,0,0.25)]">

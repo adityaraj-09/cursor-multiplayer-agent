@@ -64,8 +64,9 @@ interface UseSocketReturn {
   pendingOutgoingDrive: { agentId?: string } | null;
   lastDiff: string;
   hasMoreHistory: boolean;
+  hasMoreByAgent: Record<string, boolean>;
   loadingOlderHistory: boolean;
-  loadOlderHistory: () => void;
+  loadOlderHistory: (agentId?: string) => void;
   requestDiff: (agentId?: string) => void;
   cloudMeta: CloudMeta | null;
   modelId: string | null;
@@ -169,6 +170,9 @@ export function useSocket(
   const [members, setMembers] = useState<RoomMemberInfo[]>([]);
   const [lastDiff, setLastDiff] = useState("");
   const [hasMoreHistory, setHasMoreHistory] = useState(false);
+  const [hasMoreByAgent, setHasMoreByAgent] = useState<Record<string, boolean>>(
+    {},
+  );
   const [loadingOlderHistory, setLoadingOlderHistory] = useState(false);
   const messagesRef = useRef<ChatMessage[]>([]);
   const [cloudMeta, setCloudMeta] = useState<CloudMeta | null>(null);
@@ -237,6 +241,11 @@ export function useSocket(
       gotHistory = true;
       commitMessages(Array.isArray(snap.messages) ? snap.messages : []);
       setHasMoreHistory(Boolean(snap.hasMoreHistory));
+      setHasMoreByAgent(
+        snap.hasMoreByAgent && typeof snap.hasMoreByAgent === "object"
+          ? snap.hasMoreByAgent
+          : {},
+      );
       setAgents(Array.isArray(snap.agents) ? snap.agents : []);
       setConflicts(Array.isArray(snap.conflicts) ? snap.conflicts : []);
       setFileLocks(Array.isArray(snap.fileLocks) ? snap.fileLocks : []);
@@ -256,7 +265,14 @@ export function useSocket(
     const onChatHistoryPage = (page: ChatHistoryPage) => {
       setLoadingOlderHistory(false);
       const incoming = Array.isArray(page?.messages) ? page.messages : [];
-      setHasMoreHistory(Boolean(page?.hasMore));
+      if (page?.agentId) {
+        setHasMoreByAgent((prev) => ({
+          ...prev,
+          [page.agentId!]: Boolean(page.hasMore),
+        }));
+      } else {
+        setHasMoreHistory(Boolean(page?.hasMore));
+      }
       if (incoming.length === 0) return;
       const seen = new Set(messagesRef.current.map((m) => m.id));
       const older = incoming.filter((m) => !seen.has(m.id));
@@ -697,6 +713,7 @@ export function useSocket(
       setParticipants([]);
       messagesRef.current = [];
       setHasMoreHistory(false);
+      setHasMoreByAgent({});
       setLoadingOlderHistory(false);
       resetStreamContents();
       setLastDiff("");
@@ -730,6 +747,7 @@ export function useSocket(
     setMessages([]);
     messagesRef.current = [];
     setHasMoreHistory(false);
+    setHasMoreByAgent({});
     setLoadingOlderHistory(false);
     resetStreamContents();
     setModelId(null);
@@ -737,15 +755,24 @@ export function useSocket(
     setTypingByAgent({});
   }, [roomId]);
 
-  const loadOlderHistory = useCallback(() => {
-    const first = messagesRef.current[0];
-    if (!first || loadingOlderHistory || !hasMoreHistory) return;
+  const loadOlderHistory = useCallback((agentId?: string) => {
+    if (loadingOlderHistory) return;
+    const scoped = agentId
+      ? messagesRef.current.filter((message) => message.agentId === agentId)
+      : messagesRef.current;
+    const first = scoped[0];
+    const more = agentId
+      ? (hasMoreByAgent[agentId] ?? hasMoreHistory)
+      : hasMoreHistory;
+    if (!more) return;
+    if (!agentId && !first) return;
     setLoadingOlderHistory(true);
     socketRef.current?.emit("load-chat-history", {
-      beforeTs: first.ts,
-      beforeId: first.id,
+      agentId,
+      beforeTs: first?.ts,
+      beforeId: first?.id,
     });
-  }, [hasMoreHistory, loadingOlderHistory]);
+  }, [hasMoreByAgent, hasMoreHistory, loadingOlderHistory]);
 
   const requestDiff = useCallback((agentId?: string) => {
     socketRef.current?.emit("request-diff", agentId);
@@ -882,6 +909,7 @@ export function useSocket(
     pendingOutgoingDrive,
     lastDiff,
     hasMoreHistory,
+    hasMoreByAgent,
     loadingOlderHistory,
     loadOlderHistory,
     requestDiff,

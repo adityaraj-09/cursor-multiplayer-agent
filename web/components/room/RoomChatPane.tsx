@@ -130,6 +130,7 @@ export default function RoomChatPane() {
     lastBlocked,
     agentError,
     hasMoreHistory,
+    hasMoreByAgent,
     loadingOlderHistory,
     loadOlderHistory,
   } = ctx;
@@ -248,6 +249,7 @@ export default function RoomChatPane() {
       }}
       {...approvalChatProps}
       hasMoreHistory={hasMoreHistory}
+      hasMoreByAgent={hasMoreByAgent}
       loadingOlderHistory={loadingOlderHistory}
       loadOlderHistory={loadOlderHistory}
       visibleIds={visibleIds}
@@ -281,9 +283,15 @@ export default function RoomChatPane() {
       }}
       {...approvalChatProps}
       statusByAgent={statusByAgent}
-      hasMoreHistory={hasMoreHistory}
+      hasMoreHistory={
+        chatFilterAgentId
+          ? (hasMoreByAgent[chatFilterAgentId] ?? hasMoreHistory)
+          : hasMoreHistory
+      }
       loadingOlderHistory={loadingOlderHistory}
-      loadOlderHistory={loadOlderHistory}
+      loadOlderHistory={() =>
+        loadOlderHistory(chatFilterAgentId || undefined)
+      }
     />
   );
 

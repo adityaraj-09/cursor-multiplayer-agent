@@ -1094,32 +1094,78 @@ export function updateMessageReverted(id: string, reverted = true): void {
 }
 
 export function getMessages(roomId: string, limit = 500): ChatMessage[] {
-  return getMessagesPage(roomId, { limit }).messages;
+  return getMessagesPage(roomId, { limit, maxLimit: 5000 }).messages;
 }
 
 export function getMessagesPage(
   roomId: string,
-  opts: { limit: number; beforeTs?: number; beforeId?: string } = { limit: 80 },
+  opts: {
+    limit: number;
+    beforeTs?: number;
+    beforeId?: string;
+    agentId?: string;
+    maxLimit?: number;
+  } = { limit: 80 },
 ): { messages: ChatMessage[]; hasMore: boolean } {
-  const limit = Math.max(1, Math.min(200, Math.floor(opts.limit) || 80));
+  const maxLimit = Math.max(1, Math.floor(opts.maxLimit ?? 200));
+  const limit = Math.max(1, Math.min(maxLimit, Math.floor(opts.limit) || 80));
   const fetch = limit + 1;
   const beforeTs = opts.beforeTs;
   const beforeId = opts.beforeId?.trim() || "";
+  const agentId = opts.agentId?.trim() || "";
   const rows =
-    beforeTs != null && beforeId
+    agentId && beforeTs != null && beforeId
       ? syncQuery<Record<string, unknown>>(
-          `SELECT * FROM messages WHERE room_id = $1
-             AND (ts < $2 OR (ts = $2 AND id < $3))
-           ORDER BY ts DESC, id DESC LIMIT $4`,
-          [roomId, beforeTs, beforeId, fetch],
+          `SELECT * FROM messages WHERE room_id = $1 AND agent_id = $2
+             AND (ts < $3 OR (ts = $3 AND id < $4))
+           ORDER BY ts DESC, id DESC LIMIT $5`,
+          [roomId, agentId, beforeTs, beforeId, fetch],
         )
-      : syncQuery<Record<string, unknown>>(
-          `SELECT * FROM messages WHERE room_id = $1 ORDER BY ts DESC, id DESC LIMIT $2`,
-          [roomId, fetch],
-        );
+      : agentId
+        ? syncQuery<Record<string, unknown>>(
+            `SELECT * FROM messages WHERE room_id = $1 AND agent_id = $2
+             ORDER BY ts DESC, id DESC LIMIT $3`,
+            [roomId, agentId, fetch],
+          )
+        : beforeTs != null && beforeId
+          ? syncQuery<Record<string, unknown>>(
+              `SELECT * FROM messages WHERE room_id = $1
+                 AND (ts < $2 OR (ts = $2 AND id < $3))
+               ORDER BY ts DESC, id DESC LIMIT $4`,
+              [roomId, beforeTs, beforeId, fetch],
+            )
+          : syncQuery<Record<string, unknown>>(
+              `SELECT * FROM messages WHERE room_id = $1 ORDER BY ts DESC, id DESC LIMIT $2`,
+              [roomId, fetch],
+            );
   const hasMore = rows.length > limit;
   const page = hasMore ? rows.slice(0, limit) : rows;
   return { messages: page.map(rowToMessage).reverse(), hasMore };
+}
+
+export function getJoinMessages(
+  roomId: string,
+  agentIds: string[],
+  limit = 80,
+): {
+  messages: ChatMessage[];
+  hasMore: boolean;
+  hasMoreByAgent: Record<string, boolean>;
+} {
+  const global = getMessagesPage(roomId, { limit });
+  const byId = new Map(global.messages.map((message) => [message.id, message]));
+  const hasMoreByAgent: Record<string, boolean> = {};
+  for (const agentId of agentIds) {
+    const id = String(agentId || "").trim();
+    if (!id) continue;
+    const page = getMessagesPage(roomId, { limit, agentId: id });
+    hasMoreByAgent[id] = page.hasMore;
+    for (const message of page.messages) byId.set(message.id, message);
+  }
+  const messages = [...byId.values()].sort((a, b) =>
+    a.ts === b.ts ? a.id.localeCompare(b.id) : a.ts - b.ts,
+  );
+  return { messages, hasMore: global.hasMore, hasMoreByAgent };
 }
 
 export function deleteRoom(id: string): void {
