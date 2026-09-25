@@ -180,6 +180,7 @@ export default function RoomProvider({
   const [exporting, setExporting] = useState(false);
   const [agentsOpen, setAgentsOpen] = useState(false);
   const [changesOpen, setChangesOpen] = useState(false);
+  const [artifactsOpen, setArtifactsOpen] = useState(false);
   const [memoryOpen, setMemoryOpen] = useState(false);
   const [addAgentOpen, setAddAgentOpen] = useState(false);
   const [cursorSessionError, setCursorSessionError] = useState("");
@@ -935,6 +936,8 @@ export default function RoomProvider({
         setAgentsOpen,
         changesOpen,
         setChangesOpen,
+        artifactsOpen,
+        setArtifactsOpen,
         memoryOpen,
         setMemoryOpen,
         addAgentOpen,

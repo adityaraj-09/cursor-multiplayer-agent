@@ -127,3 +127,20 @@ export function artifactFileName(relPath: string): string {
   const base = relPath.split("/").pop() || "artifact";
   return base.slice(0, 200) || "artifact";
 }
+
+/** Paths from `listArtifacts()` — accept relative, absolute, or bare names. */
+export function normalizeListedArtifactPath(raw: string): string | null {
+  const trimmed = raw.trim().replace(/\\/g, "/");
+  if (!trimmed) return null;
+  const direct = toRelativeArtifactPath(trimmed);
+  if (direct) return direct;
+  const bare = trimmed.replace(/^\/+/, "");
+  if (!bare || bare.includes("..")) return null;
+  return toRelativeArtifactPath(`${ARTIFACT_REL_PREFIX}${bare}`);
+}
+
+export interface AgentArtifactInfo {
+  path: string;
+  name: string;
+  sizeBytes: number;
+}

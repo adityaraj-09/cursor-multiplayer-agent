@@ -9,6 +9,7 @@ import {
   LayoutGrid,
   LayoutList,
   Maximize2,
+  Package,
   Settings2,
   X,
 } from "lucide-react";
@@ -82,6 +83,7 @@ export default function RoomChatPane() {
     savingModel,
     decidingApprovalId,
     setSettingsOpen,
+    setArtifactsOpen,
     setAddAgentOpen,
     cursorSessionError,
     savingCursorSession,
@@ -513,6 +515,14 @@ export default function RoomChatPane() {
                 onToggle={() => void toggleFullscreen()}
               />
             )}
+            <button
+              type="button"
+              onClick={() => setArtifactsOpen(true)}
+              className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-[#a0a0a0] hover:text-[#e4e4e4] border border-[#2b2b2b] hover:border-[#3c3c3c] bg-[#1f1f1f] transition-colors"
+              title="Artifacts"
+            >
+              <Package className="h-3.5 w-3.5" strokeWidth={1.75} />
+            </button>
             <button
               type="button"
               onClick={() => setSettingsOpen(true)}

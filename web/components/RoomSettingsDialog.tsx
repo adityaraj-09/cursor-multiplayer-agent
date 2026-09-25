@@ -10,6 +10,7 @@ import {
   Eye,
   GitCompare,
   Link2,
+  Package,
   Radio,
   Settings2,
   Share2,
@@ -66,6 +67,7 @@ export default function RoomSettingsDialog({
   onLeave,
   onOpenMemory,
   onOpenChanges,
+  onOpenArtifacts,
   onOpenMembers,
   onOpenFlag,
   onOpenAgents,
@@ -109,6 +111,7 @@ export default function RoomSettingsDialog({
   onLeave: () => void;
   onOpenMemory?: () => void;
   onOpenChanges?: () => void;
+  onOpenArtifacts?: () => void;
   onOpenMembers?: () => void;
   onOpenFlag?: () => void;
   onOpenAgents?: () => void;
@@ -312,6 +315,21 @@ export default function RoomSettingsDialog({
                   <p className="text-[12px] text-[#e4e4e4]">Memory</p>
                   <p className="text-[11px] text-[#6e6e6e]">
                     Shared notes and repo map
+                  </p>
+                </div>
+              </button>
+            )}
+            {onOpenArtifacts && (
+              <button
+                type="button"
+                onClick={onOpenArtifacts}
+                className="w-full flex items-center gap-2.5 rounded-md border border-[#2b2b2b] bg-[#141414] px-3 py-2.5 text-left hover:border-[#3c3c3c] transition-colors"
+              >
+                <Package className="h-4 w-4 text-[#a0a0a0] shrink-0" strokeWidth={1.75} />
+                <div className="min-w-0">
+                  <p className="text-[12px] text-[#e4e4e4]">Artifacts</p>
+                  <p className="text-[11px] text-[#6e6e6e]">
+                    Files the cloud agent produced
                   </p>
                 </div>
               </button>

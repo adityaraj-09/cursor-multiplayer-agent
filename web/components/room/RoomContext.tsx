@@ -124,6 +124,8 @@ export type RoomContextValue = {
   setAgentsOpen: Dispatch<SetStateAction<boolean>>;
   changesOpen: boolean;
   setChangesOpen: Dispatch<SetStateAction<boolean>>;
+  artifactsOpen: boolean;
+  setArtifactsOpen: Dispatch<SetStateAction<boolean>>;
   memoryOpen: boolean;
   setMemoryOpen: Dispatch<SetStateAction<boolean>>;
   addAgentOpen: boolean;

@@ -60,6 +60,7 @@ import {
   toAttachment,
 } from "./uploads.js";
 import {
+  contentDispositionAttachment,
   contentDispositionInline,
   safeContentType,
 } from "../shared/uploads.js";
@@ -1136,6 +1137,54 @@ app.post("/api/rooms/:id/agents/:agentId/abort", requireAuth, async (req, res) =
     });
   }
 });
+
+app.get("/api/rooms/:id/agents/:agentId/artifacts", requireAuth, async (req, res) => {
+  const id = routeParam(req.params.id);
+  const agentId = routeParam(req.params.agentId);
+  if (!roomManager.userCanAccessRoom(id, req.user!.id)) {
+    res.status(404).json({ error: "Room not found" });
+    return;
+  }
+  try {
+    const result = await roomManager.listAgentArtifacts(id, agentId);
+    res.json(result);
+  } catch (err) {
+    const status = Number((err as { status?: number })?.status) || 400;
+    res.status(status).json({
+      error: err instanceof Error ? err.message : "Failed to list artifacts",
+    });
+  }
+});
+
+app.get(
+  "/api/rooms/:id/agents/:agentId/artifacts/download",
+  requireAuth,
+  async (req, res) => {
+    const id = routeParam(req.params.id);
+    const agentId = routeParam(req.params.agentId);
+    if (!roomManager.userCanAccessRoom(id, req.user!.id)) {
+      res.status(404).json({ error: "Room not found" });
+      return;
+    }
+    const path = String(req.query.path || "");
+    try {
+      const file = await roomManager.downloadAgentArtifact(id, agentId, path);
+      res.setHeader("Content-Type", safeContentType(file.mime));
+      res.setHeader(
+        "Content-Disposition",
+        contentDispositionAttachment(file.name),
+      );
+      res.setHeader("Cache-Control", "private, max-age=120");
+      res.send(file.data);
+    } catch (err) {
+      const status = Number((err as { status?: number })?.status) || 400;
+      res.status(status).json({
+        error:
+          err instanceof Error ? err.message : "Failed to download artifact",
+      });
+    }
+  },
+);
 
 app.post("/api/rooms/:id/stop", requireAuth, (req, res) => {
   const id = routeParam(req.params.id);

@@ -16,6 +16,7 @@ import {
 } from "../server/uploads.js";
 import {
   attachmentWorkspaceRelPath,
+  contentDispositionAttachment,
   contentDispositionInline,
   isSafeAttachmentRelPath,
   safeContentType,
@@ -190,5 +191,8 @@ describe("content disposition headers", () => {
       "application/octet-stream",
     );
     expect(safeContentType("image/png")).toBe("image/png");
+    expect(contentDispositionAttachment("app.apk")).toContain(
+      'attachment; filename="app.apk"',
+    );
   });
 });

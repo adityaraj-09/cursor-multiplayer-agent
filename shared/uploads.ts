@@ -6,12 +6,20 @@ export function safeAttachmentFileName(name: string): string {
 }
 
 /** HTTP header-safe Content-Disposition. Node rejects unicode in filename=. */
-export function contentDispositionInline(name: string): string {
+function contentDisposition(kind: "inline" | "attachment", name: string): string {
   const fallback = safeAttachmentFileName(name);
   const encoded = encodeURIComponent(
     name.replace(/[\r\n\0]+/g, " ").trim() || fallback,
   );
-  return `inline; filename="${fallback}"; filename*=UTF-8''${encoded}`;
+  return `${kind}; filename="${fallback}"; filename*=UTF-8''${encoded}`;
+}
+
+export function contentDispositionInline(name: string): string {
+  return contentDisposition("inline", name);
+}
+
+export function contentDispositionAttachment(name: string): string {
+  return contentDisposition("attachment", name);
 }
 
 export function safeContentType(

@@ -2,6 +2,7 @@
 
 import AgentTabs from "../AgentTabs";
 import SidePanel from "../SidePanel";
+import ArtifactsPanel from "../ArtifactsPanel";
 import ContextPanel from "../ContextPanel";
 import RoomSettingsDialog from "../RoomSettingsDialog";
 import InvitePanel from "../InvitePanel";
@@ -61,6 +62,8 @@ export default function RoomDrawers() {
     setAgentsOpen,
     changesOpen,
     setChangesOpen,
+    artifactsOpen,
+    setArtifactsOpen,
     memoryOpen,
     setMemoryOpen,
     addAgentOpen,
@@ -120,6 +123,15 @@ export default function RoomDrawers() {
           onStopAgent={(id) => void handleStopAgent(id)}
           mobile
           onClose={() => setAgentsOpen(false)}
+        />
+      )}
+
+      {artifactsOpen && (
+        <ArtifactsPanel
+          roomId={roomId}
+          agentId={selectedAgentId}
+          agentLabel={selectedAgent?.label}
+          onClose={() => setArtifactsOpen(false)}
         />
       )}
 
@@ -201,6 +213,10 @@ export default function RoomDrawers() {
         onOpenChanges={() => {
           setSettingsOpen(false);
           setChangesOpen(true);
+        }}
+        onOpenArtifacts={() => {
+          setSettingsOpen(false);
+          setArtifactsOpen(true);
         }}
         onOpenMembers={() => {
           setSettingsOpen(false);

@@ -97,14 +97,18 @@ import {
   materializeUploadsForAgent,
   resolveUploads,
   toAttachment,
+  guessMime,
   toPromptImages,
   toWorkerAttachments,
   type PromptImage,
 } from "./uploads.js";
 import { materializeArtifactsInText } from "./agentArtifacts.js";
 import {
+  artifactFileName,
   assistantIdsNeedingArtifactHydration,
   hasArtifactRefs,
+  normalizeListedArtifactPath,
+  type AgentArtifactInfo,
 } from "../shared/agentArtifacts.js";
 import {
   APP_ORIGIN,
@@ -5261,6 +5265,77 @@ export class RoomManager {
 
   getRoomState(id: string): RoomState | undefined {
     return this.rooms.get(id);
+  }
+
+  private resolveLiveSdkAgent(
+    roomId: string,
+    agentId?: string,
+  ): { agent: AgentState; backend: SdkAgentSession } {
+    const room = this.rooms.get(roomId);
+    if (!room) {
+      throw Object.assign(new Error("Open the session to list artifacts"), {
+        status: 409,
+      });
+    }
+    const agent = agentId
+      ? room.agents.get(agentId)
+      : this.getDefaultAgent(room);
+    if (!agent) {
+      throw Object.assign(new Error("Agent not found"), { status: 404 });
+    }
+    if (!(agent.backend instanceof SdkAgentSession)) {
+      throw Object.assign(
+        new Error("Artifacts are only available for Cursor cloud agents"),
+        { status: 400 },
+      );
+    }
+    if (!agent.backend.isCloudRuntime()) {
+      throw Object.assign(
+        new Error(
+          "Cursor artifacts are cloud-only. Local agents write files into the repo instead.",
+        ),
+        { status: 400 },
+      );
+    }
+    return { agent, backend: agent.backend };
+  }
+
+  async listAgentArtifacts(
+    roomId: string,
+    agentId?: string,
+  ): Promise<{ artifacts: AgentArtifactInfo[] }> {
+    const { backend } = this.resolveLiveSdkAgent(roomId, agentId);
+    const items = await backend.listArtifacts();
+    const artifacts: AgentArtifactInfo[] = [];
+    for (const item of items) {
+      const path = normalizeListedArtifactPath(item.path);
+      if (!path) continue;
+      artifacts.push({
+        path,
+        name: artifactFileName(path),
+        sizeBytes: Number(item.sizeBytes) || 0,
+      });
+    }
+    artifacts.sort((a, b) => a.name.localeCompare(b.name));
+    return { artifacts };
+  }
+
+  async downloadAgentArtifact(
+    roomId: string,
+    agentId: string | undefined,
+    rawPath: string,
+  ): Promise<{ data: Buffer; name: string; mime: string }> {
+    const path = normalizeListedArtifactPath(rawPath);
+    if (!path) {
+      throw Object.assign(new Error("Invalid artifact path"), { status: 400 });
+    }
+    const { backend } = this.resolveLiveSdkAgent(roomId, agentId);
+    const data = await backend.downloadArtifact(path);
+    if (!data?.length) {
+      throw Object.assign(new Error("Artifact is empty"), { status: 404 });
+    }
+    const name = artifactFileName(path);
+    return { data, name, mime: guessMime(name) };
   }
 
   getRoomInfo(id: string, actorUserId?: string): RoomInfo | null {

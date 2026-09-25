@@ -7,6 +7,7 @@ import {
   hasArtifactRefs,
   rewriteArtifactSrcs,
   toRelativeArtifactPath,
+  normalizeListedArtifactPath,
   assistantIdsNeedingArtifactHydration,
 } from "../shared/agentArtifacts.js";
 import { materializeArtifactsInText } from "../server/agentArtifacts.js";
@@ -34,6 +35,18 @@ describe("agent artifact path helpers", () => {
     );
     expect(toRelativeArtifactPath("/etc/passwd")).toBeNull();
     expect(toRelativeArtifactPath("artifacts/../secret")).toBeNull();
+  });
+
+  it("normalizes listed artifact names from the SDK", () => {
+    expect(normalizeListedArtifactPath("app.apk")).toBe("artifacts/app.apk");
+    expect(normalizeListedArtifactPath("artifacts/app.apk")).toBe(
+      "artifacts/app.apk",
+    );
+    expect(
+      normalizeListedArtifactPath("/opt/cursor/artifacts/app.apk"),
+    ).toBe("artifacts/app.apk");
+    expect(normalizeListedArtifactPath("../secret")).toBeNull();
+    expect(normalizeListedArtifactPath("")).toBeNull();
   });
 
   it("extracts unique paths from HTML media tags", () => {

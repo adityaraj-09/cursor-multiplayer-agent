@@ -763,6 +763,38 @@ export async function abortRoomRun(
   }
 }
 
+export async function fetchRoomAgentArtifacts(
+  roomId: string,
+  agentId: string,
+): Promise<import("../../shared/agentArtifacts").AgentArtifactInfo[]> {
+  const res = await fetch(
+    `${API_BASE}/rooms/${encodeURIComponent(roomId)}/agents/${encodeURIComponent(agentId)}/artifacts`,
+    { headers: await authHeaders() },
+  );
+  if (!res.ok) {
+    throw new Error(await parseApiError(res, "Failed to list artifacts"));
+  }
+  const data = (await res.json()) as {
+    artifacts?: import("../../shared/agentArtifacts").AgentArtifactInfo[];
+  };
+  return Array.isArray(data.artifacts) ? data.artifacts : [];
+}
+
+export async function fetchRoomAgentArtifactBlob(
+  roomId: string,
+  agentId: string,
+  path: string,
+): Promise<Blob> {
+  const res = await fetch(
+    `${API_BASE}/rooms/${encodeURIComponent(roomId)}/agents/${encodeURIComponent(agentId)}/artifacts/download?path=${encodeURIComponent(path)}`,
+    { headers: await authHeaders() },
+  );
+  if (!res.ok) {
+    throw new Error(await parseApiError(res, "Failed to download artifact"));
+  }
+  return res.blob();
+}
+
 export async function revertRoomChanges(
   id: string,
   opts: { agentId?: string; filePaths?: string[]; messageId?: string } = {},
