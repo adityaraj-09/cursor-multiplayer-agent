@@ -1,8 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Users, X } from "lucide-react";
 import type { RoomMemberInfo } from "../../shared/events";
+import RightOverlay from "./RightOverlay";
 import {
   roomRoleLabel,
   type RoomInviteRole,
@@ -119,38 +119,16 @@ export default function MemberRoster({
   };
 
   return (
-    <div className="fixed inset-0 z-[60] flex justify-end">
-      <button
-        type="button"
-        className="absolute inset-0 bg-black/50"
-        aria-label="Close members"
-        onClick={onClose}
-      />
-      <aside className="relative w-full max-w-md h-full bg-[#171717] border-l border-[#2b2b2b] shadow-2xl flex flex-col animate-fade-up">
-        <header className="flex items-center justify-between gap-3 px-4 py-3 border-b border-[#2b2b2b]">
-          <div className="flex items-center gap-2 min-w-0">
-            <Users className="h-4 w-4 text-[#4d9fff] shrink-0" strokeWidth={1.75} />
-            <div className="min-w-0">
-              <h2 className="text-[14px] font-medium text-[#e4e4e4]">Members</h2>
-              <p className="text-[11px] text-[#6e6e6e]">
-                Roles, presence, and who’s driving
-              </p>
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="h-8 w-8 inline-flex items-center justify-center rounded-lg text-[#6e6e6e] hover:text-[#e4e4e4] hover:bg-[#252525]"
-          >
-            <X className="h-4 w-4" strokeWidth={1.75} />
-          </button>
-        </header>
+    <RightOverlay
+      title="Members"
+      subtitle="Roles, presence, and who’s driving"
+      onClose={onClose}
+    >
+      {error && (
+        <p className="px-4 pt-3 text-[12px] text-[#f07070]">{error}</p>
+      )}
 
-        {error && (
-          <p className="px-4 pt-3 text-[12px] text-[#f07070]">{error}</p>
-        )}
-
-        <ul className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
+      <ul className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-3">
           {members.map((m) => {
             const driving =
               m.drivingAgentIds
@@ -225,7 +203,6 @@ export default function MemberRoster({
             </li>
           )}
         </ul>
-      </aside>
-    </div>
+    </RightOverlay>
   );
 }

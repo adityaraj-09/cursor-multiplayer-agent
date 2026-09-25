@@ -1,15 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import {
   Archive,
-  BookOpen,
   Check,
   GitBranch,
   Pin,
   Plus,
   RefreshCw,
-  X,
 } from "lucide-react";
 import type {
   AgentContextReceiptInfo,
@@ -26,15 +24,7 @@ import {
   refreshRoomRepoMap,
   updateRoomMemory,
 } from "../lib/api";
-
-const COLLAPSED_KEY = "steer-memory-panel-collapsed";
-
-function readStoredCollapsed(): boolean {
-  if (typeof window === "undefined") return true;
-  const v = window.localStorage.getItem(COLLAPSED_KEY);
-  if (v === null) return true;
-  return v === "1";
-}
+import RightOverlay from "./RightOverlay";
 
 const KINDS: { id: MemoryKind; label: string }[] = [
   { id: "goal", label: "Goal" },
@@ -65,10 +55,8 @@ export default function ContextPanel({
   selectedAgentLabel,
   agentIdle = false,
   stale,
-  mobile = false,
   onClose,
 }: ContextPanelProps) {
-  const [collapsed, setCollapsed] = useState(true);
   const [kind, setKind] = useState<MemoryKind>("goal");
   const [title, setTitle] = useState("");
   const [content, setContent] = useState("");
@@ -77,19 +65,6 @@ export default function ContextPanel({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState("");
   const [editContent, setEditContent] = useState("");
-
-  useEffect(() => {
-    const stored = readStoredCollapsed();
-    queueMicrotask(() => setCollapsed(stored));
-  }, []);
-
-  const toggleCollapsed = () => {
-    setCollapsed((prev) => {
-      const next = !prev;
-      window.localStorage.setItem(COLLAPSED_KEY, next ? "1" : "0");
-      return next;
-    });
-  };
 
   const entries = snapshot?.entries ?? [];
   const proposed = entries.filter((e) => e.status === "proposed");
@@ -131,76 +106,7 @@ export default function ContextPanel({
       setContent("");
     });
 
-  const rail = collapsed && !mobile;
-  const showContent = mobile || !collapsed;
-
-  const header = (
-    <div
-      className={`relative flex items-center gap-2 px-3 h-11 border-b border-[#2b2b2b] bg-[#171717] shrink-0 ${
-        rail ? "border-b-0 flex-col h-auto py-3 px-2" : ""
-      }`}
-    >
-      {mobile && (
-        <div className="w-8 h-1 rounded-full bg-[#3c3c3c] absolute left-1/2 -translate-x-1/2 top-2" />
-      )}
-      {mobile ? (
-        <div className="flex items-center gap-2 min-w-0 flex-1">
-          <span className="flex h-6 w-6 items-center justify-center rounded-md bg-[#252525] text-[#a0a0a0]">
-            <BookOpen className="h-3.5 w-3.5" strokeWidth={1.75} />
-          </span>
-          <span className="text-[12px] font-medium text-[#e4e4e4] truncate">
-            Memory
-          </span>
-          <span className="text-[11px] text-[#6e6e6e] tabular-nums">
-            v{snapshot?.memoryVersion ?? 0}
-          </span>
-        </div>
-      ) : (
-        <button
-          type="button"
-          onClick={toggleCollapsed}
-          className={`flex items-center gap-2 min-w-0 flex-1 text-left hover:opacity-90 transition-opacity ${
-            rail ? "flex-col flex-none w-full justify-center gap-1.5" : ""
-          }`}
-          aria-expanded={!collapsed}
-          title={collapsed ? "Expand Memory" : "Collapse Memory"}
-        >
-          <span className="flex h-6 w-6 items-center justify-center rounded-md bg-[#252525] text-[#a0a0a0] shrink-0">
-            <BookOpen className="h-3.5 w-3.5" strokeWidth={1.75} />
-          </span>
-          <span
-            className={`text-[12px] font-medium text-[#e4e4e4] ${
-              rail ? "text-center leading-tight" : "truncate"
-            }`}
-            style={
-              rail
-                ? { writingMode: "vertical-rl", transform: "rotate(180deg)" }
-                : undefined
-            }
-          >
-            Memory
-          </span>
-          {!rail && (
-            <span className="text-[11px] text-[#6e6e6e] tabular-nums">
-              v{snapshot?.memoryVersion ?? 0}
-            </span>
-          )}
-        </button>
-      )}
-      {onClose && (
-        <button
-          type="button"
-          onClick={onClose}
-          className="inline-flex h-7 items-center gap-1.5 px-2.5 rounded-lg text-[12px] text-[#a0a0a0] hover:text-[#e4e4e4] border border-[#2b2b2b] shrink-0"
-        >
-          <X className="h-3.5 w-3.5" strokeWidth={1.75} />
-          Close
-        </button>
-      )}
-    </div>
-  );
-
-  const contentEl = showContent && (
+  const contentEl = (
     <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-3">
       {error && <p className="text-[12px] text-[#f07070]">{error}</p>}
 
@@ -505,30 +411,13 @@ export default function ContextPanel({
     </div>
   );
 
-  const body = (
-    <>
-      {header}
-      {contentEl}
-    </>
-  );
-
-  if (mobile) {
-    return (
-      <div className="fixed inset-0 z-40 flex flex-col justify-end bg-black/60">
-        <div className="h-[80vh] rounded-t-2xl border-t border-[#2b2b2b] bg-[#141414] flex flex-col overflow-hidden">
-          {body}
-        </div>
-      </div>
-    );
-  }
-
   return (
-    <aside
-      className={`hidden lg:flex flex-col border-l border-[#2b2b2b] bg-[#141414] shrink-0 ${
-        rail ? "w-12" : "w-[300px] xl:w-[340px]"
-      }`}
+    <RightOverlay
+      title="Memory"
+      subtitle={`v${snapshot?.memoryVersion ?? 0}`}
+      onClose={onClose || (() => {})}
     >
-      {body}
-    </aside>
+      {contentEl}
+    </RightOverlay>
   );
 }
