@@ -172,20 +172,20 @@ export default function ArtifactsPanel({
     }
   };
 
-  return (
-    <div className="fixed inset-0 z-40 flex bg-[#0a0a0a] text-[#e8e8e8]">
-      <aside className="flex w-[188px] shrink-0 flex-col border-r border-[#1c1c1c] bg-[#0a0a0a] sm:w-[228px]">
-        <div className="flex h-12 items-center gap-4 px-4">
+  const panel = (
+    <div className="relative z-10 flex h-full min-h-0 w-[min(100%,560px)] border-l border-[#1c1c1c] bg-[#0a0a0a] text-[#e8e8e8] lg:w-full">
+      <aside className="flex w-[148px] shrink-0 flex-col border-r border-[#1c1c1c] sm:w-[188px]">
+        <div className="flex h-11 items-center gap-2 px-3">
           <span className="text-[13px] font-medium text-[#f2f2f2]">
             Artifacts
           </span>
           {agentLabel && (
-            <span className="min-w-0 truncate text-[12px] text-[#6a6a6a]">
+            <span className="min-w-0 truncate text-[11px] text-[#6a6a6a]">
               {agentLabel}
             </span>
           )}
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
+        <div className="min-h-0 flex-1 overflow-y-auto px-1.5 pb-3">
           {error && (
             <p className="px-2 pb-2 text-[11px] leading-relaxed text-[#f07070]">
               {error}
@@ -210,14 +210,14 @@ export default function ArtifactsPanel({
                   key={item.path}
                   type="button"
                   onClick={() => setSelectedPath(item.path)}
-                  className={`flex w-full items-center gap-2 px-2.5 py-1.5 text-left ${
+                  className={`flex w-full items-center gap-2 px-2 py-1.5 text-left ${
                     active
                       ? "rounded-full bg-[#1f1f1f] text-[#f2f2f2]"
                       : "rounded-full text-[#c8c8c8] hover:bg-[#141414]"
                   }`}
                 >
                   <KindIcon name={item.name} active={active} />
-                  <span className="min-w-0 flex-1 truncate text-[12.5px] leading-5">
+                  <span className="min-w-0 flex-1 truncate text-[12px] leading-5">
                     {item.name}
                   </span>
                 </button>
@@ -227,14 +227,14 @@ export default function ArtifactsPanel({
         </div>
       </aside>
 
-      <section className="flex min-w-0 flex-1 flex-col bg-[#0a0a0a]">
-        <header className="flex h-12 shrink-0 items-center gap-2 px-3">
+      <section className="flex min-w-0 flex-1 flex-col">
+        <header className="flex h-11 shrink-0 items-center gap-2 px-2.5">
           <Menu className="h-4 w-4 shrink-0 text-[#8a8a8a]" strokeWidth={1.8} />
           <span className="min-w-0 flex-1 truncate text-[13px] text-[#f2f2f2]">
             {selected?.name || "Artifacts"}
           </span>
           {selected && (
-            <span className="hidden text-[11px] text-[#6a6a6a] sm:inline">
+            <span className="hidden text-[11px] text-[#6a6a6a] xl:inline">
               {formatBytes(selected.sizeBytes)}
             </span>
           )}
@@ -301,7 +301,7 @@ export default function ArtifactsPanel({
             />
           )}
           {!previewing && selected && kindFor(selected.name) === "file" && (
-            <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
+            <div className="flex h-full flex-col items-center justify-center gap-3 px-4 text-center">
               <span className="flex h-12 w-12 items-center justify-center rounded-xl border border-[#222] bg-[#141414] text-[#a0a0a0]">
                 <Package className="h-5 w-5" strokeWidth={1.75} />
               </span>
@@ -331,6 +331,18 @@ export default function ArtifactsPanel({
           )}
         </div>
       </section>
+    </div>
+  );
+
+  return (
+    <div className="fixed inset-0 z-40 flex justify-end bg-black/50 lg:static lg:inset-auto lg:z-auto lg:h-full lg:w-[min(52%,820px)] lg:min-w-[400px] lg:max-w-[820px] lg:shrink-0 lg:bg-transparent">
+      <button
+        type="button"
+        className="h-full min-w-0 flex-1 cursor-default lg:hidden"
+        aria-label="Close artifacts"
+        onClick={onClose}
+      />
+      {panel}
     </div>
   );
 }

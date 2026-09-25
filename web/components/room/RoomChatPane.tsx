@@ -25,6 +25,7 @@ import LockPanel from "../LockPanel";
 import ReviewPingBanner from "../ReviewPingBanner";
 import AttentionBadge from "../board/AttentionBadge";
 import FullscreenButton from "../FullscreenButton";
+import ArtifactsPanel from "../ArtifactsPanel";
 import { useFullscreen } from "../../hooks/useFullscreen";
 import {
   formatTypingIndicator,
@@ -83,6 +84,7 @@ export default function RoomChatPane() {
     savingModel,
     decidingApprovalId,
     setSettingsOpen,
+    artifactsOpen,
     setArtifactsOpen,
     setAddAgentOpen,
     cursorSessionError,
@@ -517,9 +519,14 @@ export default function RoomChatPane() {
             )}
             <button
               type="button"
-              onClick={() => setArtifactsOpen(true)}
-              className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-[#a0a0a0] hover:text-[#e4e4e4] border border-[#2b2b2b] hover:border-[#3c3c3c] bg-[#1f1f1f] transition-colors"
-              title="Artifacts"
+              onClick={() => setArtifactsOpen((open) => !open)}
+              className={`inline-flex h-8 w-8 items-center justify-center rounded-lg border transition-colors ${
+                artifactsOpen
+                  ? "border-[#26405d] bg-[#17202a] text-[#8ec5ff]"
+                  : "border-[#2b2b2b] bg-[#1f1f1f] text-[#a0a0a0] hover:text-[#e4e4e4] hover:border-[#3c3c3c]"
+              }`}
+              title={artifactsOpen ? "Close artifacts" : "Artifacts"}
+              aria-pressed={artifactsOpen}
             >
               <Package className="h-3.5 w-3.5" strokeWidth={1.75} />
             </button>
@@ -627,96 +634,108 @@ export default function RoomChatPane() {
         onForceRelease={handleForceRelease}
       />
 
-      <main className="relative z-10 flex flex-1 min-h-0 min-w-0 overflow-hidden overscroll-none">
-        {!splitActive && (
-          <AgentTabs
-            agents={agents}
-            selectedAgentId={selectedAgentId}
-            chatFilterAgentId={chatFilterAgentId}
-            onSelectAgent={(id) => {
-              setSelectedAgentId(id);
-              setChatFilterAgentId(id);
-            }}
-            onSelectAll={() => setChatFilterAgentId(null)}
-            statusByAgent={statusByAgent}
-            participants={participants}
-            models={models}
-            amHost={canManage}
-            onAddAgent={() => setAddAgentOpen(true)}
-            onStopAgent={(id) => void handleStopAgent(id)}
-          />
-        )}
-
-        <div className="flex-1 flex flex-col min-h-0 min-w-0 overflow-hidden bg-[#121212]/80">
-          {relevantPings.length > 0 && (
-            <div
-              id="review-pings"
-              className="shrink-0 border-b border-[#3a2a1c] bg-[#14110e] px-3 py-2 space-y-2 max-h-[35%] overflow-y-auto"
-            >
-              {relevantPings.map((ping) => (
-                <ReviewPingBanner
-                  key={ping.id}
-                  ping={ping}
-                  myUserId={userId}
-                  canDismiss={
-                    canManage || Boolean(userId && ping.actorUserId === userId)
-                  }
-                  onAck={() => ackReview(ping.id)}
-                  onDismiss={() => dismissReview(ping.id)}
-                />
-              ))}
-            </div>
-          )}
-          {chat}
-        </div>
-      </main>
-
-      {splitActive &&
-        (modelError || cursorSessionError || actionError || agentError) && (
-          <p className="relative z-20 shrink-0 px-3 py-2 text-[11px] text-[#f07070] border-t border-[#2b2b2b] bg-[#171717]">
-            {actionError || agentError || modelError || cursorSessionError}
-          </p>
-        )}
-      {!splitActive && (
-        <footer className="relative z-30 border-t border-[#2b2b2b]/90 bg-[#171717]/95 backdrop-blur-xl shrink-0 overflow-visible pb-[env(safe-area-inset-bottom)] shadow-[0_-20px_60px_rgba(0,0,0,0.24)]">
-          {(modelError || cursorSessionError || actionError || agentError) && (
-            <p className="px-3 pt-2 text-[11px] text-[#f07070]">
-              {actionError || agentError || modelError || cursorSessionError}
-            </p>
-          )}
-          {runtime === "local" &&
-            roomInfo?.authMode === "cli" &&
-            roomInfo.repoPath &&
-            selectedBackend !== "claude-code" && (
-              <div className="px-2 sm:px-3 pt-2">
-                <CursorSessionPicker
-                  roomId={roomId}
-                  repoPath={roomInfo.repoPath}
-                  cursorSessionId={
-                    selectedAgent?.sessionId || roomInfo.cursorSessionId
-                  }
-                  disabled={selectedStatus === "running" || savingCursorSession}
-                  canChange={canManage}
-                  onSessionChange={(id) => void handleCursorSessionChange(id)}
-                />
-                <p className="text-[10px] text-[#6e6e6e] mt-1 px-0.5">
-                  {selectedAgent?.sessionId || roomInfo.cursorSessionId
-                    ? "Next message resumes this agent’s Cursor chat."
-                    : "First message starts a new Cursor chat; reopening this Steer session resumes it."}
-                </p>
-              </div>
+      <div className="relative z-10 flex min-h-0 min-w-0 flex-1 overflow-hidden">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+          <main className="flex min-h-0 min-w-0 flex-1 overflow-hidden overscroll-none">
+            {!splitActive && (
+              <AgentTabs
+                agents={agents}
+                selectedAgentId={selectedAgentId}
+                chatFilterAgentId={chatFilterAgentId}
+                onSelectAgent={(id) => {
+                  setSelectedAgentId(id);
+                  setChatFilterAgentId(id);
+                }}
+                onSelectAll={() => setChatFilterAgentId(null)}
+                statusByAgent={statusByAgent}
+                participants={participants}
+                models={models}
+                amHost={canManage}
+                onAddAgent={() => setAddAgentOpen(true)}
+                onStopAgent={(id) => void handleStopAgent(id)}
+              />
             )}
-          {runtime === "local" &&
-            selectedBackend === "claude-code" &&
-            selectedAgent?.sessionId && (
-              <p className="px-3 pt-2 text-[10px] text-[#6e6e6e]">
-                Claude Code resumes session {selectedAgent.sessionId.slice(0, 12)}…
-                automatically on the next message.
+
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-[#121212]/80">
+              {relevantPings.length > 0 && (
+                <div
+                  id="review-pings"
+                  className="max-h-[35%] shrink-0 space-y-2 overflow-y-auto border-b border-[#3a2a1c] bg-[#14110e] px-3 py-2"
+                >
+                  {relevantPings.map((ping) => (
+                    <ReviewPingBanner
+                      key={ping.id}
+                      ping={ping}
+                      myUserId={userId}
+                      canDismiss={
+                        canManage || Boolean(userId && ping.actorUserId === userId)
+                      }
+                      onAck={() => ackReview(ping.id)}
+                      onDismiss={() => dismissReview(ping.id)}
+                    />
+                  ))}
+                </div>
+              )}
+              {chat}
+            </div>
+          </main>
+
+          {splitActive &&
+            (modelError || cursorSessionError || actionError || agentError) && (
+              <p className="relative z-20 shrink-0 border-t border-[#2b2b2b] bg-[#171717] px-3 py-2 text-[11px] text-[#f07070]">
+                {actionError || agentError || modelError || cursorSessionError}
               </p>
             )}
-          {steerComposer(false)}
-        </footer>
-      )}
+          {!splitActive && (
+            <footer className="relative z-30 shrink-0 overflow-visible border-t border-[#2b2b2b]/90 bg-[#171717]/95 pb-[env(safe-area-inset-bottom)] shadow-[0_-20px_60px_rgba(0,0,0,0.24)] backdrop-blur-xl">
+              {(modelError || cursorSessionError || actionError || agentError) && (
+                <p className="px-3 pt-2 text-[11px] text-[#f07070]">
+                  {actionError || agentError || modelError || cursorSessionError}
+                </p>
+              )}
+              {runtime === "local" &&
+                roomInfo?.authMode === "cli" &&
+                roomInfo.repoPath &&
+                selectedBackend !== "claude-code" && (
+                  <div className="px-2 pt-2 sm:px-3">
+                    <CursorSessionPicker
+                      roomId={roomId}
+                      repoPath={roomInfo.repoPath}
+                      cursorSessionId={
+                        selectedAgent?.sessionId || roomInfo.cursorSessionId
+                      }
+                      disabled={selectedStatus === "running" || savingCursorSession}
+                      canChange={canManage}
+                      onSessionChange={(id) => void handleCursorSessionChange(id)}
+                    />
+                    <p className="mt-1 px-0.5 text-[10px] text-[#6e6e6e]">
+                      {selectedAgent?.sessionId || roomInfo.cursorSessionId
+                        ? "Next message resumes this agent’s Cursor chat."
+                        : "First message starts a new Cursor chat; reopening this Steer session resumes it."}
+                    </p>
+                  </div>
+                )}
+              {runtime === "local" &&
+                selectedBackend === "claude-code" &&
+                selectedAgent?.sessionId && (
+                  <p className="px-3 pt-2 text-[10px] text-[#6e6e6e]">
+                    Claude Code resumes session {selectedAgent.sessionId.slice(0, 12)}…
+                    automatically on the next message.
+                  </p>
+                )}
+              {steerComposer(false)}
+            </footer>
+          )}
+        </div>
+        {artifactsOpen && (
+          <ArtifactsPanel
+            roomId={roomId}
+            agentId={selectedAgentId}
+            agentLabel={selectedAgent?.label}
+            onClose={() => setArtifactsOpen(false)}
+          />
+        )}
+      </div>
     </div>
   );
 }
