@@ -1,7 +1,7 @@
 import type { IssuePriority, IssueStatus } from "../../../../shared/issues";
 import type { IssueListItem } from "../../issues/IssuesGroupedList";
 
-export type DemoView = "sessions" | "issues" | "board";
+export type DemoView = "sessions" | "issues" | "swarm" | "board";
 
 export type DemoIssue = IssueListItem & {
   repo: string;

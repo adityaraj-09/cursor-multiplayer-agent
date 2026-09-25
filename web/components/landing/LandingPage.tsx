@@ -7,6 +7,7 @@ import { useAuth } from "../AuthProvider";
 import Reveal from "./Reveal";
 import HeroDashboard, { IssuesShowcase } from "./mock/HeroDashboard";
 import RoomsSection from "./sections/RoomsSection";
+import SwarmSection from "./sections/SwarmSection";
 import { CliShowcase, PickupSettingsMock, PrShowcase } from "./mock/ShipShowcase";
 import LogoStrip from "./sections/LogoStrip";
 import FeatureGrid from "./sections/FeatureGrid";
@@ -66,6 +67,9 @@ export default function LandingPage() {
             </a>
             <a href="#rooms" className="hover:text-white">
               Rooms
+            </a>
+            <a href="#swarm" className="hover:text-white">
+              Swarms
             </a>
             <a href="#ship" className="hover:text-white">
               Ship
@@ -142,6 +146,8 @@ export default function LandingPage() {
       </section>
 
       <RoomsSection />
+
+      <SwarmSection />
 
       <FeatureGrid />
 

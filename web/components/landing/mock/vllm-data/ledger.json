@@ -1,0 +1,89 @@
+{
+  "current": {
+    "swarmId": "swm_TA2nJYjHcW9H",
+    "revision": 4,
+    "factsMd": "report.md exists (sar_cxqve8Z-QQjJ, kind=report) recommending sh_lphBfIh_oTE2 composite vs vLLM*.\ndesign/prototype-composite-pd.md NOT yet in artifact store (report-synth incomplete).\nVerifier @report-verify spawned st_j1cpp9LbOePI.\nsh_lphBfIh_oTE2 still 0 critiques (finish gate risk).\n7 hypotheses critiqued except composite.",
+    "guessesMd": "Verifier may conditional-pass pending composite critique + design doc.\nalt-scout may find no beat-vLLM CPU niche.",
+    "planMd": "Phase C active: verify report → cost-critic composite critique → report-synth design artifact → re-verify if needed → declare_done.\nOptional: ingest batch-spec SwiftSpec addendum post-finish.\nNo request_phase_change until human repo (report says Phase 1 needs GPU).",
+    "openQuestionsMd": "Will declare_done require design/prototype-composite-pd.md explicitly or report-only?",
+    "progress": {
+      "isRequestSatisfied": false,
+      "isProgressBeingMade": true,
+      "isInLoop": false,
+      "nextFocus": "Verifier run + cost-critic on sh_lphBfIh_oTE2 + complete prototype design artifact.",
+      "reason": "Cycle 4: report landed; verification spawned; two blockers remain (composite critique, design doc)."
+    },
+    "updatedBy": "sa_w9B2juaMax9-",
+    "updatedAt": 1790190145903
+  },
+  "revisions": [
+    {
+      "swarmId": "swm_TA2nJYjHcW9H",
+      "revision": 4,
+      "factsMd": "report.md exists (sar_cxqve8Z-QQjJ, kind=report) recommending sh_lphBfIh_oTE2 composite vs vLLM*.\ndesign/prototype-composite-pd.md NOT yet in artifact store (report-synth incomplete).\nVerifier @report-verify spawned st_j1cpp9LbOePI.\nsh_lphBfIh_oTE2 still 0 critiques (finish gate risk).\n7 hypotheses critiqued except composite.",
+      "guessesMd": "Verifier may conditional-pass pending composite critique + design doc.\nalt-scout may find no beat-vLLM CPU niche.",
+      "planMd": "Phase C active: verify report → cost-critic composite critique → report-synth design artifact → re-verify if needed → declare_done.\nOptional: ingest batch-spec SwiftSpec addendum post-finish.\nNo request_phase_change until human repo (report says Phase 1 needs GPU).",
+      "openQuestionsMd": "Will declare_done require design/prototype-composite-pd.md explicitly or report-only?",
+      "progress": {
+        "isRequestSatisfied": false,
+        "isProgressBeingMade": true,
+        "isInLoop": false,
+        "nextFocus": "Verifier run + cost-critic on sh_lphBfIh_oTE2 + complete prototype design artifact.",
+        "reason": "Cycle 4: report landed; verification spawned; two blockers remain (composite critique, design doc)."
+      },
+      "updatedBy": "sa_w9B2juaMax9-",
+      "updatedAt": 1790190145903
+    },
+    {
+      "swarmId": "swm_TA2nJYjHcW9H",
+      "revision": 3,
+      "factsMd": "Surveys complete: kv-memory, disaggregated, batching-speculative, disagg-composition-and-baseline.\nRubric: ranking/cost-per-token-rubric.md (sar_sP-6wKBv4-tC).\n7 hypotheses; 6 with ≥1 critique; sh_lphBfIh_oTE2 promoted, pending critique.\nElo leader sh_ddcnRBuw2Qzp (1231) but critic refutes vs self-hosted vLLM* mission.\nOrchestrator decision: vLLM* baseline (sp_9SVWCozweWed).\nSynthesizer task st_jpiU5yQqxM48 spawned @report-synth.",
+      "guessesMd": "Composite heterogeneous P/D + FP8 decode + gated LMCache is the report’s likely winner for general cloud chat; FrugalGPT wins only for multi-model cascade workloads; alt CPU/serverless niche for tiny models only.",
+      "planMd": "Phase B (now): @report-synth → report.md + prototype design; @cost-critic finish sh_lphBfIh_oTE2 critique; @alt-scout optional niche scan.\nPhase C: spawn verifier on report; declare_done if pass.\nRetire @disagg-scout when idle.",
+      "openQuestionsMd": "Human pricing/reserved vs list still open; using list $/GPU-hr in rubric.\nWhether prototype warrants request_phase_change (needs human repo) — defer until report.",
+      "progress": {
+        "isRequestSatisfied": false,
+        "isProgressBeingMade": true,
+        "isInLoop": false,
+        "nextFocus": "Monitor report-synth; spawn verifier when report.md lands; ensure composite hypothesis critiqued.",
+        "reason": "Cycle 3: synthesis phase opened; promoted composite; retired idle workers; vLLM* baseline locked."
+      },
+      "updatedBy": "sa_w9B2juaMax9-",
+      "updatedAt": 1790190061893
+    },
+    {
+      "swarmId": "swm_TA2nJYjHcW9H",
+      "revision": 2,
+      "factsMd": "Mission: beat vLLM-like serving on cost/token via novel hosting.\nDelivered surveys: kv-memory-tiering (sar_F8vemRPU_Xf_), disaggregated-serving (sar_oZOwWHu7QYQF).\nHypotheses (4, all Elo 1200, 0 critiques): sh_Q5ZdrV1rxF5u FP8 KV same-GPU; sh_MbLTga-xgKid gated cluster KV pool; sh_sYDvYqohPgEc heterogeneous H100 prefill + A100 decode; sh_V2irZVB1OP99 SLO-goodput P/D vs monolithic vLLM.\nWorkers: disagg-scout + batch-spec-scout running; cost-critic + cost-ranker spawned cycle 2; kv-scout retired.\nFinish gates unchanged: report, ≥4 critiqued hypotheses, verifier pass.",
+      "guessesMd": "Best composite may be **heterogeneous P/D + FP8 decode workers + break-even external KV** for long-prefix workloads; default 512/128 unique chat may only yield ~1.3–1.5× from FP8/disagg unless SLO-goodput framing applies.\nFP8-only hypothesis may fail novelty bar but sets baseline for fair comparisons.\nBatch/spec track likely adds speculative decode on cheap decode pool as incremental $/token win.",
+      "planMd": "Phase A (now): @cost-critic critiques 4+ hypotheses; @cost-ranker rubric + tournament; @batch-spec-scout completes survey + 1–2 hypotheses.\nPhase A2: When critiques ≥4 and rubric exists, spawn synthesizer to merge top-ranked + evolved composite hypothesis; deep-dive task if gaps.\nPhase B: report.md artifact; spawn verifier.\nBacklog st_gBASxLjCMFmh when slot opens (after disagg/batch retire).",
+      "openQuestionsMd": "Human: workload mix, vLLM baseline feature set, list vs reserved pricing — still assume 512/128 mixed chat + list $/GPU-hr.\nInternal: Do we require **new** hosting topology vs vLLM best-practice config to count as mission success? Orchestrator leaning: outer topology/policy required; config-only counts as baseline not winner.",
+      "progress": {
+        "isRequestSatisfied": false,
+        "isProgressBeingMade": true,
+        "isInLoop": false,
+        "nextFocus": "Monitor critic + ranker outputs; batch-spec survey; then spawn synthesizer when leaderboard + critiques ready.",
+        "reason": "Cycle 2: 4 hypotheses and 2 surveys landed; quality loop workers spawned; novelty bar clarified on #plan."
+      },
+      "updatedBy": "sa_w9B2juaMax9-",
+      "updatedAt": 1790189893525
+    },
+    {
+      "swarmId": "swm_TA2nJYjHcW9H",
+      "revision": 1,
+      "factsMd": "Mission: find a hosting/serving method that beats vLLM-like engines on **cost per token** (not just latency).\nConstraints: no GPU in this swarm environment; workers must reason from papers, public benchmarks, and CPU-scale prototypes — label all numeric claims as estimates.\nNo repository: durable outputs go to artifacts + board findings; prototype design only until build phase approved.\nvLLM baseline stack: PagedAttention KV cache, continuous batching, CUDA kernels, optional speculative decoding plugins — cost drivers are GPU $/hr, memory bandwidth, batch utilization, and tail latency under load.\nFinish gates: report artifact, ≥4 critiqued hypotheses, verifier pass.",
+      "guessesMd": "Largest cost wins likely combine: (1) cheaper memory tier for KV (CPU/disk/compression) with acceptable latency tradeoffs; (2) disaggregated prefill vs decode to right-size hardware; (3) aggressive batching + request scheduling for utilization; (4) speculative/cascade paths that cut effective forward passes per token.\nPure software on same GPU fleet may yield <2× cost; structural changes (disaggregation, heterogeneous tiers, spot/preemptible orchestration) may reach 2–5× on specific workloads.\nCPU-only serving is unlikely to beat GPU vLLM on $/token for 7B+ at production QPS — but hybrid or small-model edge paths might for narrow SLAs.",
+      "planMd": "Phase A (cycles 1–N): parallel surveys → each researcher proposes 1–2 hypotheses with evidence URLs → critic challenges → ranker runs Elo tournament on cost-per-token potential.\nPhase B: promote top 2 hypotheses → deep dive tasks → synthesizer draft report with ranked recommendation + prototype architecture.\nPhase C: verifier checks claims/sources → orchestrator declare_done OR request_phase_change if coded prototype warranted.\nWorker team now: 3 researchers (KV/memory, disaggregation, batching+speculative) + 1 critic; add ranker when ≥3 hypotheses; add synthesizer when leaderboard stabilizes.",
+      "openQuestionsMd": "What workload mix defines 'cost per token' (chat vs batch, input/output ratio, concurrency)? Assume mixed chat API unless human specifies.\nWhich vLLM version/features as baseline (PagedAttention v1/v2, prefix caching, chunked prefill)?\nAre cloud $/GPU-hr list prices or amortized reserved capacity the cost model?\nIs beating vLLM on **identical hardware** required, or any cloud topology allowed?",
+      "progress": {
+        "isRequestSatisfied": false,
+        "isProgressBeingMade": true,
+        "isInLoop": false,
+        "nextFocus": "Spawn researchers + critic; collect first hypotheses on KV tiering, disaggregation, and batching/speculative angles within 1–2 cycles.",
+        "reason": "Cycle 1: empty ledger/board; decomposing mission and launching opening team."
+      },
+      "updatedBy": "sa_w9B2juaMax9-",
+      "updatedAt": 1790189747454
+    }
+  ]
+}

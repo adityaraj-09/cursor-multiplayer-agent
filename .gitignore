@@ -5,4 +5,5 @@ dist/
 demo-repo/
 *.db
 .next/
+vllm-better-version/
 data/uploads/

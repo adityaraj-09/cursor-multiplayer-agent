@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Archive, LayoutGrid, LayoutList } from "lucide-react";
+import { Archive, LayoutGrid, LayoutList, Users } from "lucide-react";
 import ProductChrome, { MockPageHeader } from "./ProductChrome";
 import IssuesGroupedList from "../../issues/IssuesGroupedList";
 import SessionsGroupedList, {
@@ -10,6 +10,14 @@ import SessionsGroupedList, {
 import Markdown from "../../Markdown";
 import BoardShowcase from "./BoardShowcase";
 import SessionRoomView from "./SessionRoomView";
+import {
+  BudgetMeter,
+  ModelChip,
+  StatusPill,
+  relativeTime,
+} from "../../swarm/swarmUi";
+import { DEMO_SWARM_LIST } from "./vllm-swarm-demo";
+import { isActiveSwarmStatus, isTerminalSwarmStatus, type SwarmInfo } from "../../../../shared/swarm";
 import {
   DEMO_ISSUES,
   DEMO_SESSIONS,
@@ -40,8 +48,93 @@ export default function HeroDashboard({
         <SessionsPane selected={selected} onToggle={setSelected} />
       )}
       {view === "issues" && <IssuesPane />}
+      {view === "swarm" && <SwarmListPane />}
       {view === "board" && <BoardShowcase />}
     </ProductChrome>
+  );
+}
+
+const SWARM_LIST_GROUPS: Array<{
+  key: string;
+  label: string;
+  match: (swarm: SwarmInfo) => boolean;
+}> = [
+  {
+    key: "attention",
+    label: "Needs you",
+    match: (swarm) =>
+      swarm.status === "awaiting_approval" ||
+      (swarm.status === "paused" && swarm.stopReason === "needs_input"),
+  },
+  { key: "active", label: "Running", match: (swarm) => isActiveSwarmStatus(swarm.status) },
+  { key: "finished", label: "Finished", match: (swarm) => isTerminalSwarmStatus(swarm.status) },
+];
+
+function SwarmListPane() {
+  const groups = SWARM_LIST_GROUPS.map((group) => ({
+    ...group,
+    items: DEMO_SWARM_LIST.filter(group.match),
+  })).filter((group) => group.items.length > 0);
+  const live = DEMO_SWARM_LIST.filter((swarm) => isActiveSwarmStatus(swarm.status)).length;
+  const runningAgents = DEMO_SWARM_LIST.reduce(
+    (sum, swarm) => sum + (swarm.runningAgents ?? 0),
+    0,
+  );
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="px-4 pt-5 pb-3 sm:px-5">
+        <p className="text-[11px] uppercase tracking-wide text-[#6e6e6e]">Kinetic</p>
+        <div className="mt-1 flex items-end justify-between gap-3">
+          <div>
+            <h3 className="text-[18px] font-medium tracking-tight text-[#e4e4e4]">Swarms</h3>
+            <p className="mt-1 text-[12px] text-[#6e6e6e]">
+              {DEMO_SWARM_LIST.length} swarms · {live} running · {runningAgents} agents active
+            </p>
+          </div>
+          <span className="hidden h-8 items-center rounded-md bg-[#e4e4e4] px-3 text-[12px] font-medium text-[#141414] sm:inline-flex">
+            New swarm
+          </span>
+        </div>
+      </div>
+      <div className="min-h-0 flex-1 space-y-5 overflow-auto px-4 pb-4 sm:px-5">
+        {groups.map((group) => (
+          <section key={group.key}>
+            <h4 className="mb-2 px-1 text-[11px] font-medium uppercase tracking-wide text-[#6e6e6e]">
+              {group.label} <span className="text-[#4a4a4a]">{group.items.length}</span>
+            </h4>
+            <div className="overflow-hidden rounded-lg border border-[#2b2b2b] bg-[#141414]">
+              {group.items.map((swarm) => (
+                <div
+                  key={swarm.id}
+                  className="flex flex-col gap-2 border-b border-[#1f1f1f] px-4 py-3 last:border-b-0 sm:flex-row sm:items-center sm:gap-4"
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <StatusPill status={swarm.status} />
+                      <p className="truncate text-[13px] font-medium text-[#e4e4e4]">{swarm.title}</p>
+                      <ModelChip modelId={swarm.modelId} className="shrink-0" />
+                    </div>
+                    <p className="mt-1 line-clamp-1 text-[12px] text-[#6e6e6e]">{swarm.goal}</p>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-5 text-[11px] text-[#a0a0a0]">
+                    <span className="inline-flex items-center gap-1.5 tabular-nums">
+                      <Users className="h-3.5 w-3.5 text-[#6e6e6e]" strokeWidth={1.75} />
+                      {swarm.runningAgents ?? 0}/{swarm.totalAgents ?? 0}
+                    </span>
+                    <span className="tabular-nums text-[#6e6e6e]">{swarm.cyclesDone} cycles</span>
+                    <BudgetMeter spent={swarm.spentUsd} budget={swarm.budgetUsd} compact />
+                    <span className="hidden w-16 text-right text-[#6e6e6e] sm:block">
+                      {relativeTime(swarm.updatedAt)}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+        ))}
+      </div>
+    </div>
   );
 }
 

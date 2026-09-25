@@ -1,0 +1,554 @@
+[
+  {
+    "id": "sev_mSIJTdmK3JSt",
+    "swarmId": "swm_TA2nJYjHcW9H",
+    "agentId": null,
+    "kind": "created",
+    "message": "Swarm created and started",
+    "createdAt": 1790189705633
+  },
+  {
+    "id": "sev_Pg_ebqw6Y35f",
+    "swarmId": "swm_TA2nJYjHcW9H",
+    "agentId": "sa_w9B2juaMax9-",
+    "kind": "cycle_started",
+    "message": "@orchestrator cycle 1",
+    "createdAt": 1790189705701
+  },
+  {
+    "id": "sev_F6_orkDtln--",
+    "swarmId": "swm_TA2nJYjHcW9H",
+    "agentId": "sa_RHy4SbLeCeky",
+    "kind": "agent_spawned",
+    "message": "@kv-scout (researcher)",
+    "createdAt": 1790189758664
+  },
+  {
+    "id": "sev_LICvDkVVHwXy",
+    "swarmId": "swm_TA2nJYjHcW9H",
+    "agentId": "sa_RHy4SbLeCeky",
+    "kind": "cycle_started",
+    "message": "@kv-scout cycle 1",
+    "createdAt": 1790189758737
+  },
+  {
+    "id": "sev_Bs8wEndB9yRN",
+    "swarmId": "swm_TA2nJYjHcW9H",
+    "agentId": "sa_SZgP6021FSXc",
+    "kind": "agent_spawned",
+    "message": "@disagg-scout (researcher)",
+    "createdAt": 1790189758780
+  },
+  {
+    "id": "sev_Pd89e6yMnHYQ",
+    "swarmId": "swm_TA2nJYjHcW9H",
+    "agentId": "sa_SZgP6021FSXc",
+    "kind": "cycle_started",
+    "message": "@disagg-scout cycle 1",
+    "createdAt": 1790189758834
+  },
+  {
+    "id": "sev_EdD39TonXx1d",
+    "swarmId": "swm_TA2nJYjHcW9H",
+    "agentId": "sa_PAp6L6CNIuF3",
+    "kind": "agent_spawned",
+    "message": "@batch-spec-scout (researcher)",
+    "createdAt": 1790189758887
+  },
+  {
+    "id": "sev_Qb0FbG-kbEjr",
+    "swarmId": "swm_TA2nJYjHcW9H",
+    "agentId": "sa_w9B2juaMax9-",
+    "kind": "cycle_finished",
+    "message": "@orchestrator cycle 1 · 68s · $0.21 total",
+    "createdAt": 1790189773744
+  },
+  {
+    "id": "sev_9XwboQJ7Mw-s",
+    "swarmId": "swm_TA2nJYjHcW9H",
+    "agentId": "sa_PAp6L6CNIuF3",
+    "kind": "cycle_started",
+    "message": "@batch-spec-scout cycle 1",
+    "createdAt": 1790189773813
+  },
+  {
+    "id": "sev_axduBb0RZ9W1",
+    "swarmId": "swm_TA2nJYjHcW9H",
+    "agentId": "sa_RHy4SbLeCeky",
+    "kind": "artifact_saved",
+    "message": "notes: survey/kv-memory-tiering.md",
+    "createdAt": 1790189850094
+  },
+  {
+    "id": "sev_cj9ZfHucu7xR",
+    "swarmId": "swm_TA2nJYjHcW9H",
+    "agentId": "sa_SZgP6021FSXc",
+    "kind": "artifact_saved",
+    "message": "notes: survey/disaggregated-serving.md",
+    "createdAt": 1790189861090
+  },
+  {
+    "id": "sev_mSof2QfeeixV",
+    "swarmId": "swm_TA2nJYjHcW9H",
+    "agentId": "sa_RHy4SbLeCeky",
+    "kind": "cycle_finished",
+    "message": "@kv-scout cycle 1 · 105s · $0.70 total",
+    "createdAt": 1790189863737
+  },
+  {
+    "id": "sev_4qPiC9byjGN9",
+    "swarmId": "swm_TA2nJYjHcW9H",
+    "agentId": "sa_w9B2juaMax9-",
+    "kind": "cycle_started",
+    "message": "@orchestrator cycle 2",
+    "createdAt": 1790189863794
+  },
+  {
+    "id": "sev_96zG60chkXA1",
+    "swarmId": "swm_TA2nJYjHcW9H",
+    "agentId": "sa_SZgP6021FSXc",
+    "kind": "cycle_finished",
+    "message": "@disagg-scout cycle 1 · 119s · $1.12 total",
+    "createdAt": 1790189878153
+  },
+  {
+    "id": "sev_ib-Ky8rUKw7-",
+    "swarmId": "swm_TA2nJYjHcW9H",
+    "agentId": "sa_RHy4SbLeCeky",
+    "kind": "cycle_started",
+    "message": "@kv-scout cycle 2",
+    "createdAt": 1790189882303
+  },
+  {
+    "id": "sev_UVow72raCzta",
+    "swarmId": "swm_TA2nJYjHcW9H",
+    "agentId": "sa_RHy4SbLeCeky",
+    "kind": "cycle_failed",
+    "message": "@kv-scout cycle 2 · 4s · $1.12 total",
+    "createdAt": 1790189885819
+  },
+  {
+    "id": "sev_z-kg4OrRBqa7",
+    "swarmId": "swm_TA2nJYjHcW9H",
+    "agentId": "sa_RHy4SbLeCeky",
+    "kind": "agent_retired",
+    "message": "Completed st_nL_YHydwQP9a (survey + 2 hypotheses). Idle; slot needed for critic and ranker.",
+    "createdAt": 1790189887284
+  },
+  {
+    "id": "sev_LrIQbCQ_nmIU",
+    "swarmId": "swm_TA2nJYjHcW9H",
+    "agentId": "sa_20Y-OerAQsQz",
+    "kind": "agent_spawned",
+    "message": "@cost-critic (critic)",
+    "createdAt": 1790189887401
+  },
+  {
+    "id": "sev_4bX0Yl3n2sXg",
+    "swarmId": "swm_TA2nJYjHcW9H",
+    "agentId": "sa_20Y-OerAQsQz",
+    "kind": "cycle_started",
+    "message": "@cost-critic cycle 1",
+    "createdAt": 1790189887455
+  },
+  {
+    "id": "sev_jOB6ue0jOtpf",
+    "swarmId": "swm_TA2nJYjHcW9H",
+    "agentId": "sa_7oovkK0-VP9p",
+    "kind": "agent_spawned",
+    "message": "@cost-ranker (ranker)",
+    "createdAt": 1790189887504
+  },
+  {
+    "id": "sev_TfpRHv-TQH5v",
+    "swarmId": "swm_TA2nJYjHcW9H",
+    "agentId": "sa_PAp6L6CNIuF3",
+    "kind": "artifact_saved",
+    "message": "notes: survey/batching-speculative.md",
+    "createdAt": 1790189896549
+  },
+  {
+    "id": "sev_hVOLk7k0aVgN",
+    "swarmId": "swm_TA2nJYjHcW9H",
+    "agentId": "sa_w9B2juaMax9-",
+    "kind": "cycle_finished",
+    "message": "@orchestrator cycle 2 · 39s · $1.29 total",
+    "createdAt": 1790189902831
+  },
+  {
+    "id": "sev_HyrH34GedF8h",
+    "swarmId": "swm_TA2nJYjHcW9H",
+    "agentId": "sa_7oovkK0-VP9p",
+    "kind": "cycle_started",
+    "message": "@cost-ranker cycle 1",
+    "createdAt": 1790189902884
+  },
+  {
+    "id": "sev_ALm215Q5okvL",
+    "swarmId": "swm_TA2nJYjHcW9H",
+    "agentId": "sa_PAp6L6CNIuF3",
+    "kind": "cycle_finished",
+    "message": "@batch-spec-scout cycle 1 · 139s · $1.72 total",
+    "createdAt": 1790189912869
+  },
+  {
+    "id": "sev_pwoId9RaT7J6",
+    "swarmId": "swm_TA2nJYjHcW9H",
+    "agentId": "sa_SZgP6021FSXc",
+    "kind": "cycle_started",
+    "message": "@disagg-scout cycle 2",
+    "createdAt": 1790189912924
+  },
+  {
+    "id": "sev_6IvzpWo4gxZf",
+    "swarmId": "swm_TA2nJYjHcW9H",
+    "agentId": "sa_7oovkK0-VP9p",
+    "kind": "artifact_saved",
+    "message": "design: ranking/cost-per-token-rubric.md",
+    "createdAt": 1790189945167
+  },
+  {
+    "id": "sev_b7A1k-BQj9n5",
+    "swarmId": "swm_TA2nJYjHcW9H",
+    "agentId": "sa_SZgP6021FSXc",
+    "kind": "artifact_saved",
+    "message": "notes: survey/disagg-composition-and-baseline.md",
+    "createdAt": 1790189971401
+  },
+  {
+    "id": "sev_0jhhy2goOdNd",
+    "swarmId": "swm_TA2nJYjHcW9H",
+    "agentId": "sa_7oovkK0-VP9p",
+    "kind": "cycle_finished",
+    "message": "@cost-ranker cycle 1 · 71s · $2.06 total",
+    "createdAt": 1790189973796
+  },
+  {
+    "id": "sev_XHSEk9FMe7jo",
+    "swarmId": "swm_TA2nJYjHcW9H",
+    "agentId": "sa_w9B2juaMax9-",
+    "kind": "cycle_started",
+    "message": "@orchestrator cycle 3",
+    "createdAt": 1790189973852
+  },
+  {
+    "id": "sev_etbSBkCPji-p",
+    "swarmId": "swm_TA2nJYjHcW9H",
+    "agentId": "sa_SZgP6021FSXc",
+    "kind": "cycle_finished",
+    "message": "@disagg-scout cycle 2 · 74s · $2.48 total",
+    "createdAt": 1790189986902
+  },
+  {
+    "id": "sev_nr91axstkqPj",
+    "swarmId": "swm_TA2nJYjHcW9H",
+    "agentId": "sa_PAp6L6CNIuF3",
+    "kind": "cycle_started",
+    "message": "@batch-spec-scout cycle 2",
+    "createdAt": 1790189986957
+  },
+  {
+    "id": "sev_hAD_Y044sCoL",
+    "swarmId": "swm_TA2nJYjHcW9H",
+    "agentId": "sa_20Y-OerAQsQz",
+    "kind": "cycle_finished",
+    "message": "@cost-critic cycle 1 · 103s · $2.90 total",
+    "createdAt": 1790189990177
+  },
+  {
+    "id": "sev_PAzMGRQRsAQQ",
+    "swarmId": "swm_TA2nJYjHcW9H",
+    "agentId": "sa_7oovkK0-VP9p",
+    "kind": "cycle_started",
+    "message": "@cost-ranker cycle 2",
+    "createdAt": 1790189990232
+  },
+  {
+    "id": "sev_ZWmAGaC5R5ZY",
+    "swarmId": "swm_TA2nJYjHcW9H",
+    "agentId": "sa_PAp6L6CNIuF3",
+    "kind": "agent_retired",
+    "message": "Completed batching/spec survey + hypotheses; idle.",
+    "createdAt": 1790189990589
+  },
+  {
+    "id": "sev_kCruCtX-rV4k",
+    "swarmId": "swm_TA2nJYjHcW9H",
+    "agentId": "sa_7oovkK0-VP9p",
+    "kind": "agent_retired",
+    "message": "Completed st_k3zStNDe51iw rubric + initial Elo tournament; idle.",
+    "createdAt": 1790189990682
+  },
+  {
+    "id": "sev_WtdfuMyq4OcI",
+    "swarmId": "swm_TA2nJYjHcW9H",
+    "agentId": "sa_XV-_IRx0Go9L",
+    "kind": "agent_spawned",
+    "message": "@report-synth (synthesizer)",
+    "createdAt": 1790190055537
+  },
+  {
+    "id": "sev_MwMIcOxbf6hG",
+    "swarmId": "swm_TA2nJYjHcW9H",
+    "agentId": "sa_guysofQ-R_DR",
+    "kind": "agent_spawned",
+    "message": "@alt-scout (researcher)",
+    "createdAt": 1790190055649
+  },
+  {
+    "id": "sev_UT7adyrY7ILf",
+    "swarmId": "swm_TA2nJYjHcW9H",
+    "agentId": "sa_SZgP6021FSXc",
+    "kind": "agent_retired",
+    "message": "Surveys + composite hypothesis delivered; idle. Free slot for verifier after report.",
+    "createdAt": 1790190066091
+  },
+  {
+    "id": "sev_5x8B44zjulWi",
+    "swarmId": "swm_TA2nJYjHcW9H",
+    "agentId": "sa_w9B2juaMax9-",
+    "kind": "cycle_finished",
+    "message": "@orchestrator cycle 3 · 98s · $3.19 total",
+    "createdAt": 1790190072108
+  },
+  {
+    "id": "sev_G7_bZadUVprE",
+    "swarmId": "swm_TA2nJYjHcW9H",
+    "agentId": "sa_XV-_IRx0Go9L",
+    "kind": "cycle_started",
+    "message": "@report-synth cycle 1",
+    "createdAt": 1790190072163
+  },
+  {
+    "id": "sev_ugDdh_9wKjxF",
+    "swarmId": "swm_TA2nJYjHcW9H",
+    "agentId": "sa_7oovkK0-VP9p",
+    "kind": "no_board_contact",
+    "message": "@cost-ranker finished without calling the swarm board — check MCP connectivity (https://cursor-multiplayer-agent.onrender.com/api/swarm-mcp)",
+    "createdAt": 1790190078194
+  },
+  {
+    "id": "sev_scFbWDGaujjv",
+    "swarmId": "swm_TA2nJYjHcW9H",
+    "agentId": "sa_7oovkK0-VP9p",
+    "kind": "cycle_finished",
+    "message": "@cost-ranker cycle 2 · 88s · $3.63 total",
+    "createdAt": 1790190078197
+  },
+  {
+    "id": "sev_5ox_m4puLp_k",
+    "swarmId": "swm_TA2nJYjHcW9H",
+    "agentId": "sa_guysofQ-R_DR",
+    "kind": "cycle_started",
+    "message": "@alt-scout cycle 1",
+    "createdAt": 1790190078283
+  },
+  {
+    "id": "sev_6AMEKm14_rth",
+    "swarmId": "swm_TA2nJYjHcW9H",
+    "agentId": "sa_PAp6L6CNIuF3",
+    "kind": "no_board_contact",
+    "message": "@batch-spec-scout finished without calling the swarm board — check MCP connectivity (https://cursor-multiplayer-agent.onrender.com/api/swarm-mcp)",
+    "createdAt": 1790190098074
+  },
+  {
+    "id": "sev_dZLEJJVmcvbU",
+    "swarmId": "swm_TA2nJYjHcW9H",
+    "agentId": "sa_PAp6L6CNIuF3",
+    "kind": "cycle_finished",
+    "message": "@batch-spec-scout cycle 2 · 111s · $4.32 total",
+    "createdAt": 1790190098074
+  },
+  {
+    "id": "sev_Cc-iazVK0x6v",
+    "swarmId": "swm_TA2nJYjHcW9H",
+    "agentId": "sa_20Y-OerAQsQz",
+    "kind": "cycle_started",
+    "message": "@cost-critic cycle 2",
+    "createdAt": 1790190098131
+  },
+  {
+    "id": "sev_ac8ugJTWUtdy",
+    "swarmId": "swm_TA2nJYjHcW9H",
+    "agentId": "sa_20Y-OerAQsQz",
+    "kind": "cycle_failed",
+    "message": "@cost-critic cycle 2 · 2s · $4.32 total",
+    "createdAt": 1790190100431
+  },
+  {
+    "id": "sev_KASnZWhyAvHi",
+    "swarmId": "swm_TA2nJYjHcW9H",
+    "agentId": "sa_w9B2juaMax9-",
+    "kind": "cycle_started",
+    "message": "@orchestrator cycle 4",
+    "createdAt": 1790190117319
+  },
+  {
+    "id": "sev_ZRccPKp-mdyf",
+    "swarmId": "swm_TA2nJYjHcW9H",
+    "agentId": "sa_XV-_IRx0Go9L",
+    "kind": "artifact_saved",
+    "message": "report: report.md",
+    "createdAt": 1790190123794
+  },
+  {
+    "id": "sev_y6XUWV0K6WgW",
+    "swarmId": "swm_TA2nJYjHcW9H",
+    "agentId": "sa_U_WfZ4KyYYEG",
+    "kind": "agent_spawned",
+    "message": "@report-verify (verifier)",
+    "createdAt": 1790190141758
+  },
+  {
+    "id": "sev_Ta8rvMdFJDtH",
+    "swarmId": "swm_TA2nJYjHcW9H",
+    "agentId": "sa_XV-_IRx0Go9L",
+    "kind": "artifact_saved",
+    "message": "design: design/prototype-composite-pd.md",
+    "createdAt": 1790190143490
+  },
+  {
+    "id": "sev_DpjvaeqsLKOr",
+    "swarmId": "swm_TA2nJYjHcW9H",
+    "agentId": "sa_w9B2juaMax9-",
+    "kind": "cycle_finished",
+    "message": "@orchestrator cycle 4 · 36s · $4.58 total",
+    "createdAt": 1790190152864
+  },
+  {
+    "id": "sev_Lqp_4jjFaTVa",
+    "swarmId": "swm_TA2nJYjHcW9H",
+    "agentId": "sa_U_WfZ4KyYYEG",
+    "kind": "cycle_started",
+    "message": "@report-verify cycle 1",
+    "createdAt": 1790190152920
+  },
+  {
+    "id": "sev_sezVxaKiEtp5",
+    "swarmId": "swm_TA2nJYjHcW9H",
+    "agentId": "sa_XV-_IRx0Go9L",
+    "kind": "cycle_finished",
+    "message": "@report-synth cycle 1 · 85s · $5.01 total",
+    "createdAt": 1790190157046
+  },
+  {
+    "id": "sev_V--Q2xeNBN3g",
+    "swarmId": "swm_TA2nJYjHcW9H",
+    "agentId": "sa_guysofQ-R_DR",
+    "kind": "artifact_saved",
+    "message": "other: survey/alternative-stacks.md",
+    "createdAt": 1790190169742
+  },
+  {
+    "id": "sev_9MbD8P556Vap",
+    "swarmId": "swm_TA2nJYjHcW9H",
+    "agentId": "sa_XV-_IRx0Go9L",
+    "kind": "cycle_started",
+    "message": "@report-synth cycle 2",
+    "createdAt": 1790190176085
+  },
+  {
+    "id": "sev_L_38DM3JntdJ",
+    "swarmId": "swm_TA2nJYjHcW9H",
+    "agentId": "sa_guysofQ-R_DR",
+    "kind": "cycle_finished",
+    "message": "@alt-scout cycle 1 · 108s · $5.46 total",
+    "createdAt": 1790190186048
+  },
+  {
+    "id": "sev_sIpReJKcG_6v",
+    "swarmId": "swm_TA2nJYjHcW9H",
+    "agentId": "sa_20Y-OerAQsQz",
+    "kind": "cycle_started",
+    "message": "@cost-critic cycle 3",
+    "createdAt": 1790190192321
+  },
+  {
+    "id": "sev_79-g4zOUbIWN",
+    "swarmId": "swm_TA2nJYjHcW9H",
+    "agentId": "sa_XV-_IRx0Go9L",
+    "kind": "artifact_saved",
+    "message": "report: report.md",
+    "createdAt": 1790190210905
+  },
+  {
+    "id": "sev_KMOXaGV1ZJuY",
+    "swarmId": "swm_TA2nJYjHcW9H",
+    "agentId": "sa_U_WfZ4KyYYEG",
+    "kind": "artifact_saved",
+    "message": "other: verify/verify-result.json",
+    "createdAt": 1790190219268
+  },
+  {
+    "id": "sev_1CU-mFdvsIgK",
+    "swarmId": "swm_TA2nJYjHcW9H",
+    "agentId": "sa_U_WfZ4KyYYEG",
+    "kind": "verification",
+    "message": "PASS · report.md (sar_cxqve8Z-QQjJ)",
+    "createdAt": 1790190219540
+  },
+  {
+    "id": "sev_G-NuRvnXX3bh",
+    "swarmId": "swm_TA2nJYjHcW9H",
+    "agentId": "sa_XV-_IRx0Go9L",
+    "kind": "cycle_finished",
+    "message": "@report-synth cycle 2 · 44s · $5.83 total",
+    "createdAt": 1790190219908
+  },
+  {
+    "id": "sev_I1oyjzfV2Ut9",
+    "swarmId": "swm_TA2nJYjHcW9H",
+    "agentId": "sa_w9B2juaMax9-",
+    "kind": "cycle_started",
+    "message": "@orchestrator cycle 5",
+    "createdAt": 1790190219919
+  },
+  {
+    "id": "sev_rWPFtVttuG6r",
+    "swarmId": "swm_TA2nJYjHcW9H",
+    "agentId": "sa_20Y-OerAQsQz",
+    "kind": "cycle_finished",
+    "message": "@cost-critic cycle 3 · 32s · $6.56 total",
+    "createdAt": 1790190223981
+  },
+  {
+    "id": "sev_JZ2VAc1LCQRP",
+    "swarmId": "swm_TA2nJYjHcW9H",
+    "agentId": "sa_guysofQ-R_DR",
+    "kind": "cycle_started",
+    "message": "@alt-scout cycle 2",
+    "createdAt": 1790190224036
+  },
+  {
+    "id": "sev_wxx86OkpNYS_",
+    "swarmId": "swm_TA2nJYjHcW9H",
+    "agentId": "sa_U_WfZ4KyYYEG",
+    "kind": "cycle_finished",
+    "message": "@report-verify cycle 1 · 72s · $6.96 total",
+    "createdAt": 1790190224820
+  },
+  {
+    "id": "sev_J4fKHbfzKeNZ",
+    "swarmId": "swm_TA2nJYjHcW9H",
+    "agentId": "sa_w9B2juaMax9-",
+    "kind": "done",
+    "message": "## Mission outcome\nThe swarm identified a **composite disaggregated hosting topology** that can beat a well-tuned monolithic **vLLM\\*** baseline on **cost per token** (ESTIMATE **~1.25–2.5×** depending on SLO and prefix reuse), without claiming new GPU measurements in this environment.\n\n## Recommen…",
+    "createdAt": 1790190234450
+  },
+  {
+    "id": "sev_Ii8DOb0Q2T74",
+    "swarmId": "swm_TA2nJYjHcW9H",
+    "agentId": "sa_w9B2juaMax9-",
+    "kind": "cycle_finished",
+    "message": "@orchestrator cycle 5 · 15s · $7.01 total",
+    "createdAt": 1790190235009
+  },
+  {
+    "id": "sev_2FhZlErmVl72",
+    "swarmId": "swm_TA2nJYjHcW9H",
+    "agentId": "sa_guysofQ-R_DR",
+    "kind": "cycle_finished",
+    "message": "@alt-scout cycle 2 · 11s · $7.06 total",
+    "createdAt": 1790190235385
+  }
+]

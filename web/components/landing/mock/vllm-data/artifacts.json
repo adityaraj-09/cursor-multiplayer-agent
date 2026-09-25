@@ -1,0 +1,92 @@
+[
+  {
+    "id": "sar_IXxGu1CfZNVV",
+    "kind": "design",
+    "name": "design/prototype-composite-pd.md",
+    "size": 13836,
+    "agentId": "sa_XV-_IRx0Go9L",
+    "createdAt": "2026-09-23T19:02:23.490Z",
+    "updatedAt": "2026-09-23T19:02:23.490Z",
+    "path": "artifacts/design/design/prototype-composite-pd.md"
+  },
+  {
+    "id": "sar_sP-6wKBv4-tC",
+    "kind": "design",
+    "name": "ranking/cost-per-token-rubric.md",
+    "size": 9924,
+    "agentId": "sa_7oovkK0-VP9p",
+    "createdAt": "2026-09-23T18:59:05.167Z",
+    "updatedAt": "2026-09-23T18:59:05.167Z",
+    "path": "artifacts/design/ranking/cost-per-token-rubric.md"
+  },
+  {
+    "id": "sar_RE-xNi77HigJ",
+    "kind": "notes",
+    "name": "survey/batching-speculative.md",
+    "size": 12300,
+    "agentId": "sa_PAp6L6CNIuF3",
+    "createdAt": "2026-09-23T18:58:16.548Z",
+    "updatedAt": "2026-09-23T18:58:16.548Z",
+    "path": "artifacts/notes/survey/batching-speculative.md"
+  },
+  {
+    "id": "sar_z3pniOGe5ScL",
+    "kind": "notes",
+    "name": "survey/disagg-composition-and-baseline.md",
+    "size": 7121,
+    "agentId": "sa_SZgP6021FSXc",
+    "createdAt": "2026-09-23T18:59:31.401Z",
+    "updatedAt": "2026-09-23T18:59:31.401Z",
+    "path": "artifacts/notes/survey/disagg-composition-and-baseline.md"
+  },
+  {
+    "id": "sar_oZOwWHu7QYQF",
+    "kind": "notes",
+    "name": "survey/disaggregated-serving.md",
+    "size": 13088,
+    "agentId": "sa_SZgP6021FSXc",
+    "createdAt": "2026-09-23T18:57:41.090Z",
+    "updatedAt": "2026-09-23T18:57:41.090Z",
+    "path": "artifacts/notes/survey/disaggregated-serving.md"
+  },
+  {
+    "id": "sar_F8vemRPU_Xf_",
+    "kind": "notes",
+    "name": "survey/kv-memory-tiering.md",
+    "size": 12559,
+    "agentId": "sa_RHy4SbLeCeky",
+    "createdAt": "2026-09-23T18:57:30.094Z",
+    "updatedAt": "2026-09-23T18:57:30.094Z",
+    "path": "artifacts/notes/survey/kv-memory-tiering.md"
+  },
+  {
+    "id": "sar_6XU4Dsb_mvhn",
+    "kind": "other",
+    "name": "survey/alternative-stacks.md",
+    "size": 8882,
+    "agentId": "sa_guysofQ-R_DR",
+    "createdAt": "2026-09-23T19:02:49.742Z",
+    "updatedAt": "2026-09-23T19:02:49.742Z",
+    "path": "artifacts/other/survey/alternative-stacks.md"
+  },
+  {
+    "id": "sar_XPUZb6iQWynk",
+    "kind": "other",
+    "name": "verify/verify-result.json",
+    "size": 4496,
+    "agentId": "sa_U_WfZ4KyYYEG",
+    "createdAt": "2026-09-23T19:03:39.268Z",
+    "updatedAt": "2026-09-23T19:03:39.268Z",
+    "path": "artifacts/other/verify/verify-result.json"
+  },
+  {
+    "id": "sar_cxqve8Z-QQjJ",
+    "kind": "report",
+    "name": "report.md",
+    "size": 10825,
+    "agentId": "sa_XV-_IRx0Go9L",
+    "createdAt": "2026-09-23T19:02:03.793Z",
+    "updatedAt": "2026-09-23T19:03:30.905Z",
+    "path": "artifacts/report/report.md"
+  }
+]

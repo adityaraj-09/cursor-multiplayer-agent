@@ -871,3 +871,5 @@ export class WorkerRelay {
     this.diffListeners.clear();
   }
 }
+
+}

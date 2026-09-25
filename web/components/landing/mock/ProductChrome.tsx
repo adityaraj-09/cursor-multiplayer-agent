@@ -5,6 +5,7 @@ import {
   CircleDot,
   LayoutGrid,
   Layers3,
+  Network,
   Plus,
   Terminal,
   UserRound,
@@ -18,6 +19,7 @@ const NAV: Array<{
 }> = [
   { id: "sessions", label: "Sessions", icon: Layers3 },
   { id: "issues", label: "Issues", icon: CircleDot },
+  { id: "swarm", label: "Swarms", icon: Network },
   { id: "board", label: "Board", icon: LayoutGrid },
   { id: "cli", label: "Pair CLI", icon: Terminal },
   { id: "profile", label: "Profile", icon: UserRound },
@@ -49,7 +51,8 @@ export default function ProductChrome({
         </div>
         <nav className="space-y-0.5 px-2.5">
           {NAV.map(({ id, label, icon: Icon }) => {
-            const clickable = id === "sessions" || id === "issues" || id === "board";
+            const clickable =
+              id === "sessions" || id === "issues" || id === "swarm" || id === "board";
             const active = view === id;
             return (
               <button
