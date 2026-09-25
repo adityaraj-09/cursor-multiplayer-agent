@@ -1,7 +1,7 @@
 "use client";
 
-import { useMemo, useRef, type ReactNode } from "react";
-import { Canvas, useFrame, type ThreeEvent } from "@react-three/fiber";
+import { useMemo, useRef, useState, type ReactNode } from "react";
+import { Canvas, useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
 import { Billboard, Line, OrbitControls, Text } from "@react-three/drei";
 import * as THREE from "three";
 import type { SwarmRole } from "../../../shared/swarm";
@@ -19,6 +19,14 @@ import {
 
 const CAMERA_POS: Vec3 = [14, 11, 14];
 const CAMERA_TARGET: Vec3 = [0.3, 1.8, 0.4];
+const ISO_OFFSET: Vec3 = [CAMERA_POS[0] - CAMERA_TARGET[0], CAMERA_POS[1] - CAMERA_TARGET[1], CAMERA_POS[2] - CAMERA_TARGET[2]];
+const DEFAULT_ZOOM = 32;
+const FOCUS_ZOOM = 118;
+
+type ControlsApi = {
+  enabled: boolean;
+  target: THREE.Vector3;
+};
 
 export default function SwarmVisualizerScene({
   graph,
@@ -37,7 +45,8 @@ export default function SwarmVisualizerScene({
   onFloorOffset: (role: SwarmRole, next: Vec3) => void;
   onWorkOffset: (next: Vec3) => void;
 }) {
-  const controls = useRef<{ enabled: boolean } | null>(null);
+  const controls = useRef<ControlsApi | null>(null);
+  const [focus, setFocus] = useState<{ target: Vec3; zoom: number; role?: string } | null>(null);
 
   const worldOf = (id: string): Vec3 | null => {
     const agent = graph.agents.find((a) => a.id === id);
@@ -53,7 +62,10 @@ export default function SwarmVisualizerScene({
       camera={{ position: CAMERA_POS, zoom: 32, near: 0.1, far: 400 }}
       dpr={[1, 2]}
       gl={{ antialias: true, alpha: false }}
-      onPointerMissed={() => onSelect(null)}
+      onPointerMissed={() => {
+        onSelect(null);
+        setFocus(null);
+      }}
     >
       <color attach="background" args={["#0b0d12"]} />
       <ambientLight intensity={0.72} />
@@ -69,9 +81,19 @@ export default function SwarmVisualizerScene({
           key={floor.role}
           offset={floorOffsets[floor.role] ?? ZERO_VEC}
           onOffset={(next) => onFloorOffset(floor.role, next)}
+          onActivate={() => {
+            const target = addVec(floor.center, floorOffsets[floor.role] ?? ZERO_VEC);
+            setFocus((prev) =>
+              prev &&
+              prev.role === floor.role &&
+              Math.hypot(prev.target[0] - target[0], prev.target[1] - target[1], prev.target[2] - target[2]) < 0.35
+                ? null
+                : { target, zoom: FOCUS_ZOOM, role: floor.role },
+            );
+          }}
           controls={controls}
         >
-          <RoleFloor floor={floor} />
+          <RoleFloor floor={floor} focused={focus?.role === floor.role} />
           {graph.agents
             .filter((agent) => agent.role === floor.role)
             .map((agent) => (
@@ -86,7 +108,15 @@ export default function SwarmVisualizerScene({
         </DraggablePlane>
       ))}
 
-      <DraggablePlane offset={workOffset} onOffset={onWorkOffset} controls={controls}>
+      <DraggablePlane
+        offset={workOffset}
+        onOffset={onWorkOffset}
+        onActivate={() => {
+          const target = addVec([0, -2.42, 4.35], workOffset);
+          setFocus({ target, zoom: 86, role: "work" });
+        }}
+        controls={controls}
+      >
         {graph.work.length > 0 && <WorkBoard count={graph.work.length} />}
         {graph.work.map((node) => (
           <WorkChip key={node.id} node={node} active={selectedId === node.ownerAgentId} />
@@ -112,6 +142,7 @@ export default function SwarmVisualizerScene({
         );
       })}
 
+      <CameraRig focus={focus} controls={controls} />
       <OrbitControls
         ref={controls as never}
         makeDefault
@@ -129,15 +160,63 @@ export default function SwarmVisualizerScene({
   );
 }
 
+function CameraRig({
+  focus,
+  controls,
+}: {
+  focus: { target: Vec3; zoom: number; role?: string } | null;
+  controls: { current: ControlsApi | null };
+}) {
+  const { camera } = useThree();
+  const last = useRef(focus);
+  const goalTarget = useRef(new THREE.Vector3(...CAMERA_TARGET));
+  const goalZoom = useRef(DEFAULT_ZOOM);
+  const desired = useRef(new THREE.Vector3());
+  const animating = useRef(false);
+
+  if (last.current !== focus) {
+    last.current = focus;
+    const next = focus ?? { target: CAMERA_TARGET, zoom: DEFAULT_ZOOM };
+    goalTarget.current.set(next.target[0], next.target[1], next.target[2]);
+    goalZoom.current = next.zoom;
+    animating.current = true;
+  }
+
+  useFrame((_, dt) => {
+    if (!animating.current) return;
+    if (controls.current) controls.current.enabled = false;
+    const cam = camera as THREE.OrthographicCamera;
+    cam.zoom = THREE.MathUtils.damp(cam.zoom, goalZoom.current, 18, dt);
+    cam.updateProjectionMatrix();
+    desired.current.set(
+      goalTarget.current.x + ISO_OFFSET[0],
+      goalTarget.current.y + ISO_OFFSET[1],
+      goalTarget.current.z + ISO_OFFSET[2],
+    );
+    const k = 1 - Math.exp(-16 * dt);
+    camera.position.lerp(desired.current, k);
+    if (controls.current) controls.current.target.lerp(goalTarget.current, k);
+    const settled =
+      Math.abs(cam.zoom - goalZoom.current) < 0.2 && camera.position.distanceTo(desired.current) < 0.05;
+    if (settled) {
+      animating.current = false;
+      if (controls.current) controls.current.enabled = true;
+    }
+  });
+  return null;
+}
+
 function DraggablePlane({
   offset,
   onOffset,
+  onActivate,
   controls,
   children,
 }: {
   offset: Vec3;
   onOffset: (next: Vec3) => void;
-  controls: { current: { enabled: boolean } | null };
+  onActivate?: () => void;
+  controls: { current: ControlsApi | null };
   children: ReactNode;
 }) {
   const drag = useRef<{
@@ -145,6 +224,7 @@ function DraggablePlane({
     start: Vec3;
     plane: THREE.Plane;
     vertical: boolean;
+    moved: boolean;
   } | null>(null);
 
   const begin = (e: ThreeEvent<PointerEvent>) => {
@@ -160,7 +240,7 @@ function DraggablePlane({
     } else {
       plane.set(new THREE.Vector3(0, 1, 0), -e.point.y);
     }
-    drag.current = { origin: e.point.clone(), start: offset, plane, vertical };
+    drag.current = { origin: e.point.clone(), start: offset, plane, vertical, moved: false };
     if (controls.current) controls.current.enabled = false;
     document.body.style.cursor = "grabbing";
   };
@@ -171,6 +251,8 @@ function DraggablePlane({
     const hit = new THREE.Vector3();
     if (!e.ray.intersectPlane(drag.current.plane, hit)) return;
     const delta = hit.sub(drag.current.origin);
+    if (delta.length() > 0.12) drag.current.moved = true;
+    if (!drag.current.moved) return;
     if (drag.current.vertical) {
       onOffset([drag.current.start[0], drag.current.start[1] + delta.y, drag.current.start[2]]);
     } else {
@@ -180,9 +262,11 @@ function DraggablePlane({
 
   const end = () => {
     if (!drag.current) return;
+    const wasClick = !drag.current.moved;
     drag.current = null;
     if (controls.current) controls.current.enabled = true;
     document.body.style.cursor = "auto";
+    if (wasClick) onActivate?.();
   };
 
   return (
@@ -194,7 +278,7 @@ function DraggablePlane({
   );
 }
 
-function RoleFloor({ floor }: { floor: SwarmVisualFloor }) {
+function RoleFloor({ floor, focused }: { floor: SwarmVisualFloor; focused: boolean }) {
   const color = ROLE_HEX[floor.role];
   return (
     <group position={floor.center}>
@@ -203,11 +287,11 @@ function RoleFloor({ floor }: { floor: SwarmVisualFloor }) {
         <meshStandardMaterial
           color={color}
           transparent
-          opacity={0.22}
+          opacity={focused ? 0.38 : 0.22}
           metalness={0.08}
           roughness={0.55}
           emissive={color}
-          emissiveIntensity={0.14}
+          emissiveIntensity={focused ? 0.42 : 0.14}
         />
       </mesh>
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.005, 0]}>
@@ -216,8 +300,14 @@ function RoleFloor({ floor }: { floor: SwarmVisualFloor }) {
       </mesh>
       <lineSegments>
         <edgesGeometry args={[new THREE.BoxGeometry(floor.width, 0.08, floor.depth)]} />
-        <lineBasicMaterial color={color} transparent opacity={0.7} />
+        <lineBasicMaterial color={color} transparent opacity={focused ? 1 : 0.7} />
       </lineSegments>
+      {focused && (
+        <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.02, 0]}>
+          <ringGeometry args={[Math.min(floor.width, floor.depth) * 0.18, Math.min(floor.width, floor.depth) * 0.22, 40]} />
+          <meshBasicMaterial color={color} transparent opacity={0.7} />
+        </mesh>
+      )}
       <Billboard position={[-floor.width / 2 + 0.12, 0.2, floor.depth / 2 + 0.02]}>
         <Text fontSize={0.16} color={color} anchorX="left" anchorY="middle">
           {floor.label.toUpperCase()}
@@ -322,21 +412,25 @@ function AgentFigure({
 }) {
   const group = useRef<THREE.Group>(null);
   const glow = useRef<THREE.Mesh>(null);
+  const appear = useRef(0);
   const color = ROLE_HEX[agent.role];
   const dead = agent.visualStatus === "dead" || agent.visualStatus === "error";
   const working = agent.visualStatus === "working";
   const opacity = dim ? 0.32 : dead ? 0.48 : 1;
   const scale = agent.scale;
 
-  useFrame(({ clock }) => {
+  useFrame(({ clock }, dt) => {
     const t = clock.getElapsedTime();
+    appear.current = Math.min(1, appear.current + dt * 4.2);
+    const enter = 1 - (1 - appear.current) ** 3;
     if (group.current) {
-      group.current.position.y = agent.position[1] + (working ? Math.sin(t * 2.4) * 0.035 : 0);
+      group.current.position.y = agent.position[1] + (working ? Math.sin(t * 2.4) * 0.035 : 0) + (1 - enter) * 0.45;
+      group.current.scale.setScalar(scale * (0.2 + 0.8 * enter));
       if (working) group.current.rotation.y = Math.sin(t * 1.1) * 0.08;
     }
     if (glow.current) {
       const mat = glow.current.material as THREE.MeshStandardMaterial;
-      mat.opacity = working ? 0.2 + Math.sin(t * 3.2) * 0.07 : 0.04;
+      mat.opacity = (working ? 0.2 + Math.sin(t * 3.2) * 0.07 : 0.04) * enter;
     }
   });
 
@@ -344,7 +438,6 @@ function AgentFigure({
     <group
       ref={group}
       position={agent.position}
-      scale={scale}
       onClick={(e) => {
         e.stopPropagation();
         onSelect();
