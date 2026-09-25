@@ -11,6 +11,7 @@ import {
   Trophy,
 } from "lucide-react";
 import SwarmBoard from "../../swarm/SwarmBoard";
+import SwarmAgents from "../../swarm/SwarmAgents";
 import {
   SwarmActivity,
   SwarmHypotheses,
@@ -21,9 +22,7 @@ import {
   BudgetMeter,
   ModelChip,
   PhaseStepper,
-  ROLE_META,
   StatusPill,
-  formatUsd,
   relativeTime,
 } from "../../swarm/swarmUi";
 import {
@@ -130,7 +129,15 @@ export default function SwarmShowcase() {
             onPosted={() => undefined}
           />
         )}
-        {tab === "agents" && <DemoAgentGrid />}
+        {tab === "agents" && (
+          <SwarmAgents
+            swarmId={swarm.id}
+            agents={VLLM_AGENTS}
+            tasks={VLLM_TASKS}
+            readOnly
+            defaultView="scene"
+          />
+        )}
         {tab === "tasks" && <SwarmTasks tasks={VLLM_TASKS} agents={VLLM_AGENTS} />}
         {tab === "hypotheses" && (
           <SwarmHypotheses
@@ -143,53 +150,6 @@ export default function SwarmShowcase() {
         {tab === "artifacts" && <DemoArtifactList />}
         {tab === "activity" && <SwarmActivity events={VLLM_EVENTS} agents={VLLM_AGENTS} />}
       </div>
-    </div>
-  );
-}
-
-function DemoAgentGrid() {
-  const byTask = new Map(VLLM_TASKS.map((task) => [task.ownerAgentId, task]));
-  return (
-    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-      {VLLM_AGENTS.map((agent) => {
-        const meta = ROLE_META[agent.role];
-        const task = byTask.get(agent.id);
-        return (
-          <div
-            key={agent.id}
-            className={`flex flex-col rounded-xl border bg-[#171717] p-3.5 ${
-              agent.status === "retired" ? "border-[#1f1f1f] opacity-60" : "border-[#2b2b2b]"
-            }`}
-          >
-            <div className="flex items-center gap-2">
-              <span className={`inline-flex h-7 w-7 items-center justify-center rounded-lg border ${meta.bg}`}>
-                <Bot className={`h-3.5 w-3.5 ${meta.color}`} strokeWidth={1.75} />
-              </span>
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-[13px] font-medium text-[#e4e4e4]">@{agent.label}</p>
-                <p className={`text-[11px] ${meta.color}`}>{meta.label}</p>
-              </div>
-              <span className="inline-flex h-5 items-center rounded-full bg-[#1f1f1f] px-2 text-[10px] text-[#6e6e6e]">
-                {agent.status}
-              </span>
-            </div>
-            <p className="mt-3 line-clamp-2 min-h-[2.5rem] text-[12px] leading-5 text-[#a0a0a0]">
-              {task?.title ||
-                agent.brief ||
-                (agent.role === "orchestrator"
-                  ? "Plans, delegates, and keeps the ledger."
-                  : "Waiting for work")}
-            </p>
-            <div className="mt-3 flex items-center gap-3 text-[11px] tabular-nums text-[#6e6e6e]">
-              <span>
-                {agent.cycles} cycle{agent.cycles === 1 ? "" : "s"}
-              </span>
-              <span>{formatUsd(agent.spentUsd)}</span>
-              <span className="ml-auto">{relativeTime(agent.lastCycleAt)}</span>
-            </div>
-          </div>
-        );
-      })}
     </div>
   );
 }

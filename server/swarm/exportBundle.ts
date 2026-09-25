@@ -256,6 +256,7 @@ export function buildSwarmExport(
     lastError: a.lastError,
     cursorAgentId: a.cursorAgentId,
     createdAt: a.createdAt,
+    spawnedBy: a.spawnedBy,
   }));
 
   files.push(

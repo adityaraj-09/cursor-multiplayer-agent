@@ -129,6 +129,7 @@ describe("swarm export zip", () => {
     expect(files[`${root}/artifacts/manifest.json`]).toContain("report.md");
     expect(files[`${root}/activity/events.md`]).toContain("cycle_finished");
     expect(files[`${root}/data/posts.json`]).toContain("questions");
+    expect(files[`${root}/data/agents.json`]).toContain("spawnedBy");
     expect(JSON.stringify(files)).not.toContain("tokenHash");
 
     const only = unzip(bundle.buildSwarmExport(store.getSwarm(swarm.id)!, "artifacts").body);

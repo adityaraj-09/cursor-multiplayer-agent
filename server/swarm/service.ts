@@ -73,7 +73,6 @@ function publicAgent(agent: store.SwarmAgentRow) {
     tokenHash: _hash,
     tokenExpiresAt: _exp,
     consecutiveErrors: _errs,
-    spawnedBy: _by,
     ...info
   } = agent;
   return info;
