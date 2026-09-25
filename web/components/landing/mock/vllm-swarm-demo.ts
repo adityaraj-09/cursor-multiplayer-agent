@@ -49,6 +49,7 @@ export const VLLM_AGENTS: SwarmAgentInfo[] = (rawAgents as RawAgent[]).map((agen
   runStartedAt: null,
   lastError: agent.lastError,
   createdAt: agent.createdAt,
+  spawnedBy: agent.role === "orchestrator" ? null : "sa_w9B2juaMax9-",
 }));
 
 export const VLLM_SWARM: SwarmInfo = {

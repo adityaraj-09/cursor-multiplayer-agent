@@ -363,7 +363,6 @@ export interface SwarmAgentRow extends SwarmAgentInfo {
   tokenHash: string | null;
   tokenExpiresAt: number | null;
   consecutiveErrors: number;
-  spawnedBy: string | null;
 }
 
 function toAgent(r: Row): SwarmAgentRow {

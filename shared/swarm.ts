@@ -169,6 +169,8 @@ export interface SwarmAgentInfo {
   runStartedAt: number | null;
   lastError: string | null;
   createdAt: number;
+  /** Agent that spawned this worker. Null for the orchestrator. */
+  spawnedBy: string | null;
 }
 
 export interface SwarmTaskInfo {
