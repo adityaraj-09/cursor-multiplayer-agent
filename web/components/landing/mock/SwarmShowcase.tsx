@@ -109,13 +109,14 @@ export default function SwarmShowcase() {
       </header>
 
       {layout === "scene" ? (
-        <div className="min-h-0 flex-1 overflow-auto px-4 py-4 sm:px-5">
+        <div className="relative min-h-0 flex-1 bg-[#0b0d12]">
           <SwarmVisualizer
             agents={VLLM_AGENTS}
             tasks={VLLM_TASKS}
             selectedId={visualAgentId}
             onSelect={setVisualAgentId}
             showRetired
+            fill
           />
         </div>
       ) : (
