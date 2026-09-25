@@ -173,8 +173,8 @@ export default function ArtifactsPanel({
   };
 
   const panel = (
-    <div className="relative z-10 flex h-full min-h-0 w-[min(100%,560px)] border-l border-[#1c1c1c] bg-[#0a0a0a] text-[#e8e8e8] lg:w-full">
-      <aside className="flex w-[148px] shrink-0 flex-col border-r border-[#1c1c1c] sm:w-[188px]">
+    <div className="relative z-10 flex h-full min-h-0 w-[min(92vw,380px)] border-l border-[#1c1c1c] bg-[#0a0a0a] text-[#e8e8e8] shadow-[-16px_0_40px_rgba(0,0,0,0.35)]">
+      <aside className="flex w-[128px] shrink-0 flex-col border-r border-[#1c1c1c]">
         <div className="flex h-11 items-center gap-2 px-3">
           <span className="text-[13px] font-medium text-[#f2f2f2]">
             Artifacts
@@ -335,10 +335,10 @@ export default function ArtifactsPanel({
   );
 
   return (
-    <div className="fixed inset-0 z-40 flex justify-end bg-black/50 lg:static lg:inset-auto lg:z-auto lg:h-full lg:w-[min(52%,820px)] lg:min-w-[400px] lg:max-w-[820px] lg:shrink-0 lg:bg-transparent">
+    <div className="fixed inset-0 z-40 flex justify-end bg-black/40">
       <button
         type="button"
-        className="h-full min-w-0 flex-1 cursor-default lg:hidden"
+        className="h-full min-w-0 flex-1 cursor-default"
         aria-label="Close artifacts"
         onClick={onClose}
       />
