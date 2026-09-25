@@ -29,6 +29,8 @@ import {
   orgAnthropicKeyHint,
   orgCursorKeyConfigured,
   orgCursorKeyHint,
+  orgOpenaiKeyConfigured,
+  orgOpenaiKeyHint,
 } from "./orgKeys.js";
 import {
   clearServerApiKey,
@@ -51,7 +53,14 @@ import {
   userAnthropicByokConfigured,
   userAnthropicByokHint,
 } from "./userAnthropicByok.js";
-import { isClaudeSandboxConfigured } from "./claudeSandbox.js";
+import { isCliSandboxConfigured } from "./cliSandbox.js";
+import {
+  clearUserOpenaiByokKey,
+  setUserOpenaiByokKey,
+  userOpenaiByokConfigured,
+  userOpenaiByokHint,
+} from "./userOpenaiByok.js";
+import { parseAgentBackendKind } from "../shared/backends/index.js";
 import {
   getUpload,
   purgeExpiredUploads,
@@ -242,6 +251,8 @@ app.get("/api/auth/status", (req, res) => {
   const orgAnthropicConfigured = inOrg
     ? orgAnthropicKeyConfigured(orgId)
     : false;
+  const orgOpenaiConfigured = inOrg ? orgOpenaiKeyConfigured(orgId) : false;
+  const blaxelConfigured = isCliSandboxConfigured();
   res.json({
     serverKeyConfigured: serverKeyConfigured(),
     serverKeySource: serverKeySource(),
@@ -254,7 +265,13 @@ app.get("/api/auth/status", (req, res) => {
       ? userAnthropicByokConfigured(userId)
       : false,
     userAnthropicByokHint: userId ? userAnthropicByokHint(userId) : null,
-    e2bConfigured: isClaudeSandboxConfigured(),
+    userOpenaiByokConfigured: userId
+      ? userOpenaiByokConfigured(userId)
+      : false,
+    userOpenaiByokHint: userId ? userOpenaiByokHint(userId) : null,
+    blaxelConfigured,
+    /** @deprecated Use blaxelConfigured. Kept so older clients keep working. */
+    e2bConfigured: blaxelConfigured,
     canManageServerKey: isAdminUser(userId),
     orgCursorKeyConfigured: orgKeyConfigured,
     orgCursorKeyHint:
@@ -262,6 +279,9 @@ app.get("/api/auth/status", (req, res) => {
     orgAnthropicKeyConfigured: orgAnthropicConfigured,
     orgAnthropicKeyHint:
       orgAnthropicConfigured && orgId ? orgAnthropicKeyHint(orgId) : null,
+    orgOpenaiKeyConfigured: orgOpenaiConfigured,
+    orgOpenaiKeyHint:
+      orgOpenaiConfigured && orgId ? orgOpenaiKeyHint(orgId) : null,
   });
 });
 
@@ -361,6 +381,35 @@ app.delete("/api/auth/anthropic-byok-key", requireAuth, (req, res) => {
     ok: true,
     userAnthropicByokConfigured: false,
     userAnthropicByokHint: null,
+  });
+});
+
+/** Save / replace the signed-in user's OpenAI API key (Codex cloud BYOK). */
+app.post("/api/auth/openai-byok-key", requireAuth, (req, res) => {
+  try {
+    const apiKey = String(req.body?.apiKey || "").trim();
+    const result = setUserOpenaiByokKey(req.user!.id, apiKey);
+    res.json({
+      ok: true,
+      userOpenaiByokConfigured: true,
+      userOpenaiByokHint: result.hint,
+    });
+  } catch (err) {
+    res.status(400).json({
+      error:
+        err instanceof Error
+          ? err.message
+          : "Failed to save OpenAI BYOK key",
+    });
+  }
+});
+
+app.delete("/api/auth/openai-byok-key", requireAuth, (req, res) => {
+  clearUserOpenaiByokKey(req.user!.id);
+  res.json({
+    ok: true,
+    userOpenaiByokConfigured: false,
+    userOpenaiByokHint: null,
   });
 });
 
@@ -853,10 +902,12 @@ app.post("/api/rooms", requireAuth, async (req, res) => {
       apiKey: req.body?.apiKey,
       ownerId: req.user!.id,
       orgId,
-      backend:
-        req.body?.backend === "claude-code" ? "claude-code" : "cursor",
+      backend: parseAgentBackendKind(req.body?.backend),
       anthropicApiKey: req.body?.anthropicApiKey
         ? String(req.body.anthropicApiKey)
+        : undefined,
+      openaiApiKey: req.body?.openaiApiKey
+        ? String(req.body.openaiApiKey)
         : undefined,
       controlMode:
         controlModeRaw === "open" ||
@@ -977,6 +1028,9 @@ app.post("/api/rooms/:id/agents", requireAuth, (req, res) => {
         modelId: req.body?.modelId ? String(req.body.modelId) : undefined,
         anthropicApiKey: req.body?.anthropicApiKey
           ? String(req.body.anthropicApiKey)
+          : undefined,
+        openaiApiKey: req.body?.openaiApiKey
+          ? String(req.body.openaiApiKey)
           : undefined,
         apiKey: req.body?.apiKey ? String(req.body.apiKey) : undefined,
         planMode: Boolean(req.body?.planMode),

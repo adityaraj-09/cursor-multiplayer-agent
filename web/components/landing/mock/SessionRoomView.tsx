@@ -194,7 +194,12 @@ export default function SessionRoomView({
                         )}
                       </span>
                       <span className="mt-0.5 block text-[10px] text-[#6e6e6e]">
-                        {agent.backend === "claude-code" ? "Claude" : "Cursor"} · {agent.model}
+                        {agent.backend === "claude-code"
+                          ? "Claude"
+                          : agent.backend === "codex"
+                            ? "Codex"
+                            : "Cursor"}{" "}
+                        · {agent.model}
                       </span>
                     </span>
                   </button>

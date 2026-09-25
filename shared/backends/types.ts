@@ -1,7 +1,28 @@
 import type { AgentTodoItem, ClarifyingQuestion } from "../events.js";
 
 /** Backend kind for a room-level agent process. */
-export type AgentBackendKind = "cursor" | "claude-code";
+export type AgentBackendKind = "cursor" | "claude-code" | "codex";
+
+/** Claude Code and Codex share the same local-CLI + Blaxel-sandbox path. */
+export const CLI_SANDBOX_BACKENDS = ["claude-code", "codex"] as const;
+export type CliSandboxBackendKind = (typeof CLI_SANDBOX_BACKENDS)[number];
+
+export function isCliSandboxBackend(
+  kind: string | null | undefined,
+): kind is CliSandboxBackendKind {
+  return kind === "claude-code" || kind === "codex";
+}
+
+export function parseAgentBackendKind(raw: unknown): AgentBackendKind {
+  if (raw === "claude-code" || raw === "codex") return raw;
+  return "cursor";
+}
+
+export function backendShortLabel(kind: AgentBackendKind): string {
+  if (kind === "claude-code") return "Claude";
+  if (kind === "codex") return "Codex";
+  return "Cursor";
+}
 
 /** Git / PR metadata attached to a completed cloud agent run. */
 export interface RunGitInfo {

@@ -37,7 +37,10 @@ export class AgentRunner {
     backendKind: AgentBackendKind = "cursor",
   ) {
     this.sessionId = sessionId ?? null;
-    this.backendKind = backendKind === "claude-code" ? "claude-code" : "cursor";
+    this.backendKind =
+      backendKind === "claude-code" || backendKind === "codex"
+        ? backendKind
+        : "cursor";
   }
 
   getSessionId(): string | null {

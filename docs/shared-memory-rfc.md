@@ -7,8 +7,8 @@ Status: Implemented (Phases 1–3)
 Steer can support shared memory without requiring Cursor Cloud and Claude Code
 to share a process, filesystem, or native conversation format. The server is
 already the common control plane: room prompts pass through `RoomManager`
-before they are sent to a Cursor SDK agent, a local CLI worker, or an E2B
-Claude sandbox. Shared memory should therefore be a durable, permissioned
+before they are sent to a Cursor SDK agent, a local CLI worker, or a Blaxel
+Claude/Codex sandbox. Shared memory should therefore be a durable, permissioned
 Steer resource that is rendered into a bounded context block for every agent.
 
 The first release should provide human-curated room memory and agent-proposed
@@ -205,7 +205,7 @@ existing attribution and attachment suffixes and any Cursor image payload.
 The same assembled text then reaches:
 
 - `SdkAgentSession.run` for Cursor local/cloud SDK;
-- `ClaudeSandboxSession.run` for hosted Claude;
+- `CliSandboxSession.run` for hosted Claude Code / Codex;
 - `workerRelay.dispatchToWorker` for local Cursor/Claude CLI.
 
 This single hook covers ordinary steering, plan implementation, approval
@@ -289,7 +289,7 @@ This phase improves human handoffs even before memory is sent to agents.
 ### Phase 2 — read context for every runtime
 
 - Implement deterministic context assembly, budgets, caching, and receipts.
-- Inject the identical context envelope into SDK, E2B, and worker prompts.
+- Inject the identical context envelope into SDK, Blaxel, and worker prompts.
 - Show memory version and included-entry count per run.
 - Test exact prompt assembly for text, image, local worker, Cursor SDK, and
   Claude sandbox paths.

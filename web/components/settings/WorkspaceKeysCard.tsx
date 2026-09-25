@@ -5,12 +5,16 @@ import { KeyRound } from "lucide-react";
 import {
   clearAnthropicByokKey,
   clearByokKey,
+  clearOpenaiByokKey,
   clearOrgAnthropicKey,
   clearOrgCursorKey,
+  clearOrgOpenaiKey,
   setAnthropicByokKey,
   setByokKey,
+  setOpenaiByokKey,
   setOrgAnthropicKey,
   setOrgCursorKey,
+  setOrgOpenaiKey,
   type WorkspaceKeyInfo,
 } from "../../lib/api";
 
@@ -61,6 +65,18 @@ export default function WorkspaceKeysCard({
           configured: result.anthropicKeyConfigured,
           hint: result.anthropicKeyHint,
         });
+      } else if (key.id === "user-openai") {
+        const result = await setOpenaiByokKey(value);
+        updateKey(key.id, {
+          configured: result.userOpenaiByokConfigured,
+          hint: result.userOpenaiByokHint,
+        });
+      } else if (key.id === "org-openai" && orgId) {
+        const result = await setOrgOpenaiKey(orgId, value);
+        updateKey(key.id, {
+          configured: result.openaiKeyConfigured,
+          hint: result.openaiKeyHint,
+        });
       }
       setDrafts((prev) => ({ ...prev, [key.id]: "" }));
     } catch (err) {
@@ -77,9 +93,12 @@ export default function WorkspaceKeysCard({
     try {
       if (key.id === "user-cursor") await clearByokKey();
       else if (key.id === "user-anthropic") await clearAnthropicByokKey();
+      else if (key.id === "user-openai") await clearOpenaiByokKey();
       else if (key.id === "org-cursor" && orgId) await clearOrgCursorKey(orgId);
       else if (key.id === "org-anthropic" && orgId) {
         await clearOrgAnthropicKey(orgId);
+      } else if (key.id === "org-openai" && orgId) {
+        await clearOrgOpenaiKey(orgId);
       }
       updateKey(key.id, { configured: false, hint: null });
     } catch (err) {

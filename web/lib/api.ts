@@ -323,12 +323,18 @@ export async function fetchAuthStatus(opts?: { orgId?: string | null }): Promise
   userByokHint: string | null;
   userAnthropicByokConfigured: boolean;
   userAnthropicByokHint: string | null;
+  userOpenaiByokConfigured?: boolean;
+  userOpenaiByokHint?: string | null;
+  blaxelConfigured?: boolean;
+  /** @deprecated Use blaxelConfigured */
   e2bConfigured: boolean;
   canManageServerKey: boolean;
   orgCursorKeyConfigured?: boolean;
   orgCursorKeyHint?: string | null;
   orgAnthropicKeyConfigured?: boolean;
   orgAnthropicKeyHint?: string | null;
+  orgOpenaiKeyConfigured?: boolean;
+  orgOpenaiKeyHint?: string | null;
 }> {
   const params = new URLSearchParams();
   if (opts?.orgId && opts.orgId !== "personal") {
@@ -422,6 +428,33 @@ export async function clearAnthropicByokKey(): Promise<void> {
     headers: await authHeaders(),
   });
   if (!res.ok) throw new Error("Failed to clear Anthropic API key");
+}
+
+export async function setOpenaiByokKey(apiKey: string): Promise<{
+  userOpenaiByokConfigured: boolean;
+  userOpenaiByokHint: string | null;
+}> {
+  const res = await fetch(`${API_BASE}/auth/openai-byok-key`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(await authHeaders()),
+    },
+    body: JSON.stringify({ apiKey }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Failed to save OpenAI API key");
+  }
+  return res.json();
+}
+
+export async function clearOpenaiByokKey(): Promise<void> {
+  const res = await fetch(`${API_BASE}/auth/openai-byok-key`, {
+    method: "DELETE",
+    headers: await authHeaders(),
+  });
+  if (!res.ok) throw new Error("Failed to clear OpenAI API key");
 }
 
 export async function fetchModels(opts: {
@@ -699,8 +732,9 @@ export async function createRoom(data: {
   startingRef?: string;
   autoCreatePR?: boolean;
   apiKey?: string;
-  backend?: "cursor" | "claude-code";
+  backend?: "cursor" | "claude-code" | "codex";
   anthropicApiKey?: string;
+  openaiApiKey?: string;
   orgId?: string;
   controlMode?: "open" | "driver" | "host";
   /** Start the first agent in plan mode (read-only explore/propose). */
@@ -888,6 +922,7 @@ export async function addRoomAgent(
     scopePath?: string;
     modelId?: string;
     anthropicApiKey?: string;
+    openaiApiKey?: string;
     /** Cursor BYOK — reuse/replace the key saved from previous sessions. */
     apiKey?: string;
     planMode?: boolean;
@@ -1323,6 +1358,39 @@ export async function clearOrgAnthropicKey(orgId: string): Promise<void> {
   }
 }
 
+export async function setOrgOpenaiKey(
+  orgId: string,
+  apiKey: string,
+): Promise<{
+  openaiKeyConfigured: boolean;
+  openaiKeyHint: string | null;
+}> {
+  const res = await fetch(`${API_BASE}/orgs/${orgId}/openai-key`, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+      ...(await authHeaders()),
+    },
+    body: JSON.stringify({ apiKey }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Failed to save org OpenAI key");
+  }
+  return res.json();
+}
+
+export async function clearOrgOpenaiKey(orgId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/orgs/${orgId}/openai-key`, {
+    method: "DELETE",
+    headers: await authHeaders(),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Failed to clear org OpenAI key");
+  }
+}
+
 async function parseApiError(res: Response, fallback: string): Promise<string> {
   const err = await res.json().catch(() => ({}));
   return (err as { error?: string }).error || fallback;
@@ -1632,7 +1700,7 @@ export type WorkspaceGithubRepo = {
 
 export type WorkspaceKeyInfo = {
   id: string;
-  provider: "cursor" | "anthropic";
+  provider: "cursor" | "anthropic" | "openai";
   label: string;
   owner: "you" | "team";
   configured: boolean;

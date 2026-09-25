@@ -22,7 +22,7 @@ import {
   type WorkerPromptAttachment,
 } from "../../shared/uploads.js";
 
-const WORKER_PROTOCOL = 4;
+const WORKER_PROTOCOL = 5;
 const MAX_CONCURRENT = Number(process.env.STEER_MAX_CONCURRENT_AGENTS || 4);
 const LOCK_WAIT_MS = 5000;
 /** Match server attachFileDiff — wait for the working tree to flush. */
@@ -103,7 +103,7 @@ interface RunPromptPayload {
   cwd?: string;
   modelId: string;
   sessionId?: string | null;
-  /** `cursor` (default) or `claude-code` */
+  /** `cursor` (default), `claude-code`, or `codex` */
   backend?: string;
   /** Plan vs agent mode for this run. */
   mode?: "agent" | "plan";
@@ -242,7 +242,9 @@ export function startWorker(repoPathOverride?: string): void {
     } = payload;
     const agentId = payload.agentId || "default";
     const backendKind =
-      payload.backend === "claude-code" ? "claude-code" : "cursor";
+      payload.backend === "claude-code" || payload.backend === "codex"
+        ? payload.backend
+        : "cursor";
     const mode = payload.mode === "plan" ? "plan" : "agent";
     const runKey = makeRunKey(roomId, agentId);
     const repoPath = repoPathOverride || payloadCwd || payloadRepoPath;

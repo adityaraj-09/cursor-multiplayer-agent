@@ -48,6 +48,11 @@ import {
   CLAUDE_MODELS,
   DEFAULT_CLAUDE_MODEL,
 } from "../../../shared/claudeModels";
+import {
+  CODEX_MODELS,
+  DEFAULT_CODEX_MODEL,
+} from "../../../shared/codexModels";
+import type { AgentBackendKind } from "../../../shared/backends/types";
 import { parseAutoMemoryMode, type AutoMemoryMode } from "../../../shared/roomContext";
 import {
   canRequestDrive,
@@ -252,7 +257,11 @@ export default function RoomProvider({
   const selectedBackend = selectedAgent?.backend || "cursor";
   const selectedModelId =
     selectedAgent?.modelId ||
-    (selectedBackend === "claude-code" ? DEFAULT_CLAUDE_MODEL : modelId);
+    (selectedBackend === "claude-code"
+      ? DEFAULT_CLAUDE_MODEL
+      : selectedBackend === "codex"
+        ? DEFAULT_CODEX_MODEL
+        : modelId);
   const modelsCacheKey = `room:${roomId}:agent:${selectedAgent?.id || "default"}:${selectedBackend}`;
   const selectedStatus = resolveAgentRunStatus(selectedAgent, statusByAgent);
   const selectedDiff =
@@ -480,6 +489,14 @@ export default function RoomProvider({
       });
       return () => cancelAnimationFrame(frame);
     }
+    if (selectedBackend === "codex") {
+      setCachedModels(modelsCacheKey, CODEX_MODELS);
+      const frame = requestAnimationFrame(() => {
+        setModels(CODEX_MODELS);
+        setModelError("");
+      });
+      return () => cancelAnimationFrame(frame);
+    }
 
     const cached = getCachedModels(modelsCacheKey);
     const initialModels = cached?.length ? cached : FALLBACK_MODELS;
@@ -666,10 +683,11 @@ export default function RoomProvider({
   const handleAddAgent = useCallback(
     async (data: {
       label: string;
-      backend: "cursor" | "claude-code";
+      backend: AgentBackendKind;
       scopePath?: string;
       modelId?: string;
       anthropicApiKey?: string;
+      openaiApiKey?: string;
       apiKey?: string;
       planMode?: boolean;
       seedContext?: boolean;

@@ -5,7 +5,8 @@ const ITEMS = [
   { label: "Claude Code", icon: Bot },
   { label: "GitHub", icon: GitFork },
   { label: "Cursor Cloud", icon: Cloud },
-  { label: "E2B sandboxes", icon: Zap },
+  { label: "Blaxel sandboxes", icon: Zap },
+  { label: "Codex", icon: Sparkles },
   { label: "Local CLI", icon: TerminalSquare },
 ] as const;
 

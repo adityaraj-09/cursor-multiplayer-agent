@@ -176,10 +176,11 @@ export type RoomContextValue = {
   handleIntegrateAgent: (agentId: string) => Promise<void>;
   handleAddAgent: (data: {
     label: string;
-    backend: "cursor" | "claude-code";
+    backend: import("../../../shared/backends/types").AgentBackendKind;
     scopePath?: string;
     modelId?: string;
     anthropicApiKey?: string;
+    openaiApiKey?: string;
     apiKey?: string;
     planMode?: boolean;
     seedContext?: boolean;

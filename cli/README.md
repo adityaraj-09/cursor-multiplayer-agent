@@ -1,10 +1,10 @@
 # @oblivihon/steer
 
-CLI worker for **Steer** — runs local **Cursor** and **Claude Code** agents on your machine for multiplayer sessions hosted in the web app.
+CLI worker for **Steer** — runs local **Cursor**, **Claude Code**, and **Codex** agents on your machine for multiplayer sessions hosted in the web app.
 
-When you create a **Local** session in Steer, prompts are relayed to this worker, which executes `cursor agent` or `claude` against a folder on your machine.
+When you create a **Local** session in Steer, prompts are relayed to this worker, which executes `cursor agent`, `claude`, or `codex` against a folder on your machine.
 
-**Protocol 4** is required to forward chat images/files into the local workspace. Install/update:
+**Protocol 5** is required for Codex. Protocol 4 is required to forward chat images/files into the local workspace. Install/update:
 
 ```bash
 npm i -g @oblivihon/steer@latest
@@ -15,6 +15,7 @@ npm i -g @oblivihon/steer@latest
 - Node.js 18+
 - [Cursor CLI](https://cursor.com) on your `PATH` (`cursor` command) for Cursor agents
 - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) (`claude`) for Claude Code agents
+- [Codex CLI](https://github.com/openai/codex) (`codex`) for Codex agents
 - A Steer account (sign in on the web app)
 
 ## Install

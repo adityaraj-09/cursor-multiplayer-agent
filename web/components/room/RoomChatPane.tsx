@@ -694,7 +694,8 @@ export default function RoomChatPane() {
           {runtime === "local" &&
             roomInfo?.authMode === "cli" &&
             roomInfo.repoPath &&
-            selectedBackend !== "claude-code" && (
+            selectedBackend !== "claude-code" &&
+            selectedBackend !== "codex" && (
               <div className="px-2 pt-2 sm:px-3">
                 <CursorSessionPicker
                   roomId={roomId}
@@ -714,11 +715,13 @@ export default function RoomChatPane() {
               </div>
             )}
           {runtime === "local" &&
-            selectedBackend === "claude-code" &&
+            (selectedBackend === "claude-code" ||
+              selectedBackend === "codex") &&
             selectedAgent?.sessionId && (
               <p className="px-3 pt-2 text-[10px] text-[#6e6e6e]">
-                Claude Code resumes session {selectedAgent.sessionId.slice(0, 12)}…
-                automatically on the next message.
+                {selectedBackend === "codex" ? "Codex" : "Claude Code"} resumes
+                session {selectedAgent.sessionId.slice(0, 12)}… automatically on
+                the next message.
               </p>
             )}
           {steerComposer(false)}

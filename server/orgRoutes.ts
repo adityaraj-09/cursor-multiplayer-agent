@@ -7,12 +7,14 @@ import * as db from "./db.js";
 import {
   clearOrgAnthropicKey,
   clearOrgCursorKey,
+  clearOrgOpenaiKey,
   orgAnthropicKeyConfigured,
   orgAnthropicKeyHint,
   orgCursorKeyConfigured,
   orgCursorKeyHint,
   setOrgAnthropicKey,
   setOrgCursorKey,
+  setOrgOpenaiKey,
 } from "./orgKeys.js";
 import {
   canManageOrg,
@@ -599,6 +601,41 @@ router.delete("/:orgId/anthropic-key", requireAuth, (req, res) => {
     requireOrgAdmin(orgId, req.user!.id);
     clearOrgAnthropicKey(orgId);
     res.json({ anthropicKeyConfigured: false, anthropicKeyHint: null });
+  } catch (err) {
+    sendErr(res, err);
+  }
+});
+
+/** PUT /api/orgs/:orgId/openai-key — set shared org OpenAI key */
+router.put("/:orgId/openai-key", requireAuth, (req, res) => {
+  try {
+    const orgId = String(req.params.orgId);
+    requireOrgAdmin(orgId, req.user!.id);
+    if (!encryptionConfigured()) {
+      res.status(400).json({
+        error: "KEY_ENCRYPTION_SECRET is required to store an org key",
+      });
+      return;
+    }
+    const apiKey = String(req.body?.apiKey || "").trim();
+    if (!apiKey) {
+      res.status(400).json({ error: "apiKey is required" });
+      return;
+    }
+    const { hint } = setOrgOpenaiKey(orgId, apiKey);
+    res.json({ openaiKeyConfigured: true, openaiKeyHint: hint });
+  } catch (err) {
+    sendErr(res, err);
+  }
+});
+
+/** DELETE /api/orgs/:orgId/openai-key */
+router.delete("/:orgId/openai-key", requireAuth, (req, res) => {
+  try {
+    const orgId = String(req.params.orgId);
+    requireOrgAdmin(orgId, req.user!.id);
+    clearOrgOpenaiKey(orgId);
+    res.json({ openaiKeyConfigured: false, openaiKeyHint: null });
   } catch (err) {
     sendErr(res, err);
   }

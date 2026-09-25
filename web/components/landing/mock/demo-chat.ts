@@ -55,7 +55,7 @@ export type DemoBoardAgent = {
   label: string;
   running: boolean;
   model: string;
-  backend?: "cursor" | "claude-code";
+  backend?: "cursor" | "claude-code" | "codex";
   integrator?: boolean;
   usageLabel?: string;
 };

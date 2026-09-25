@@ -11,11 +11,13 @@ import {
   Bot,
   BrainCircuit,
   CircleStop,
+  Code2,
   Layers3,
   Plus,
   Radio,
   X,
 } from "lucide-react";
+import { backendShortLabel } from "../../shared/backends/types";
 import type {
   AgentInfo,
   AgentRunStatus,
@@ -248,6 +250,8 @@ export default function AgentTabs({
               <span className="relative flex h-7 w-7 items-center justify-center rounded-lg bg-[#1a1a1a] text-[#a0a0a0] shrink-0 mt-0.5">
                 {agent.backend === "claude-code" ? (
                   <BrainCircuit className="h-3.5 w-3.5" strokeWidth={1.75} />
+                ) : agent.backend === "codex" ? (
+                  <Code2 className="h-3.5 w-3.5" strokeWidth={1.75} />
                 ) : (
                   <Bot className="h-3.5 w-3.5" strokeWidth={1.75} />
                 )}
@@ -289,7 +293,7 @@ export default function AgentTabs({
                 </span>
                 <span className="mt-0.5 flex items-center gap-1.5 min-w-0 text-[10px] text-[#6e6e6e]">
                   <span className="uppercase tracking-wide shrink-0">
-                    {agent.backend === "claude-code" ? "Claude" : "Cursor"}
+                    {backendShortLabel(agent.backend)}
                   </span>
                   <span className="text-[#3c3c3c]">·</span>
                   <span className="truncate" title={agent.modelId}>
@@ -455,6 +459,8 @@ export default function AgentTabs({
               >
                 {agent.backend === "claude-code" ? (
                   <BrainCircuit className="h-3.5 w-3.5" strokeWidth={1.75} />
+                ) : agent.backend === "codex" ? (
+                  <Code2 className="h-3.5 w-3.5" strokeWidth={1.75} />
                 ) : (
                   <Bot className="h-3.5 w-3.5" strokeWidth={1.75} />
                 )}

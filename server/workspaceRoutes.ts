@@ -7,12 +7,18 @@ import {
   userAnthropicByokConfigured,
   userAnthropicByokHint,
 } from "./userAnthropicByok.js";
+import {
+  userOpenaiByokConfigured,
+  userOpenaiByokHint,
+} from "./userOpenaiByok.js";
 import { userByokConfigured, userByokHint } from "./userByok.js";
 import {
   orgAnthropicKeyConfigured,
   orgAnthropicKeyHint,
   orgCursorKeyConfigured,
   orgCursorKeyHint,
+  orgOpenaiKeyConfigured,
+  orgOpenaiKeyHint,
 } from "./orgKeys.js";
 import {
   clearWorkspaceGithub,
@@ -67,7 +73,7 @@ function resolveWorkspace(
 
 export interface WorkspaceKeyInfo {
   id: string;
-  provider: "cursor" | "anthropic";
+  provider: "cursor" | "anthropic" | "openai";
   label: string;
   owner: "you" | "team";
   configured: boolean;
@@ -99,6 +105,15 @@ function listWorkspaceKeys(input: {
       hint: userAnthropicByokHint(input.userId),
       canManage: true,
     },
+    {
+      id: "user-openai",
+      provider: "openai",
+      label: "OpenAI",
+      owner: "you",
+      configured: userOpenaiByokConfigured(input.userId),
+      hint: userOpenaiByokHint(input.userId),
+      canManage: true,
+    },
   ];
   if (!input.orgId) return personal;
   return [
@@ -118,6 +133,15 @@ function listWorkspaceKeys(input: {
       owner: "team",
       configured: orgAnthropicKeyConfigured(input.orgId),
       hint: orgAnthropicKeyHint(input.orgId),
+      canManage: input.canManage,
+    },
+    {
+      id: "org-openai",
+      provider: "openai",
+      label: "Team OpenAI",
+      owner: "team",
+      configured: orgOpenaiKeyConfigured(input.orgId),
+      hint: orgOpenaiKeyHint(input.orgId),
       canManage: input.canManage,
     },
   ];

@@ -11,7 +11,7 @@ const FAQS = [
   },
   {
     q: "Which agents can I run in a room?",
-    a: "Cursor agents (Cursor Cloud, BYOK, or a server key) and Claude Code — either the local CLI or Claude Code cloud via E2B. You can mix both in the same room.",
+    a: "Cursor agents (Cursor Cloud, BYOK, or a server key), plus Claude Code and Codex — either the local CLI or a Blaxel sandbox. You can mix them in the same room.",
   },
   {
     q: "Do I need to install anything?",
@@ -19,7 +19,7 @@ const FAQS = [
   },
   {
     q: "Can I use my own API keys?",
-    a: "Yes. Steer supports BYOK for Cursor and Anthropic — keys are encrypted at rest and used only for your sessions, with an optional shared server key for teams.",
+    a: "Yes. Steer supports BYOK for Cursor, Anthropic, and OpenAI — keys are encrypted at rest and used only for your sessions, with optional shared team keys.",
   },
   {
     q: "How do teammates join a session?",

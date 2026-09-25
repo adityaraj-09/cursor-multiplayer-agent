@@ -47,7 +47,7 @@ export default function RuntimesSection() {
                 Cloud agents
               </h3>
               <p className="mt-3 text-[15px] leading-relaxed text-[#191919]/65 font-light">
-                Cursor Cloud or Claude Code in E2B — point agents at a GitHub repo, stream progress
+                Cursor Cloud, or Claude Code and Codex in Blaxel — point agents at a GitHub repo, stream progress
                 into the room, and keep collaborators in lockstep.
               </p>
             </div>

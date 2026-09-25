@@ -16,6 +16,10 @@ function anthropicSettingKey(orgId: string): string {
   return `org_anthropic_key:${orgId}`;
 }
 
+function openaiSettingKey(orgId: string): string {
+  return `org_openai_key:${orgId}`;
+}
+
 function readOrgKey(setting: string, label: string): string {
   const stored = db.getSetting(setting);
   if (!stored || stored === CLEARED_SENTINEL) return "";
@@ -88,4 +92,29 @@ export function setOrgAnthropicKey(
 
 export function clearOrgAnthropicKey(orgId: string): void {
   db.setSetting(anthropicSettingKey(orgId), CLEARED_SENTINEL);
+}
+
+/** Decrypt the org's shared OpenAI API key, or empty string. */
+export function getOrgOpenaiKey(orgId: string): string {
+  return readOrgKey(openaiSettingKey(orgId), `org OpenAI key for ${orgId}`);
+}
+
+export function orgOpenaiKeyConfigured(orgId: string): boolean {
+  return getOrgOpenaiKey(orgId).length > 0;
+}
+
+export function orgOpenaiKeyHint(orgId: string): string | null {
+  const key = getOrgOpenaiKey(orgId);
+  return key ? maskApiKey(key) : null;
+}
+
+export function setOrgOpenaiKey(
+  orgId: string,
+  apiKey: string,
+): { hint: string } {
+  return writeOrgKey(openaiSettingKey(orgId), apiKey);
+}
+
+export function clearOrgOpenaiKey(orgId: string): void {
+  db.setSetting(openaiSettingKey(orgId), CLEARED_SENTINEL);
 }

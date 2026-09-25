@@ -7,6 +7,7 @@ import { X } from "lucide-react";
 import {
   clearAnthropicByokKey,
   clearByokKey,
+  clearOpenaiByokKey,
   createRoom,
   fetchAuthStatus,
   fetchOnlineWorkers,
@@ -27,13 +28,18 @@ import {
   isClaudeModelId,
 } from "../../../shared/claudeModels";
 import {
+  CODEX_MODELS,
+  DEFAULT_CODEX_MODEL,
+  isCodexModelId,
+} from "../../../shared/codexModels";
+import type { AgentBackendKind } from "../../../shared/backends/types";
+import { isCliSandboxBackend } from "../../../shared/backends/types";
+import {
   readSelectedWorkspace,
   writeSelectedWorkspace,
   type WorkspaceScope,
 } from "../../lib/workspace";
 import { workspaceCode } from "../../lib/useWorkspaceScope";
-
-type AgentBackendKind = "cursor" | "claude-code";
 
 function authLabel(mode: AuthMode, inOrg: boolean): string {
   if (mode === "cli") return "Local login";
@@ -64,6 +70,7 @@ export default function SessionComposeModal({
   const [authMode, setAuthMode] = useState<AuthMode>("cli");
   const [apiKey, setApiKey] = useState("");
   const [anthropicApiKey, setAnthropicApiKey] = useState("");
+  const [openaiApiKey, setOpenaiApiKey] = useState("");
   const [modelId, setModelId] = useState("auto");
   const [serverKeyInput, setServerKeyInput] = useState("");
   const [repoPath, setRepoPath] = useState("");
@@ -83,16 +90,21 @@ export default function SessionComposeModal({
   const [orgAnthropicKeyHint, setOrgAnthropicKeyHint] = useState<string | null>(
     null,
   );
+  const [orgOpenaiKeyConfigured, setOrgOpenaiKeyConfigured] = useState(false);
+  const [orgOpenaiKeyHint, setOrgOpenaiKeyHint] = useState<string | null>(null);
   const [byokAvailable, setByokAvailable] = useState(false);
   const [userByokConfigured, setUserByokConfigured] = useState(false);
   const [userByokHint, setUserByokHint] = useState<string | null>(null);
   const [anthropicConfigured, setAnthropicConfigured] = useState(false);
   const [anthropicHint, setAnthropicHint] = useState<string | null>(null);
-  const [e2bConfigured, setE2bConfigured] = useState(false);
+  const [openaiConfigured, setOpenaiConfigured] = useState(false);
+  const [openaiHint, setOpenaiHint] = useState<string | null>(null);
+  const [blaxelConfigured, setBlaxelConfigured] = useState(false);
   const [canManageServerKey, setCanManageServerKey] = useState(false);
   const [savingServerKey, setSavingServerKey] = useState(false);
   const [clearingByok, setClearingByok] = useState(false);
   const [clearingAnthropic, setClearingAnthropic] = useState(false);
+  const [clearingOpenai, setClearingOpenai] = useState(false);
   const [error, setError] = useState("");
   const [creating, setCreating] = useState(false);
   const [pickingFolder, setPickingFolder] = useState(false);
@@ -103,8 +115,13 @@ export default function SessionComposeModal({
   );
 
   const isClaude = backend === "claude-code";
+  const isCodex = backend === "codex";
+  const isCliSandbox = isCliSandboxBackend(backend);
+  const isCliCloud = isCliSandbox && runtime === "cloud";
+  const isCliLocal = isCliSandbox && runtime === "local";
   const isClaudeCloud = isClaude && runtime === "cloud";
-  const isClaudeLocal = isClaude && runtime === "local";
+  const isCodexCloud = isCodex && runtime === "cloud";
+  const cliLabel = isCodex ? "Codex" : "Claude Code";
   const inOrg = workspace !== "personal";
   const activeOrg = orgs.find((o) => o.id === workspace) || null;
   const teamKeyReady = inOrg
@@ -113,6 +130,9 @@ export default function SessionComposeModal({
   const teamAnthropicReady = inOrg
     ? orgAnthropicKeyConfigured || anthropicConfigured
     : anthropicConfigured;
+  const teamOpenaiReady = inOrg
+    ? orgOpenaiKeyConfigured || openaiConfigured
+    : openaiConfigured;
   const displayWorkspaceName =
     workspace === "personal"
       ? "Personal"
@@ -133,7 +153,11 @@ export default function SessionComposeModal({
         setUserByokHint(s.userByokHint ?? null);
         setAnthropicConfigured(Boolean(s.userAnthropicByokConfigured));
         setAnthropicHint(s.userAnthropicByokHint ?? null);
-        setE2bConfigured(Boolean(s.e2bConfigured));
+        setOpenaiConfigured(Boolean(s.userOpenaiByokConfigured));
+        setOpenaiHint(s.userOpenaiByokHint ?? null);
+        setOrgOpenaiKeyConfigured(Boolean(s.orgOpenaiKeyConfigured));
+        setOrgOpenaiKeyHint(s.orgOpenaiKeyHint ?? null);
+        setBlaxelConfigured(Boolean(s.blaxelConfigured ?? s.e2bConfigured));
         setCanManageServerKey(Boolean(s.canManageServerKey));
       })
       .catch(() => {});
@@ -206,7 +230,13 @@ export default function SessionComposeModal({
     if (next === "claude-code") {
       setModelId(DEFAULT_CLAUDE_MODEL);
       if (runtime === "local") setAuthMode("cli");
-    } else if (modelId !== "auto" && isClaudeModelId(modelId)) {
+    } else if (next === "codex") {
+      setModelId(DEFAULT_CODEX_MODEL);
+      if (runtime === "local") setAuthMode("cli");
+    } else if (
+      modelId !== "auto" &&
+      (isClaudeModelId(modelId) || isCodexModelId(modelId))
+    ) {
       setModelId("auto");
     }
   };
@@ -216,7 +246,7 @@ export default function SessionComposeModal({
     setControlMode(r === "local" ? "driver" : "open");
     setRepos([]);
     setError("");
-    if (backend === "claude-code") {
+    if (isCliSandboxBackend(backend)) {
       if (r === "local") setAuthMode("cli");
       return;
     }
@@ -294,9 +324,33 @@ export default function SessionComposeModal({
     }
   };
 
+  const handleClearOpenai = async () => {
+    if (
+      !window.confirm(
+        "Remove your saved OpenAI API key? You’ll need it again for Codex cloud.",
+      )
+    ) {
+      return;
+    }
+    setClearingOpenai(true);
+    setError("");
+    try {
+      await clearOpenaiByokKey();
+      setOpenaiConfigured(false);
+      setOpenaiHint(null);
+      setOpenaiApiKey("");
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Failed to clear OpenAI key",
+      );
+    } finally {
+      setClearingOpenai(false);
+    }
+  };
+
   useEffect(() => {
     let cancelled = false;
-    if (runtime !== "cloud" || backend === "claude-code") {
+    if (runtime !== "cloud" || isCliSandboxBackend(backend)) {
       setRepos([]);
       return;
     }
@@ -350,24 +404,39 @@ export default function SessionComposeModal({
       return;
     }
 
-    if (isClaudeCloud) {
-      if (!e2bConfigured) {
-        setError("Server is missing E2B_API_KEY — Claude Code cloud cannot start");
-        return;
-      }
-      if (
-        !anthropicApiKey.trim() &&
-        !anthropicConfigured &&
-        !(inOrg && orgAnthropicKeyConfigured)
-      ) {
+    if (isCliCloud) {
+      if (!blaxelConfigured) {
         setError(
-          inOrg
-            ? "Set a shared Anthropic key in Team settings, or paste your key"
-            : "Paste your Anthropic API key for Claude Code",
+          `Server is missing BL_API_KEY / BL_WORKSPACE — ${cliLabel} cloud cannot start`,
         );
         return;
       }
-    } else if (!isClaude) {
+      if (isClaudeCloud) {
+        if (
+          !anthropicApiKey.trim() &&
+          !anthropicConfigured &&
+          !(inOrg && orgAnthropicKeyConfigured)
+        ) {
+          setError(
+            inOrg
+              ? "Set a shared Anthropic key in Team settings, or paste your key"
+              : "Paste your Anthropic API key for Claude Code",
+          );
+          return;
+        }
+      } else if (
+        !openaiApiKey.trim() &&
+        !openaiConfigured &&
+        !(inOrg && orgOpenaiKeyConfigured)
+      ) {
+        setError(
+          inOrg
+            ? "Set a shared OpenAI key in Team settings, or paste your key"
+            : "Paste your OpenAI API key for Codex",
+        );
+        return;
+      }
+    } else if (!isCliSandbox) {
       if (authMode === "byok" && !apiKey.trim() && !userByokConfigured) {
         setError("Paste your Cursor API key for BYOK");
         return;
@@ -390,8 +459,10 @@ export default function SessionComposeModal({
       setError("Select a local repository folder");
       return;
     }
-    if (isClaudeLocal && !workerOnline) {
-      setError("Start your CLI worker first (`steer start`) for local Claude Code");
+    if (isCliLocal && !workerOnline) {
+      setError(
+        `Start your CLI worker first (\`steer start\`) for local ${cliLabel}`,
+      );
       return;
     }
 
@@ -399,9 +470,9 @@ export default function SessionComposeModal({
     setError("");
 
     try {
-      const effectiveAuth: AuthMode = isClaudeLocal
+      const effectiveAuth: AuthMode = isCliLocal
         ? "cli"
-        : isClaudeCloud
+        : isCliCloud
           ? "server"
           : authMode;
 
@@ -415,19 +486,25 @@ export default function SessionComposeModal({
         approvalMode,
         modelId: isClaude
           ? modelId || DEFAULT_CLAUDE_MODEL
-          : modelId || "auto",
+          : isCodex
+            ? modelId || DEFAULT_CODEX_MODEL
+            : modelId || "auto",
         repoPath: runtime === "local" ? repoPath.trim() || undefined : undefined,
         repoUrl: runtime === "cloud" ? repoUrl.trim() : undefined,
         startingRef:
           runtime === "cloud" ? startingRef.trim() || "main" : undefined,
         autoCreatePR: runtime === "cloud" ? autoCreatePR : undefined,
         apiKey:
-          !isClaude && authMode === "byok" && apiKey.trim()
+          !isCliSandbox && authMode === "byok" && apiKey.trim()
             ? apiKey.trim()
             : undefined,
         anthropicApiKey:
           isClaudeCloud && anthropicApiKey.trim()
             ? anthropicApiKey.trim()
+            : undefined,
+        openaiApiKey:
+          isCodexCloud && openaiApiKey.trim()
+            ? openaiApiKey.trim()
             : undefined,
         orgId: inOrg ? workspace : undefined,
       });
@@ -444,10 +521,10 @@ export default function SessionComposeModal({
   const authOptions: AuthMode[] =
     runtime === "local" ? ["cli", "server", "byok"] : ["server", "byok"];
 
-  const subtitle = isClaude
+  const subtitle = isCliSandbox
     ? runtime === "cloud"
-      ? "Claude Code in an E2B sandbox — Anthropic key required."
-      : "Claude Code on your machine via the Steer CLI worker."
+      ? `${cliLabel} in a Blaxel sandbox — ${isCodex ? "OpenAI" : "Anthropic"} key required.`
+      : `${cliLabel} on your machine via the Steer CLI worker.`
     : "Local uses your Cursor CLI login. Cloud needs a server key or BYOK.";
 
   return (
@@ -541,7 +618,8 @@ export default function SessionComposeModal({
                     onChange={selectBackend}
                     options={[
                       { id: "cursor", label: "Cursor" },
-                      { id: "claude-code", label: "Claude Code" },
+                      { id: "claude-code", label: "Claude" },
+                      { id: "codex", label: "Codex" },
                     ]}
                   />
                 </Field>
@@ -552,11 +630,11 @@ export default function SessionComposeModal({
                     options={[
                       {
                         id: "local",
-                        label: isClaude ? "Local (CLI)" : "Local",
+                        label: isCliSandbox ? "Local (CLI)" : "Local",
                       },
                       {
                         id: "cloud",
-                        label: isClaude ? "Cloud (E2B)" : "Cloud",
+                        label: isCliSandbox ? "Cloud (Blaxel)" : "Cloud",
                       },
                     ]}
                   />
@@ -644,32 +722,36 @@ export default function SessionComposeModal({
                 </Field>
               </div>
 
-              {isClaude && (
+              {isCliSandbox && (
                 <Field label="Model">
                   <select
                     value={modelId}
                     onChange={(e) => setModelId(e.target.value)}
                     className={inputClass}
                   >
-                    {CLAUDE_MODELS.map((m) => (
+                    {(isCodex ? CODEX_MODELS : CLAUDE_MODELS).map((m) => (
                       <option key={m.id} value={m.id}>
                         {m.displayName}
                       </option>
                     ))}
                   </select>
                   <p className="text-[11px] text-[#6e6e6e] mt-1.5">
-                    {CLAUDE_MODELS.find((m) => m.id === modelId)?.description}
+                    {(isCodex ? CODEX_MODELS : CLAUDE_MODELS).find(
+                      (m) => m.id === modelId,
+                    )?.description}
                   </p>
                 </Field>
               )}
 
-              {isClaudeLocal && (
+              {isCliLocal && (
                 <Note>
-                  <p className="text-[12px] text-[#e4e4e4]">Local Claude Code</p>
+                  <p className="text-[12px] text-[#e4e4e4]">Local {cliLabel}</p>
                   <p className="text-[11px] text-[#6e6e6e] mt-1">
                     Uses your paired Steer worker and the{" "}
-                    <code className="text-[#a0a0a0]">claude</code> CLI. No
-                    Anthropic key is stored on the server.
+                    <code className="text-[#a0a0a0]">
+                      {isCodex ? "codex" : "claude"}
+                    </code>{" "}
+                    CLI. No provider key is stored on the server.
                   </p>
                   <p
                     className={`text-[11px] mt-1 ${
@@ -690,18 +772,18 @@ export default function SessionComposeModal({
                       Cloud Claude Code
                     </p>
                     <p className="text-[11px] text-[#6e6e6e] mt-1">
-                      Runs in an E2B sandbox. Push/PR needs{" "}
+                      Runs in a Blaxel sandbox. Push/PR needs{" "}
                       <code className="text-[#a0a0a0]">GITHUB_TOKEN</code> on
                       the server.
                     </p>
                     <p
                       className={`text-[11px] mt-1 ${
-                        e2bConfigured ? "text-[#3ecf8e]" : "text-[#f07070]"
+                        blaxelConfigured ? "text-[#3ecf8e]" : "text-[#f07070]"
                       }`}
                     >
-                      {e2bConfigured
-                        ? "E2B configured on server"
-                        : "Server missing E2B_API_KEY"}
+                      {blaxelConfigured
+                        ? "Blaxel configured on server"
+                        : "Server missing BL_API_KEY / BL_WORKSPACE"}
                     </p>
                   </Note>
 
@@ -765,7 +847,87 @@ export default function SessionComposeModal({
                 </div>
               )}
 
-              {!isClaude && (
+              {isCodexCloud && (
+                <div className="space-y-3">
+                  <Note>
+                    <p className="text-[12px] text-[#e4e4e4]">Cloud Codex</p>
+                    <p className="text-[11px] text-[#6e6e6e] mt-1">
+                      Runs in a Blaxel sandbox. Push/PR needs{" "}
+                      <code className="text-[#a0a0a0]">GITHUB_TOKEN</code> on
+                      the server.
+                    </p>
+                    <p
+                      className={`text-[11px] mt-1 ${
+                        blaxelConfigured ? "text-[#3ecf8e]" : "text-[#f07070]"
+                      }`}
+                    >
+                      {blaxelConfigured
+                        ? "Blaxel configured on server"
+                        : "Server missing BL_API_KEY / BL_WORKSPACE"}
+                    </p>
+                  </Note>
+
+                  <Field label="OpenAI API key">
+                    {inOrg &&
+                    orgOpenaiKeyConfigured &&
+                    !openaiApiKey.trim() &&
+                    !openaiConfigured ? (
+                      <p className="text-[11px] text-[#6e6e6e] mb-1.5">
+                        Using team shared OpenAI key {orgOpenaiKeyHint}
+                        {activeOrg ? ` (${activeOrg.name})` : ""}. Configure in{" "}
+                        <Link
+                          href={`/org/${workspace}/settings`}
+                          className="text-[#4d9fff] hover:underline"
+                        >
+                          Team settings
+                        </Link>
+                        .
+                      </p>
+                    ) : openaiConfigured && !openaiApiKey.trim() ? (
+                      <p className="text-[11px] text-[#6e6e6e] mb-1.5">
+                        Using your saved key {openaiHint}. Paste a new key
+                        below only if you want to replace it.
+                      </p>
+                    ) : (
+                      <p className="text-[11px] text-[#6e6e6e] mb-1.5">
+                        {openaiConfigured
+                          ? `Replacing saved key ${openaiHint}.`
+                          : inOrg && !orgOpenaiKeyConfigured
+                            ? "No team OpenAI key yet — paste one or set it in Team settings."
+                            : byokAvailable
+                              ? "Saved to your account (encrypted) for future Codex agents."
+                              : "Paste your OpenAI API key (sk-…)."}
+                      </p>
+                    )}
+                    <div className="flex gap-2">
+                      <input
+                        type="password"
+                        value={openaiApiKey}
+                        onChange={(e) => setOpenaiApiKey(e.target.value)}
+                        placeholder={
+                          teamOpenaiReady
+                            ? "Override with personal key…"
+                            : "sk-…"
+                        }
+                        className={`${inputClass} font-mono flex-1`}
+                        autoComplete="off"
+                      />
+                      {openaiConfigured && (
+                        <button
+                          type="button"
+                          onClick={() => void handleClearOpenai()}
+                          disabled={clearingOpenai}
+                          className="h-9 px-3 rounded-md bg-[#252525] border border-[#2b2b2b] text-[12px] text-[#a0a0a0] hover:text-[#f07070] hover:border-[#3c3c3c] disabled:opacity-40 shrink-0"
+                        >
+                          {clearingOpenai ? "…" : "Clear"}
+                        </button>
+                      )}
+                    </div>
+                  </Field>
+                </div>
+              )}
+
+              {!isCliSandbox && (
                 <Field label="Auth">
                   <div className="flex flex-wrap gap-1.5 mb-2">
                     {authOptions.map((mode) => (

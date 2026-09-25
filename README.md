@@ -39,7 +39,8 @@
 - **pnpm** 9+
 - **Cursor CLI** with `cursor agent` (local Cursor runtime / CLI worker)
 - **Claude Code CLI** (`claude`) when using local Claude Code agents
-- **E2B** account and `E2B_API_KEY` when using Claude Code **cloud**
+- **Codex CLI** (`codex`) when using local Codex agents
+- **Blaxel** workspace (`BL_API_KEY` + `BL_WORKSPACE`) when using Claude Code or Codex **cloud**
 - **Clerk** app for sign-in (`CLERK_SECRET_KEY`, `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`)
 
 ---
@@ -71,8 +72,8 @@ Express API (:3000)                    Next.js (:3001)
 │
 ├─ RoomManager
 │   ├─ SdkAgentSession      Cursor Cloud (BYOK / org key / server key)
-│   ├─ ClaudeSandboxSession Claude Code cloud (E2B + Anthropic BYOK)
-│   ├─ WorkerRelay          Local Cursor + Claude via `steer start`
+│   ├─ CliSandboxSession    Claude Code / Codex cloud (Blaxel + BYOK)
+│   ├─ WorkerRelay          Local Cursor + Claude + Codex via `steer start`
 │   ├─ DiffWatcher          Git diffs for local SDK rooms
 │   └─ SQLite or Postgres   rooms, chat, swarms, issues, keys, orgs
 │
@@ -95,9 +96,11 @@ Create a session from **Sessions → New** (or `/create`, which opens the compos
 | **Cursor** | Local | CLI login, server key, or BYOK | Folder on the machine running `steer start` |
 | **Cursor** | Cloud | Server key or BYOK | GitHub HTTPS URL + branch; optional auto-PR |
 | **Claude Code** | Local | CLI (`claude` on PATH) | Local folder |
-| **Claude Code** | Cloud | Anthropic BYOK (user or org) | GitHub URL; E2B sandbox; push branch / optional PR |
+| **Claude Code** | Cloud | Anthropic BYOK (user or org) | GitHub URL; Blaxel sandbox; push branch / optional PR |
+| **Codex** | Local | CLI (`codex` on PATH) | Local folder |
+| **Codex** | Cloud | OpenAI BYOK (user or org) | GitHub URL; Blaxel sandbox; push branch / optional PR |
 
-Cloud Claude requires `E2B_API_KEY` on the server. Clone/push/PR use `GITHUB_TOKEN` / `GH_TOKEN` and/or the user’s **Settings → GitHub** connection.
+Cloud Claude Code and Codex require `BL_API_KEY` and `BL_WORKSPACE` on the server. Clone/push/PR use `GITHUB_TOKEN` / `GH_TOKEN` and/or the user’s **Settings → GitHub** connection.
 
 ### Collaboration
 
@@ -238,12 +241,12 @@ Otherwise: **request_phase_change** to build (if repo attached), **request_human
 
 - **Clerk** — Web sign-in; user id drives ownership and org membership.
 - **Personal workspace** — Your sessions, issues, and swarms.
-- **Organizations** — Create/join teams, domain join, invites, owner transfer, shared **Cursor** and **Anthropic** keys (`/api/orgs/...`).
-- **BYOK** — Per-user Cursor and Anthropic keys (encrypted with `KEY_ENCRYPTION_SECRET`).
+- **Organizations** — Create/join teams, domain join, invites, owner transfer, shared **Cursor**, **Anthropic**, and **OpenAI** keys (`/api/orgs/...`).
+- **BYOK** — Per-user Cursor, Anthropic, and OpenAI keys (encrypted with `KEY_ENCRYPTION_SECRET`).
 - **Server key** — `CURSOR_API_KEY` env and/or admin “pick up” server key (`ADMIN_USER_IDS`).
 - **GitHub** — OAuth in Settings for repo picker and cloud clone/push (workspace-scoped).
 
-**Auth status** — `GET /api/auth/status` exposes configured providers, BYOK flags, E2B, Sarvam, models, etc.
+**Auth status** — `GET /api/auth/status` exposes configured providers, BYOK flags, Blaxel, Sarvam, models, etc.
 
 ---
 
@@ -277,7 +280,7 @@ Used for invites, driver changes, run finished, org events, and swarm budget war
 
 ## CLI worker (local agents)
 
-Protocol **3+** is required for Claude Code and multi-agent file locks.
+Protocol **5+** is required for Codex. Protocol **3+** covers Claude Code and multi-agent file locks.
 
 ```bash
 npm i -g @oblivihon/steer
@@ -285,8 +288,9 @@ npm i -g @oblivihon/steer
 steer login    # server URL + pairing code
 steer start    # worker stays online for your account
 
-# Claude Code local also needs the Anthropic CLI on PATH:
+# Claude Code / Codex local also need their CLIs on PATH:
 # npm i -g @anthropic-ai/claude-code
+# npm i -g @openai/codex
 ```
 
 Point `steer login` at your **API** URL in production (e.g. Render), not the Next.js host.
@@ -326,7 +330,9 @@ Copy [`.env.example`](.env.example) to `.env`. Web app vars live under `web/` as
 |----------|-------------|
 | `CURSOR_API_KEY` | Shared server key for Cursor Cloud |
 | `ANTHROPIC_API_KEY` | Optional fallback for Claude Code cloud (prefer BYOK) |
-| `E2B_API_KEY` | Required for Claude Code cloud sandboxes |
+| `OPENAI_API_KEY` / `CODEX_API_KEY` | Optional fallback for Codex cloud (prefer BYOK) |
+| `BL_API_KEY` | Required for Claude Code / Codex cloud sandboxes |
+| `BL_WORKSPACE` | Required Blaxel workspace slug |
 | `GITHUB_TOKEN` / `GH_TOKEN` | Clone/push/PR for cloud agents |
 
 ### Issues and uploads
