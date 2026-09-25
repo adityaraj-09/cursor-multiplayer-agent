@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Box, Bot, Boxes, X } from "lucide-react";
+import { Bot, X } from "lucide-react";
 import Markdown from "../Markdown";
 import {
   fetchSwarmAgentMessages,
@@ -10,7 +10,6 @@ import {
   type SwarmTaskInfo,
 } from "../../lib/api";
 import { ROLE_META, formatUsd, relativeTime } from "./swarmUi";
-import SwarmVisualizer from "./SwarmVisualizer";
 
 function AgentCard({
   agent,
@@ -99,7 +98,7 @@ function TranscriptItem({ message }: { message: SwarmMessageInfo }) {
   );
 }
 
-function AgentDrawer({
+export function AgentDrawer({
   swarmId,
   agent,
   onClose,
@@ -217,76 +216,27 @@ export default function SwarmAgents({
   agents,
   tasks,
   readOnly = false,
-  defaultView = "cards",
 }: {
   swarmId: string;
   agents: SwarmAgentInfo[];
   tasks: SwarmTaskInfo[];
   readOnly?: boolean;
-  defaultView?: "cards" | "scene";
 }) {
   const [openId, setOpenId] = useState<string | null>(null);
-  const [showRetired, setShowRetired] = useState(false);
-  const [view, setView] = useState<"cards" | "scene">(defaultView);
-  const retired = agents.filter((a) => a.status === "retired").length;
-  const visible = agents.filter((a) => showRetired || a.status !== "retired");
   const open = agents.find((a) => a.id === openId) || null;
 
   return (
     <div>
-      <div className="mb-3 flex flex-wrap items-center gap-2">
-        <div className="inline-flex rounded-lg border border-[#2b2b2b] bg-[#171717] p-0.5">
-          <button
-            type="button"
-            onClick={() => setView("cards")}
-            className={`inline-flex h-7 items-center gap-1.5 rounded-md px-2.5 text-[11px] ${
-              view === "cards" ? "bg-[#252525] text-[#e4e4e4]" : "text-[#6e6e6e] hover:text-[#e4e4e4]"
-            }`}
-          >
-            <Boxes className="h-3 w-3" strokeWidth={1.75} />
-            Cards
-          </button>
-          <button
-            type="button"
-            onClick={() => setView("scene")}
-            className={`inline-flex h-7 items-center gap-1.5 rounded-md px-2.5 text-[11px] ${
-              view === "scene" ? "bg-[#252525] text-[#e4e4e4]" : "text-[#6e6e6e] hover:text-[#e4e4e4]"
-            }`}
-          >
-            <Box className="h-3 w-3" strokeWidth={1.75} />
-            3D
-          </button>
-        </div>
-        {retired > 0 && (
-          <button
-            type="button"
-            onClick={() => setShowRetired((v) => !v)}
-            className="text-[11px] text-[#6e6e6e] hover:text-[#e4e4e4]"
-          >
-            {showRetired ? "Hide" : "Show"} {retired} retired agent{retired === 1 ? "" : "s"}
-          </button>
-        )}
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+        {agents.map((agent) => (
+          <AgentCard
+            key={agent.id}
+            agent={agent}
+            task={tasks.find((t) => t.id === agent.currentTaskId)}
+            onOpen={() => setOpenId(agent.id)}
+          />
+        ))}
       </div>
-      {view === "scene" ? (
-        <SwarmVisualizer
-          agents={agents}
-          tasks={tasks}
-          selectedId={openId}
-          onSelect={setOpenId}
-          showRetired={showRetired}
-        />
-      ) : (
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-          {visible.map((agent) => (
-            <AgentCard
-              key={agent.id}
-              agent={agent}
-              task={tasks.find((t) => t.id === agent.currentTaskId)}
-              onOpen={() => setOpenId(agent.id)}
-            />
-          ))}
-        </div>
-      )}
       {open && !readOnly && <AgentDrawer swarmId={swarmId} agent={open} onClose={() => setOpenId(null)} />}
     </div>
   );
