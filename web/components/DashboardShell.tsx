@@ -9,6 +9,8 @@ import {
   Layers3,
   Menu,
   Network,
+  PanelLeft,
+  PanelLeftClose,
   Plus,
   Settings2,
   Terminal,
@@ -18,6 +20,8 @@ import {
 import UserMenu from "./UserMenu";
 import type { OrgInfo } from "../lib/api";
 import type { WorkspaceScope } from "../lib/workspace";
+
+const SIDEBAR_KEY = "steer.sidebarCollapsed";
 
 export default function DashboardShell({
   children,
@@ -40,6 +44,18 @@ export default function DashboardShell({
 }) {
   const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
+  const [collapseReady, setCollapseReady] = useState(false);
+
+  useEffect(() => {
+    setCollapsed(window.localStorage.getItem(SIDEBAR_KEY) === "1");
+    setCollapseReady(true);
+  }, []);
+
+  useEffect(() => {
+    if (!collapseReady) return;
+    window.localStorage.setItem(SIDEBAR_KEY, collapsed ? "1" : "0");
+  }, [collapsed, collapseReady]);
 
   useEffect(() => {
     setMobileOpen(false);
@@ -54,20 +70,27 @@ export default function DashboardShell({
     return () => window.removeEventListener("keydown", onKey);
   }, [mobileOpen]);
 
-  const sidebar = (
+  const sidebar = (compact: boolean) => (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex h-14 shrink-0 items-center gap-2.5 px-4">
-        <div className="flex h-6 w-6 items-center justify-center rounded-[5px] bg-[#e4e4e4] shrink-0">
+      <div className={`flex h-14 shrink-0 items-center ${compact ? "justify-center px-1" : "gap-2.5 px-3"}`}>
+        <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-[5px] bg-[#e4e4e4]">
           <span className="text-[11px] font-semibold text-[#141414]">S</span>
         </div>
-        <span className="text-[14px] font-medium text-[#e4e4e4] flex-1">
-          Steer
-        </span>
+        {!compact && <span className="min-w-0 flex-1 text-[14px] font-medium text-[#e4e4e4]">Steer</span>}
+        <button
+          type="button"
+          onClick={() => (mobileOpen ? setMobileOpen(false) : setCollapsed((v) => !v))}
+          className="hidden h-8 w-8 shrink-0 items-center justify-center rounded-md text-[#6e6e6e] hover:text-[#e4e4e4] lg:inline-flex"
+          aria-label={compact ? "Expand sidebar" : "Collapse sidebar"}
+          title={compact ? "Expand sidebar" : "Collapse sidebar"}
+        >
+          {compact ? <PanelLeft className="h-4 w-4" strokeWidth={1.75} /> : <PanelLeftClose className="h-4 w-4" strokeWidth={1.75} />}
+        </button>
         {mobileOpen && (
           <button
             type="button"
             onClick={() => setMobileOpen(false)}
-            className="lg:hidden inline-flex h-8 w-8 items-center justify-center rounded-md text-[#a0a0a0] hover:text-[#e4e4e4]"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[#a0a0a0] hover:text-[#e4e4e4] lg:hidden"
             aria-label="Close sidebar"
           >
             <X className="h-4 w-4" strokeWidth={1.75} />
@@ -75,14 +98,15 @@ export default function DashboardShell({
         )}
       </div>
 
-      <nav className="px-3 space-y-0.5">
-        <NavItem href="/dashboard" active={pathname === "/dashboard"} icon={Layers3}>
+      <nav className={`space-y-0.5 ${compact ? "px-1.5" : "px-3"}`}>
+        <NavItem href="/dashboard" active={pathname === "/dashboard"} icon={Layers3} compact={compact}>
           Sessions
         </NavItem>
         <NavItem
           href="/issues"
           active={pathname === "/issues" || pathname.startsWith("/issues/")}
           icon={CircleDot}
+          compact={compact}
         >
           Issues
         </NavItem>
@@ -90,88 +114,81 @@ export default function DashboardShell({
           href="/swarms"
           active={pathname === "/swarms" || pathname.startsWith("/swarms/")}
           icon={Network}
+          compact={compact}
         >
           Swarms
         </NavItem>
-        <NavItem href="/board" active={pathname === "/board"} icon={LayoutGrid}>
+        <NavItem href="/board" active={pathname === "/board"} icon={LayoutGrid} compact={compact}>
           Board
         </NavItem>
-        <NavItem
-          href="/cli-pair"
-          active={pathname.startsWith("/cli-pair")}
-          icon={Terminal}
-        >
+        <NavItem href="/cli-pair" active={pathname.startsWith("/cli-pair")} icon={Terminal} compact={compact}>
           Pair CLI
         </NavItem>
         <NavItem
           href="/settings"
-          active={
-            pathname.startsWith("/settings") ||
-            (pathname.includes("/org/") && pathname.endsWith("/settings"))
-          }
+          active={pathname.startsWith("/settings") || (pathname.includes("/org/") && pathname.endsWith("/settings"))}
           icon={Settings2}
+          compact={compact}
         >
           Settings
         </NavItem>
-        <NavItem
-          href="/profile"
-          active={pathname.startsWith("/profile")}
-          icon={UserRound}
-        >
+        <NavItem href="/profile" active={pathname.startsWith("/profile")} icon={UserRound} compact={compact}>
           Profile
         </NavItem>
       </nav>
 
-      <div className="mt-6 px-3 min-h-0 flex-1 flex flex-col">
-        <p className="px-2 mb-1.5 text-[10px] font-medium uppercase tracking-wide text-[#6e6e6e]">
-          Workspace
-        </p>
-        <div className="min-h-0 flex-1 overflow-y-auto space-y-0.5 pr-0.5">
+      <div className={`mt-6 min-h-0 flex-1 flex flex-col ${compact ? "px-1.5" : "px-3"}`}>
+        {!compact && (
+          <p className="mb-1.5 px-2 text-[10px] font-medium uppercase tracking-wide text-[#6e6e6e]">Workspace</p>
+        )}
+        <div className="min-h-0 flex-1 space-y-0.5 overflow-y-auto pr-0.5">
           <WorkspaceButton
             active={scope === "personal"}
             onClick={() => onSelectScope("personal")}
-          >
-            Personal
-          </WorkspaceButton>
+            label="Personal"
+            compact={compact}
+          />
           {orgs.map((org) => (
             <WorkspaceButton
               key={org.id}
               active={scope === org.id}
               onClick={() => onSelectScope(org.id)}
-            >
-              {org.name}
-            </WorkspaceButton>
+              label={org.name}
+              compact={compact}
+            />
           ))}
         </div>
         <button
           type="button"
           onClick={onNewTeam}
-          className={`mt-1 flex h-8 w-full items-center gap-2 rounded-md px-2 text-[12px] transition-colors ${
-            creatingTeam
-              ? "bg-[#252525] text-[#e4e4e4]"
-              : "text-[#6e6e6e] hover:bg-[#1e1e1e] hover:text-[#e4e4e4]"
-          }`}
+          title="New team"
+          className={`mt-1 flex h-8 items-center rounded-md text-[12px] transition-colors ${
+            compact ? "w-8 justify-center px-0" : "w-full gap-2 px-2"
+          } ${creatingTeam ? "bg-[#252525] text-[#e4e4e4]" : "text-[#6e6e6e] hover:bg-[#1e1e1e] hover:text-[#e4e4e4]"}`}
         >
           <Plus className="h-3.5 w-3.5" strokeWidth={1.75} />
-          New team
+          {!compact && "New team"}
         </button>
       </div>
 
-      <div className="shrink-0 border-t border-[#2b2b2b] p-3">
+      <div className={`shrink-0 border-t border-[#2b2b2b] ${compact ? "p-1.5" : "p-3"}`}>
         <Link
           href={createHref}
-          className="mb-3 flex h-9 items-center justify-center rounded-md bg-[#e4e4e4] text-[13px] font-medium text-[#141414] hover:bg-white transition-colors"
+          title="New session"
+          className={`mb-3 flex items-center justify-center rounded-md bg-[#e4e4e4] font-medium text-[#141414] transition-colors hover:bg-white ${
+            compact ? "h-8 w-8 text-[16px]" : "h-9 text-[13px]"
+          }`}
         >
-          New session
+          {compact ? <Plus className="h-4 w-4" strokeWidth={2} /> : "New session"}
         </Link>
-        <div className="flex items-center gap-2.5 px-0.5">
+        <div className={`flex items-center ${compact ? "justify-center" : "gap-2.5 px-0.5"}`}>
           <UserMenu />
-          <div className="min-w-0">
-            <p className="truncate text-[12px] text-[#e4e4e4]">
-              {userName || "Account"}
-            </p>
-            <p className="truncate text-[11px] text-[#6e6e6e]">Signed in</p>
-          </div>
+          {!compact && (
+            <div className="min-w-0">
+              <p className="truncate text-[12px] text-[#e4e4e4]">{userName || "Account"}</p>
+              <p className="truncate text-[11px] text-[#6e6e6e]">Signed in</p>
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -179,8 +196,12 @@ export default function DashboardShell({
 
   return (
     <div className="min-h-screen bg-[#141414] text-[#e4e4e4]">
-      <aside className="fixed inset-y-0 left-0 z-30 hidden w-[240px] border-r border-[#2b2b2b] bg-[#171717] lg:block">
-        {sidebar}
+      <aside
+        className={`fixed inset-y-0 left-0 z-30 hidden border-r border-[#2b2b2b] bg-[#171717] transition-[width] duration-200 lg:block ${
+          collapsed ? "w-16" : "w-[240px]"
+        }`}
+      >
+        {sidebar(collapsed)}
       </aside>
 
       {mobileOpen && (
@@ -192,14 +213,18 @@ export default function DashboardShell({
             onClick={() => setMobileOpen(false)}
           />
           <aside className="relative h-full w-[min(280px,86vw)] border-r border-[#2b2b2b] bg-[#171717] shadow-2xl">
-            {sidebar}
+            {sidebar(false)}
           </aside>
         </div>
       )}
 
-      <div className="lg:pl-[240px] min-h-screen flex flex-col">
-        <header className="sticky top-0 z-20 flex h-14 shrink-0 items-center justify-between gap-3 border-b border-[#2b2b2b] bg-[#141414]/95 px-3 sm:px-5 backdrop-blur lg:hidden">
-          <div className="flex items-center gap-2 min-w-0">
+      <div
+        className={`flex min-h-screen flex-col transition-[padding] duration-200 ${
+          collapsed ? "lg:pl-16" : "lg:pl-[240px]"
+        }`}
+      >
+        <header className="sticky top-0 z-20 flex h-14 shrink-0 items-center justify-between gap-3 border-b border-[#2b2b2b] bg-[#141414]/95 px-3 backdrop-blur sm:px-5 lg:hidden">
+          <div className="flex min-w-0 items-center gap-2">
             <button
               type="button"
               onClick={() => setMobileOpen(true)}
@@ -208,16 +233,16 @@ export default function DashboardShell({
             >
               <Menu className="h-4 w-4" strokeWidth={1.75} />
             </button>
-            <span className="text-[14px] font-medium truncate">Steer</span>
+            <span className="truncate text-[14px] font-medium">Steer</span>
           </div>
           <Link
             href={createHref}
-            className="h-8 px-3 rounded-md bg-[#e4e4e4] text-[#141414] text-[12px] font-medium hover:bg-white inline-flex items-center"
+            className="inline-flex h-8 items-center rounded-md bg-[#e4e4e4] px-3 text-[12px] font-medium text-[#141414] hover:bg-white"
           >
             New
           </Link>
         </header>
-        <div className="flex-1 min-w-0">{children}</div>
+        <div className="min-w-0 flex-1">{children}</div>
       </div>
     </div>
   );
@@ -227,24 +252,25 @@ function NavItem({
   href,
   active,
   icon: Icon,
+  compact,
   children,
 }: {
   href: string;
   active: boolean;
   icon: typeof LayoutGrid;
+  compact: boolean;
   children: ReactNode;
 }) {
   return (
     <Link
       href={href}
-      className={`flex h-8 items-center gap-2.5 rounded-md px-2 text-[13px] transition-colors ${
-        active
-          ? "bg-[#252525] text-[#e4e4e4]"
-          : "text-[#a0a0a0] hover:bg-[#1e1e1e] hover:text-[#e4e4e4]"
-      }`}
+      title={typeof children === "string" ? children : undefined}
+      className={`flex h-8 items-center rounded-md text-[13px] transition-colors ${
+        compact ? "w-8 justify-center px-0" : "gap-2.5 px-2"
+      } ${active ? "bg-[#252525] text-[#e4e4e4]" : "text-[#a0a0a0] hover:bg-[#1e1e1e] hover:text-[#e4e4e4]"}`}
     >
       <Icon className="h-3.5 w-3.5 shrink-0" strokeWidth={1.75} />
-      {children}
+      {!compact && children}
     </Link>
   );
 }
@@ -252,23 +278,24 @@ function NavItem({
 function WorkspaceButton({
   active,
   onClick,
-  children,
+  label,
+  compact,
 }: {
   active: boolean;
   onClick: () => void;
-  children: ReactNode;
+  label: string;
+  compact: boolean;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className={`flex h-8 w-full items-center rounded-md px-2 text-left text-[12px] truncate transition-colors ${
-        active
-          ? "bg-[#17202a] text-[#8ec5ff]"
-          : "text-[#a0a0a0] hover:bg-[#1e1e1e] hover:text-[#e4e4e4]"
-      }`}
+      title={label}
+      className={`flex h-8 items-center rounded-md text-[12px] transition-colors ${
+        compact ? "w-8 justify-center px-0" : "w-full px-2 text-left"
+      } ${active ? "bg-[#17202a] text-[#8ec5ff]" : "text-[#a0a0a0] hover:bg-[#1e1e1e] hover:text-[#e4e4e4]"}`}
     >
-      {children}
+      {compact ? label.slice(0, 1).toUpperCase() : <span className="truncate">{label}</span>}
     </button>
   );
 }

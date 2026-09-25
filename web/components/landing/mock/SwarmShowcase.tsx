@@ -71,14 +71,16 @@ export default function SwarmShowcase() {
   return (
     <div className="flex h-[min(760px,82vh)] min-h-0 flex-col overflow-hidden rounded-[18px] border border-[#2b2b2b] bg-[#141414] text-[#e4e4e4] shadow-[0_40px_120px_rgba(0,0,0,0.55)]">
       <header className="shrink-0 border-b border-[#2b2b2b] px-4 py-4 sm:px-5">
-        <p className="text-[11px] text-[#6e6e6e]">← Swarms</p>
+        {layout !== "scene" && <p className="text-[11px] text-[#6e6e6e]">← Swarms</p>}
         <div className="mt-2 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
-              <StatusPill status={swarm.status} />
+              {layout !== "scene" && <StatusPill status={swarm.status} />}
               <h3 className="text-[18px] font-medium tracking-tight text-[#e4e4e4]">{swarm.title}</h3>
-              <SwarmViewToggle value={layout} onChange={setLayout} />
+              {layout !== "scene" && <SwarmViewToggle value={layout} onChange={setLayout} />}
             </div>
+            {layout !== "scene" && (
+              <>
             <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-[#6e6e6e]">
               <span>Personal</span>
               <ModelChip modelId={swarm.modelId} />
@@ -88,14 +90,21 @@ export default function SwarmShowcase() {
             <div className="mt-3">
               <PhaseStepper swarm={swarm} />
             </div>
+              </>
+            )}
           </div>
+          {layout !== "scene" && (
           <div className="w-full lg:w-72">
             <BudgetMeter spent={swarm.spentUsd} budget={swarm.budgetUsd} />
           </div>
+          )}
         </div>
+        {layout !== "scene" && (
         <div className="mt-4 rounded-xl border border-[#1f3d2e] bg-[#121c16] px-4 py-3 text-[12px] text-[#3ecf8e]">
           Finished — the verifier passed the report.
         </div>
+        )}
+        {layout !== "scene" && (
         <button
           type="button"
           onClick={() => setGoalOpen((open) => !open)}
@@ -106,6 +115,7 @@ export default function SwarmShowcase() {
             {swarm.goal}
           </p>
         </button>
+        )}
       </header>
 
       {layout === "scene" ? (
@@ -117,6 +127,7 @@ export default function SwarmShowcase() {
             onSelect={setVisualAgentId}
             showRetired
             fill
+            onExitScene={() => setLayout("cards")}
           />
         </div>
       ) : (
