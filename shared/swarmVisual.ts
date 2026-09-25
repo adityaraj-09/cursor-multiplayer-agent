@@ -106,6 +106,22 @@ export function agentVisibleInGraph(
   return true;
 }
 
+export function replayCast(
+  agents: SwarmAgentInfo[],
+  opts: { includeRetired?: boolean } = {},
+): SwarmAgentInfo[] {
+  return agents
+    .filter((agent) => agentVisibleInGraph(agent, { includeRetired: opts.includeRetired, asOf: null }))
+    .slice()
+    .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
+}
+
+/** Perlin smootherstep — slow in and out, no linear snap. */
+export function smootherstep(t: number): number {
+  const x = Math.min(1, Math.max(0, t));
+  return x * x * x * (x * (x * 6 - 15) + 10);
+}
+
 function layoutAgents(agents: SwarmAgentInfo[]): Map<string, Vec3> {
   const byRole = new Map<SwarmRole, SwarmAgentInfo[]>();
   for (const role of SWARM_ROLES) byRole.set(role, []);
@@ -170,12 +186,13 @@ export function buildSwarmVisualGraph(input: {
   includeRetired?: boolean;
   asOf?: number | null;
 }): SwarmVisualGraph {
+  const layoutPool = replayCast(input.agents, { includeRetired: input.includeRetired });
   const visible = input.agents
     .filter((agent) => agentVisibleInGraph(agent, input))
     .slice()
     .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
   const visibleIds = new Set(visible.map((a) => a.id));
-  const positions = layoutAgents(visible);
+  const positions = layoutAgents(layoutPool);
   const taskById = new Map(input.tasks.map((t) => [t.id, t]));
 
   const agents: SwarmVisualAgentNode[] = visible.map((agent) => {
