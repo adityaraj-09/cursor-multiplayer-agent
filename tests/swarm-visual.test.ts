@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { SwarmAgentInfo, SwarmTaskInfo } from "../shared/swarm.js";
-import { addVec, buildSwarmVisualGraph, visualStatusFor } from "../shared/swarmVisual.js";
+import {
+  addVec,
+  buildSwarmVisualGraph,
+  replayCast,
+  smootherstep,
+  visualStatusFor,
+} from "../shared/swarmVisual.js";
 
 function agent(partial: Partial<SwarmAgentInfo> & Pick<SwarmAgentInfo, "id" | "role" | "label">): SwarmAgentInfo {
   return {
@@ -166,5 +172,32 @@ describe("swarm visual graph", () => {
     const a = buildSwarmVisualGraph({ agents: [orch, scout, critic], tasks: [survey] });
     const b = buildSwarmVisualGraph({ agents: [orch, scout, critic], tasks: [survey] });
     expect(a.agents.map((n) => [n.id, n.position])).toEqual(b.agents.map((n) => [n.id, n.position]));
+  });
+
+  it("keeps early agent seats when later spawns replay in", () => {
+    const early = buildSwarmVisualGraph({
+      agents: [orch, scout, critic, late],
+      tasks: [survey],
+      includeRetired: true,
+      asOf: 20,
+    });
+    const later = buildSwarmVisualGraph({
+      agents: [orch, scout, critic, late],
+      tasks: [survey],
+      includeRetired: true,
+      asOf: 90,
+    });
+    expect(early.agents.find((a) => a.id === "sa_scout")?.position).toEqual(
+      later.agents.find((a) => a.id === "sa_scout")?.position,
+    );
+    expect(replayCast([late, orch, scout], { includeRetired: true }).map((a) => a.id)).toEqual([
+      "sa_orch",
+      "sa_scout",
+      "sa_late",
+    ]);
+    expect(smootherstep(0)).toBe(0);
+    expect(smootherstep(1)).toBe(1);
+    expect(smootherstep(0.5)).toBeCloseTo(0.5);
+    expect(smootherstep(0.2)).toBeLessThan(0.2);
   });
 });

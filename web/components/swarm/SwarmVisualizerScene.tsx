@@ -9,6 +9,7 @@ import {
   ROLE_HEX,
   ZERO_VEC,
   addVec,
+  smootherstep,
   type SwarmVisualAgentNode,
   type SwarmVisualEdge,
   type SwarmVisualFloor,
@@ -36,6 +37,11 @@ export default function SwarmVisualizerScene({
   workOffset,
   onFloorOffset,
   onWorkOffset,
+  playFocusId = null,
+  revealingId = null,
+  reveal = 1,
+  playing = false,
+  flightMs = 820,
 }: {
   graph: SwarmVisualGraph;
   selectedId: string | null;
@@ -44,9 +50,29 @@ export default function SwarmVisualizerScene({
   workOffset: Vec3;
   onFloorOffset: (role: SwarmRole, next: Vec3) => void;
   onWorkOffset: (next: Vec3) => void;
+  playFocusId?: string | null;
+  revealingId?: string | null;
+  reveal?: number;
+  playing?: boolean;
+  flightMs?: number;
 }) {
   const controls = useRef<ControlsApi | null>(null);
-  const [focus, setFocus] = useState<{ target: Vec3; zoom: number; role?: string } | null>(null);
+  const [clickFocus, setClickFocus] = useState<{ target: Vec3; zoom: number; role?: string } | null>(null);
+
+  const playFocus = useMemo(() => {
+    if (!playFocusId) return null;
+    const agent = graph.agents.find((a) => a.id === playFocusId);
+    if (!agent) return null;
+    const floor = graph.floors.find((f) => f.role === agent.role);
+    return {
+      target: addVec(floor?.center ?? agent.position, floorOffsets[agent.role] ?? ZERO_VEC),
+      zoom: FOCUS_ZOOM,
+      role: agent.role,
+      key: playFocusId,
+    };
+  }, [playFocusId, graph, floorOffsets]);
+
+  const focus = playFocus ?? clickFocus;
 
   const worldOf = (id: string): Vec3 | null => {
     const agent = graph.agents.find((a) => a.id === id);
@@ -63,8 +89,9 @@ export default function SwarmVisualizerScene({
       dpr={[1, 2]}
       gl={{ antialias: true, alpha: false }}
       onPointerMissed={() => {
+        if (playing) return;
         onSelect(null);
-        setFocus(null);
+        setClickFocus(null);
       }}
     >
       <color attach="background" args={["#0b0d12"]} />
@@ -83,7 +110,8 @@ export default function SwarmVisualizerScene({
           onOffset={(next) => onFloorOffset(floor.role, next)}
           onActivate={() => {
             const target = addVec(floor.center, floorOffsets[floor.role] ?? ZERO_VEC);
-            setFocus((prev) =>
+            if (playing) return;
+            setClickFocus((prev) =>
               prev &&
               prev.role === floor.role &&
               Math.hypot(prev.target[0] - target[0], prev.target[1] - target[1], prev.target[2] - target[2]) < 0.35
@@ -101,7 +129,11 @@ export default function SwarmVisualizerScene({
                 key={agent.id}
                 agent={agent}
                 selected={selectedId === agent.id}
-                dim={selectedId != null && selectedId !== agent.id}
+                dim={
+                  (playing && revealingId != null && agent.id !== revealingId) ||
+                  (selectedId != null && selectedId !== agent.id)
+                }
+                enter={revealingId == null || agent.id !== revealingId ? 1 : reveal}
                 onSelect={() => onSelect(agent.id)}
               />
             ))}
@@ -113,7 +145,7 @@ export default function SwarmVisualizerScene({
         onOffset={onWorkOffset}
         onActivate={() => {
           const target = addVec([0, -2.42, 4.35], workOffset);
-          setFocus({ target, zoom: 86, role: "work" });
+          if (!playing) setClickFocus({ target, zoom: 86, role: "work" });
         }}
         controls={controls}
       >
@@ -138,16 +170,22 @@ export default function SwarmVisualizerScene({
             color={edge.type === "spawn" ? "#f0c674" : ROLE_HEX[fromAgent?.role ?? "researcher"]}
             dim={dim}
             fromScale={fromAgent?.scale ?? 1}
+            appear={
+              revealingId && (edge.to === revealingId || edge.from === revealingId)
+                ? reveal
+                : 1
+            }
           />
         );
       })}
 
-      <CameraRig focus={focus} controls={controls} />
+      <CameraRig focus={focus} controls={controls} flightMs={flightMs} locked={playing} />
       <OrbitControls
         ref={controls as never}
         makeDefault
-        enablePan
-        enableZoom
+        enablePan={!playing}
+        enableRotate={!playing}
+        enableZoom={!playing}
         zoomSpeed={1.35}
         minZoom={4}
         maxZoom={280}
@@ -163,44 +201,60 @@ export default function SwarmVisualizerScene({
 function CameraRig({
   focus,
   controls,
+  flightMs,
+  locked,
 }: {
-  focus: { target: Vec3; zoom: number; role?: string } | null;
+  focus: { target: Vec3; zoom: number; role?: string; key?: string } | null;
   controls: { current: ControlsApi | null };
+  flightMs: number;
+  locked?: boolean;
 }) {
   const { camera } = useThree();
-  const last = useRef(focus);
-  const goalTarget = useRef(new THREE.Vector3(...CAMERA_TARGET));
-  const goalZoom = useRef(DEFAULT_ZOOM);
-  const desired = useRef(new THREE.Vector3());
+  const lastKey = useRef<string | null>(null);
+  const fromPos = useRef(new THREE.Vector3());
+  const fromTarget = useRef(new THREE.Vector3());
+  const fromZoom = useRef(DEFAULT_ZOOM);
+  const toPos = useRef(new THREE.Vector3());
+  const toTarget = useRef(new THREE.Vector3());
+  const toZoom = useRef(DEFAULT_ZOOM);
+  const started = useRef(0);
+  const duration = useRef(1);
   const animating = useRef(false);
 
-  if (last.current !== focus) {
-    last.current = focus;
+  const focusKey = focus ? (focus.key ?? `${focus.role}:${focus.target.join(",")}:${focus.zoom}`) : "overview";
+  if (lastKey.current !== focusKey) {
+    lastKey.current = focusKey;
     const next = focus ?? { target: CAMERA_TARGET, zoom: DEFAULT_ZOOM };
-    goalTarget.current.set(next.target[0], next.target[1], next.target[2]);
-    goalZoom.current = next.zoom;
+    const cam = camera as THREE.OrthographicCamera;
+    fromPos.current.copy(camera.position);
+    fromTarget.current.copy(controls.current?.target ?? new THREE.Vector3(...CAMERA_TARGET));
+    fromZoom.current = cam.zoom;
+    toTarget.current.set(next.target[0], next.target[1], next.target[2]);
+    toPos.current.set(next.target[0] + ISO_OFFSET[0], next.target[1] + ISO_OFFSET[1], next.target[2] + ISO_OFFSET[2]);
+    toZoom.current = next.zoom;
+    started.current = performance.now();
+    duration.current = Math.max(280, flightMs);
     animating.current = true;
   }
 
-  useFrame((_, dt) => {
-    if (!animating.current) return;
+  useFrame(() => {
+    if (locked && controls.current) controls.current.enabled = false;
+    if (!animating.current) {
+      if (!locked && controls.current) controls.current.enabled = true;
+      return;
+    }
     if (controls.current) controls.current.enabled = false;
+    const u = smootherstep((performance.now() - started.current) / duration.current);
     const cam = camera as THREE.OrthographicCamera;
-    cam.zoom = THREE.MathUtils.damp(cam.zoom, goalZoom.current, 18, dt);
+    camera.position.lerpVectors(fromPos.current, toPos.current, u);
+    cam.zoom = fromZoom.current + (toZoom.current - fromZoom.current) * u;
     cam.updateProjectionMatrix();
-    desired.current.set(
-      goalTarget.current.x + ISO_OFFSET[0],
-      goalTarget.current.y + ISO_OFFSET[1],
-      goalTarget.current.z + ISO_OFFSET[2],
-    );
-    const k = 1 - Math.exp(-16 * dt);
-    camera.position.lerp(desired.current, k);
-    if (controls.current) controls.current.target.lerp(goalTarget.current, k);
-    const settled =
-      Math.abs(cam.zoom - goalZoom.current) < 0.2 && camera.position.distanceTo(desired.current) < 0.05;
-    if (settled) {
+    if (controls.current) {
+      controls.current.target.lerpVectors(fromTarget.current, toTarget.current, u);
+    }
+    if (u >= 1) {
       animating.current = false;
-      if (controls.current) controls.current.enabled = true;
+      if (!locked && controls.current) controls.current.enabled = true;
     }
   });
   return null;
@@ -280,8 +334,15 @@ function DraggablePlane({
 
 function RoleFloor({ floor, focused }: { floor: SwarmVisualFloor; focused: boolean }) {
   const color = ROLE_HEX[floor.role];
+  const group = useRef<THREE.Group>(null);
+  const appear = useRef(0);
+  useFrame((_, dt) => {
+    appear.current = Math.min(1, appear.current + dt / 1.25);
+    const e = smootherstep(appear.current);
+    if (group.current) group.current.scale.set(0.82 + 0.18 * e, 1, 0.82 + 0.18 * e);
+  });
   return (
-    <group position={floor.center}>
+    <group ref={group} position={floor.center}>
       <mesh position={[0, -0.05, 0]} onPointerOver={() => (document.body.style.cursor = "grab")} onPointerOut={() => (document.body.style.cursor = "auto")}>
         <boxGeometry args={[floor.width, 0.08, floor.depth]} />
         <meshStandardMaterial
@@ -344,6 +405,7 @@ function StringCable({
   color,
   dim,
   fromScale,
+  appear = 1,
 }: {
   from: Vec3;
   to: Vec3;
@@ -351,6 +413,7 @@ function StringCable({
   color: string;
   dim: boolean;
   fromScale: number;
+  appear?: number;
 }) {
   const points = useMemo(() => {
     const start = new THREE.Vector3(from[0], from[1] + 0.86 * fromScale, from[2]);
@@ -366,7 +429,7 @@ function StringCable({
       color={color}
       lineWidth={type === "spawn" ? 1.7 : 1.15}
       transparent
-      opacity={dim ? 0.14 : type === "spawn" ? 0.82 : 0.58}
+      opacity={(dim ? 0.14 : type === "spawn" ? 0.82 : 0.58) * appear}
       dashed={type === "work"}
       dashSize={0.12}
       gapSize={0.08}
@@ -403,34 +466,37 @@ function AgentFigure({
   agent,
   selected,
   dim,
+  enter,
   onSelect,
 }: {
   agent: SwarmVisualAgentNode;
   selected: boolean;
   dim: boolean;
+  enter: number;
   onSelect: () => void;
 }) {
   const group = useRef<THREE.Group>(null);
   const glow = useRef<THREE.Mesh>(null);
-  const appear = useRef(0);
+  const enterRef = useRef(enter);
+  enterRef.current = enter;
   const color = ROLE_HEX[agent.role];
   const dead = agent.visualStatus === "dead" || agent.visualStatus === "error";
   const working = agent.visualStatus === "working";
-  const opacity = dim ? 0.32 : dead ? 0.48 : 1;
+  const opacity = (dim ? 0.32 : dead ? 0.48 : 1) * Math.max(enter, 0.02);
   const scale = agent.scale;
 
-  useFrame(({ clock }, dt) => {
+  useFrame(({ clock }) => {
     const t = clock.getElapsedTime();
-    appear.current = Math.min(1, appear.current + dt * 4.2);
-    const enter = 1 - (1 - appear.current) ** 3;
+    const shown = enterRef.current;
     if (group.current) {
-      group.current.position.y = agent.position[1] + (working ? Math.sin(t * 2.4) * 0.035 : 0) + (1 - enter) * 0.45;
-      group.current.scale.setScalar(scale * (0.2 + 0.8 * enter));
+      group.current.visible = shown > 0.012;
+      group.current.position.y = agent.position[1] + (working ? Math.sin(t * 2.4) * 0.035 : 0) + (1 - shown) * 0.85;
+      group.current.scale.setScalar(scale * (0.06 + 0.94 * shown));
       if (working) group.current.rotation.y = Math.sin(t * 1.1) * 0.08;
     }
     if (glow.current) {
       const mat = glow.current.material as THREE.MeshStandardMaterial;
-      mat.opacity = (working ? 0.2 + Math.sin(t * 3.2) * 0.07 : 0.04) * enter;
+      mat.opacity = (working ? 0.2 + Math.sin(t * 3.2) * 0.07 : 0.04) * shown;
     }
   });
 
