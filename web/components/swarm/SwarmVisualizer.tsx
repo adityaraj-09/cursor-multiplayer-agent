@@ -85,7 +85,7 @@ export default function SwarmVisualizer({
         </button>
       </div>
 
-      <div className="relative h-[560px] w-full">
+      <div className="relative h-[min(70vh,640px)] w-full">
         <SwarmVisualizerScene
           key={resetKey}
           graph={graph}

@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import SwarmBoard from "../../swarm/SwarmBoard";
 import SwarmAgents from "../../swarm/SwarmAgents";
+import SwarmVisualizer from "../../swarm/SwarmVisualizer";
 import {
   SwarmActivity,
   SwarmHypotheses,
@@ -23,7 +24,9 @@ import {
   ModelChip,
   PhaseStepper,
   StatusPill,
+  SwarmViewToggle,
   relativeTime,
+  type SwarmLayout,
 } from "../../swarm/swarmUi";
 import {
   VLLM_AGENTS,
@@ -41,7 +44,9 @@ type Tab = "board" | "agents" | "tasks" | "hypotheses" | "ledger" | "artifacts" 
 
 export default function SwarmShowcase() {
   const [tab, setTab] = useState<Tab>("board");
+  const [layout, setLayout] = useState<SwarmLayout>("cards");
   const [goalOpen, setGoalOpen] = useState(false);
+  const [visualAgentId, setVisualAgentId] = useState<string | null>(null);
   const swarm = VLLM_SWARM;
   const counts = useMemo(
     () => ({
@@ -72,6 +77,7 @@ export default function SwarmShowcase() {
             <div className="flex flex-wrap items-center gap-2">
               <StatusPill status={swarm.status} />
               <h3 className="text-[18px] font-medium tracking-tight text-[#e4e4e4]">{swarm.title}</h3>
+              <SwarmViewToggle value={layout} onChange={setLayout} />
             </div>
             <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-[#6e6e6e]">
               <span>Personal</span>
@@ -102,6 +108,18 @@ export default function SwarmShowcase() {
         </button>
       </header>
 
+      {layout === "scene" ? (
+        <div className="min-h-0 flex-1 overflow-auto px-4 py-4 sm:px-5">
+          <SwarmVisualizer
+            agents={VLLM_AGENTS}
+            tasks={VLLM_TASKS}
+            selectedId={visualAgentId}
+            onSelect={setVisualAgentId}
+            showRetired
+          />
+        </div>
+      ) : (
+      <>
       <div className="flex shrink-0 gap-1 overflow-x-auto border-b border-[#2b2b2b] bg-[#171717] px-3 py-1.5">
         {tabs.map(({ key, label, icon: Icon, count }) => (
           <button
@@ -135,7 +153,6 @@ export default function SwarmShowcase() {
             agents={VLLM_AGENTS}
             tasks={VLLM_TASKS}
             readOnly
-            defaultView="scene"
           />
         )}
         {tab === "tasks" && <SwarmTasks tasks={VLLM_TASKS} agents={VLLM_AGENTS} />}
@@ -150,6 +167,8 @@ export default function SwarmShowcase() {
         {tab === "artifacts" && <DemoArtifactList />}
         {tab === "activity" && <SwarmActivity events={VLLM_EVENTS} agents={VLLM_AGENTS} />}
       </div>
+      </>
+      )}
     </div>
   );
 }

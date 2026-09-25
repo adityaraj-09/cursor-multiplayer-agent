@@ -1,6 +1,6 @@
 "use client";
 
-import { Check } from "lucide-react";
+import { Box, Boxes, Check } from "lucide-react";
 import {
   formatSwarmModelLabel,
   type SwarmInfo,
@@ -20,6 +20,41 @@ export const STATUS_META: Record<SwarmStatus, { label: string; tone: string; dot
   done: { label: "Done", tone: "border-[#1f3d2e] bg-[#142019] text-[#3ecf8e]", dot: "bg-[#3ecf8e]" },
   failed: { label: "Failed", tone: "border-[#3c2b2b] bg-[#1a1414] text-[#f07070]", dot: "bg-[#f07070]" },
 };
+
+export type SwarmLayout = "cards" | "scene";
+
+export function SwarmViewToggle({
+  value,
+  onChange,
+}: {
+  value: SwarmLayout;
+  onChange: (next: SwarmLayout) => void;
+}) {
+  return (
+    <div className="inline-flex rounded-lg border border-[#2b2b2b] bg-[#171717] p-0.5" role="group" aria-label="Swarm view">
+      <button
+        type="button"
+        onClick={() => onChange("cards")}
+        className={`inline-flex h-8 items-center gap-1.5 rounded-md px-3 text-[12px] ${
+          value === "cards" ? "bg-[#252525] text-[#e4e4e4]" : "text-[#6e6e6e] hover:text-[#e4e4e4]"
+        }`}
+      >
+        <Boxes className="h-3.5 w-3.5" strokeWidth={1.75} />
+        Cards
+      </button>
+      <button
+        type="button"
+        onClick={() => onChange("scene")}
+        className={`inline-flex h-8 items-center gap-1.5 rounded-md px-3 text-[12px] ${
+          value === "scene" ? "bg-[#252525] text-[#e4e4e4]" : "text-[#6e6e6e] hover:text-[#e4e4e4]"
+        }`}
+      >
+        <Box className="h-3.5 w-3.5" strokeWidth={1.75} />
+        3D
+      </button>
+    </div>
+  );
+}
 
 export function StatusPill({ status, className = "" }: { status: SwarmStatus; className?: string }) {
   const meta = STATUS_META[status];

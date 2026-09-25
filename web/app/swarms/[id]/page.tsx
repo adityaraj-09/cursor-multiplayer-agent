@@ -22,7 +22,8 @@ import DashboardShell from "../../../components/DashboardShell";
 import Markdown from "../../../components/Markdown";
 import { useAuth } from "../../../components/AuthProvider";
 import SwarmBoard from "../../../components/swarm/SwarmBoard";
-import SwarmAgents from "../../../components/swarm/SwarmAgents";
+import SwarmAgents, { AgentDrawer } from "../../../components/swarm/SwarmAgents";
+import SwarmVisualizer from "../../../components/swarm/SwarmVisualizer";
 import {
   SwarmActivity,
   SwarmArtifacts,
@@ -35,8 +36,10 @@ import {
   ModelChip,
   PhaseStepper,
   StatusPill,
+  SwarmViewToggle,
   formatUsd,
   relativeTime,
+  type SwarmLayout,
 } from "../../../components/swarm/swarmUi";
 import {
   deleteSwarm,
@@ -84,6 +87,8 @@ export default function SwarmDetailPage() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("board");
+  const [layout, setLayout] = useState<SwarmLayout>("cards");
+  const [visualAgentId, setVisualAgentId] = useState<string | null>(null);
   const [goalOpen, setGoalOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [approvalNote, setApprovalNote] = useState("");
@@ -179,6 +184,7 @@ export default function SwarmDetailPage() {
   }
 
   const swarm = snap?.swarm;
+  const visualAgent = snap?.agents.find((a) => a.id === visualAgentId) ?? null;
   const tabs: Array<{ key: Tab; label: string; icon: typeof Bot; count?: number }> = [
     { key: "board", label: "Board", icon: MessagesSquare, count: counts?.posts },
     { key: "agents", label: "Agents", icon: Bot, count: counts?.agents },
@@ -215,6 +221,7 @@ export default function SwarmDetailPage() {
                 <div className="flex flex-wrap items-center gap-2">
                   <StatusPill status={swarm.status} />
                   <h1 className="text-[22px] font-medium tracking-tight text-[#e4e4e4]">{swarm.title}</h1>
+                  <SwarmViewToggle value={layout} onChange={setLayout} />
                 </div>
                 <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-[#6e6e6e]">
                   <span>{workspace.activeOrg?.name || (swarm.orgId ? "Team" : "Personal")}</span>
@@ -410,6 +417,25 @@ export default function SwarmDetailPage() {
               </div>
             )}
 
+            {layout === "scene" ? (
+              <div className="mt-5 pb-10">
+                <SwarmVisualizer
+                  agents={snap.agents}
+                  tasks={snap.tasks}
+                  selectedId={visualAgentId}
+                  onSelect={setVisualAgentId}
+                  showRetired
+                />
+                {visualAgent && (
+                  <AgentDrawer
+                    swarmId={id}
+                    agent={visualAgent}
+                    onClose={() => setVisualAgentId(null)}
+                  />
+                )}
+              </div>
+            ) : (
+            <>
             <section className="mt-5 rounded-xl border border-[#2b2b2b] bg-[#161616] px-4 py-3">
               <button
                 type="button"
@@ -470,6 +496,8 @@ export default function SwarmDetailPage() {
               {tab === "artifacts" && <SwarmArtifacts swarmId={id} artifacts={snap.artifacts} agents={snap.agents} />}
               {tab === "activity" && <SwarmActivity events={snap.events} agents={snap.agents} />}
             </div>
+            </>
+            )}
           </>
         )}
       </main>
