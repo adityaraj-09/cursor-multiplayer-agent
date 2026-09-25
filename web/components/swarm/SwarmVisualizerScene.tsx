@@ -2,7 +2,7 @@
 
 import { useMemo, useRef } from "react";
 import { Canvas, useFrame } from "@react-three/fiber";
-import { Html, OrbitControls, OrthographicCamera } from "@react-three/drei";
+import { Billboard, OrbitControls, Text } from "@react-three/drei";
 import * as THREE from "three";
 import {
   ROLE_HEX,
@@ -13,6 +13,9 @@ import {
   type SwarmVisualWorkNode,
   type Vec3,
 } from "../../../shared/swarmVisual";
+
+const CAMERA_POS: Vec3 = [11, 9, 11];
+const CAMERA_TARGET: Vec3 = [0.2, 1.6, 0.5];
 
 export default function SwarmVisualizerScene({
   graph,
@@ -32,20 +35,24 @@ export default function SwarmVisualizerScene({
 
   return (
     <Canvas
-      dpr={[1, 2]}
+      orthographic
+      camera={{ position: CAMERA_POS, zoom: 26, near: 0.1, far: 200 }}
+      dpr={[1, 1.75]}
       gl={{ antialias: true, alpha: false }}
       onPointerMissed={() => onSelect(null)}
-      style={{ background: "#0b0d12" }}
     >
-      <color attach="background" args={["#0b0d12"]} />
-      <fog attach="fog" args={["#0b0d12", 22, 48]} />
-      <OrthographicCamera makeDefault position={[16, 13, 16]} zoom={38} near={-80} far={80} />
-      <ambientLight intensity={0.42} />
-      <directionalLight position={[10, 16, 8]} intensity={1.15} />
-      <directionalLight position={[-8, 6, -6]} intensity={0.28} color="#8ec5ff" />
-      <pointLight position={[0, 7.2, -3]} intensity={0.7} color="#f0c674" distance={18} />
+      <color attach="background" args={["#10131a"]} />
+      <ambientLight intensity={0.9} />
+      <hemisphereLight args={["#d7e3f5", "#1b1c20", 0.55]} />
+      <directionalLight position={[8, 14, 6]} intensity={1.35} />
+      <directionalLight position={[-6, 5, -4]} intensity={0.4} color="#8ec5ff" />
+      <pointLight position={[0, 6.5, -2.5]} intensity={0.9} color="#f0c674" distance={22} />
 
-      <gridHelper args={[28, 28, "#1b1e26", "#14171d"]} position={[0, -2.7, 0]} />
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -2.75, 0.6]}>
+        <planeGeometry args={[26, 22]} />
+        <meshStandardMaterial color="#151821" roughness={1} />
+      </mesh>
+      <gridHelper args={[26, 26, "#2a3040", "#1c202a"]} position={[0, -2.74, 0.6]} />
 
       {graph.floors.map((floor) => (
         <RoleFloor key={floor.role} floor={floor} />
@@ -57,8 +64,7 @@ export default function SwarmVisualizerScene({
         const to = byId.get(edge.to);
         if (!from || !to) return null;
         const fromAgent = graph.agents.find((a) => a.id === edge.from);
-        const dim =
-          selectedId != null && selectedId !== edge.from && selectedId !== edge.to;
+        const dim = selectedId != null && selectedId !== edge.from && selectedId !== edge.to;
         return (
           <CurveEdge
             key={edge.id}
@@ -89,10 +95,10 @@ export default function SwarmVisualizerScene({
       <OrbitControls
         makeDefault
         enablePan
-        minZoom={22}
-        maxZoom={70}
-        maxPolarAngle={Math.PI / 2.15}
-        target={[0.4, 1.4, 0.6]}
+        minZoom={16}
+        maxZoom={60}
+        maxPolarAngle={Math.PI / 2.2}
+        target={CAMERA_TARGET}
       />
     </Canvas>
   );
@@ -100,43 +106,25 @@ export default function SwarmVisualizerScene({
 
 function RoleFloor({ floor }: { floor: SwarmVisualFloor }) {
   const color = ROLE_HEX[floor.role];
-  const edgeGeo = useMemo(
-    () => new THREE.BoxGeometry(floor.width, 0.1, floor.depth),
-    [floor.width, floor.depth],
-  );
   return (
     <group position={floor.center}>
-      <mesh position={[0, -0.07, 0]} castShadow={false}>
-        <boxGeometry args={[floor.width, 0.1, floor.depth]} />
+      <mesh position={[0, -0.06, 0]}>
+        <boxGeometry args={[floor.width, 0.12, floor.depth]} />
         <meshStandardMaterial
           color={color}
           transparent
-          opacity={0.16}
-          metalness={0.15}
-          roughness={0.55}
+          opacity={0.34}
+          metalness={0.12}
+          roughness={0.5}
           emissive={color}
-          emissiveIntensity={0.08}
+          emissiveIntensity={0.18}
         />
       </mesh>
-      <mesh position={[0, -0.005, 0]} rotation={[-Math.PI / 2, 0, 0]}>
-        <planeGeometry args={[floor.width, floor.depth]} />
-        <meshStandardMaterial
-          color={color}
-          transparent
-          opacity={0.22}
-          metalness={0.05}
-          roughness={0.7}
-        />
-      </mesh>
-      <lineSegments>
-        <edgesGeometry args={[edgeGeo]} />
-        <lineBasicMaterial color={color} transparent opacity={0.55} />
-      </lineSegments>
-      <Html position={[-floor.width / 2 + 0.15, 0.12, floor.depth / 2 + 0.05]} center={false} distanceFactor={10}>
-        <div className="whitespace-nowrap text-[10px] font-medium tracking-wide" style={{ color }}>
+      <Billboard position={[-floor.width / 2 + 0.2, 0.22, floor.depth / 2]}>
+        <Text fontSize={0.18} color={color} anchorX="left" anchorY="middle">
           {floor.label.toUpperCase()}
-        </div>
-      </Html>
+        </Text>
+      </Billboard>
     </group>
   );
 }
@@ -149,14 +137,14 @@ function WorkBoard({ count }: { count: number }) {
   return (
     <group position={[0, -2.42, 4.35]}>
       <mesh>
-        <boxGeometry args={[width, 0.08, depth]} />
-        <meshStandardMaterial color="#9aa4b5" transparent opacity={0.12} roughness={0.7} />
+        <boxGeometry args={[width, 0.1, depth]} />
+        <meshStandardMaterial color="#9aa4b5" transparent opacity={0.22} roughness={0.65} />
       </mesh>
-      <Html position={[-width / 2 + 0.2, 0.12, depth / 2 + 0.04]} distanceFactor={10}>
-        <div className="whitespace-nowrap text-[10px] font-medium tracking-wide text-[#9aa4b5]">
+      <Billboard position={[-width / 2 + 0.15, 0.22, depth / 2]}>
+        <Text fontSize={0.16} color="#9aa4b5" anchorX="left" anchorY="middle">
           SHARED BOARD
-        </div>
-      </Html>
+        </Text>
+      </Billboard>
     </group>
   );
 }
@@ -176,34 +164,25 @@ function CurveEdge({
   dim: boolean;
   fromScale: number;
 }) {
-  const start = useMemo(
-    () => new THREE.Vector3(from[0], from[1] + 0.78 * fromScale, from[2]),
-    [from, fromScale],
-  );
-  const end = useMemo(
-    () => new THREE.Vector3(to[0], to[1] + (type === "work" ? 0.22 : 0.72), to[2]),
-    [to, type],
-  );
-  const mid = useMemo(() => {
-    const lift = type === "spawn" ? 1.15 : 0.55;
-    return new THREE.Vector3(
+  const geometry = useMemo(() => {
+    const start = new THREE.Vector3(from[0], from[1] + 0.82 * fromScale, from[2]);
+    const end = new THREE.Vector3(to[0], to[1] + (type === "work" ? 0.24 : 0.74), to[2]);
+    const mid = new THREE.Vector3(
       (start.x + end.x) / 2,
-      Math.max(start.y, end.y) + lift,
+      Math.max(start.y, end.y) + (type === "spawn" ? 1.05 : 0.5),
       (start.z + end.z) / 2,
     );
-  }, [start, end, type]);
-  const geometry = useMemo(() => {
     const curve = new THREE.QuadraticBezierCurve3(start, mid, end);
-    return new THREE.TubeGeometry(curve, 24, type === "spawn" ? 0.018 : 0.012, 6, false);
-  }, [start, mid, end, type]);
+    return new THREE.TubeGeometry(curve, 28, type === "spawn" ? 0.022 : 0.014, 8, false);
+  }, [from, to, type, fromScale]);
   return (
     <mesh geometry={geometry}>
       <meshStandardMaterial
         color={color}
         emissive={color}
-        emissiveIntensity={dim ? 0.05 : type === "spawn" ? 0.35 : 0.22}
+        emissiveIntensity={dim ? 0.08 : type === "spawn" ? 0.55 : 0.3}
         transparent
-        opacity={dim ? 0.12 : type === "spawn" ? 0.7 : 0.55}
+        opacity={dim ? 0.16 : type === "spawn" ? 0.85 : 0.65}
         depthWrite={false}
       />
     </mesh>
@@ -211,25 +190,26 @@ function CurveEdge({
 }
 
 function WorkChip({ node, active }: { node: SwarmVisualWorkNode; active: boolean }) {
-  const color = "#9aa4b5";
   return (
     <group position={node.position}>
       <mesh>
-        <boxGeometry args={[1.55, 0.16, 0.72]} />
+        <boxGeometry args={[1.55, 0.18, 0.72]} />
         <meshStandardMaterial
-          color={color}
-          emissive={active ? "#8ec5ff" : color}
-          emissiveIntensity={active ? 0.25 : 0.04}
+          color={active ? "#8ec5ff" : "#9aa4b5"}
+          emissive={active ? "#8ec5ff" : "#9aa4b5"}
+          emissiveIntensity={active ? 0.35 : 0.08}
           transparent
-          opacity={active ? 0.35 : 0.18}
+          opacity={active ? 0.5 : 0.28}
         />
       </mesh>
-      <Html position={[0, 0.22, 0]} center distanceFactor={8}>
-        <div className="max-w-[120px] rounded-md border border-[#2b2b2b] bg-[#161616]/90 px-1.5 py-1 text-center">
-          <p className="truncate text-[10px] text-[#e4e4e4]">{node.title}</p>
-          <p className="text-[9px] text-[#6e6e6e]">{node.status}</p>
-        </div>
-      </Html>
+      <Billboard position={[0, 0.38, 0]}>
+        <Text fontSize={0.13} color="#f0f0f0" anchorX="center" anchorY="bottom" maxWidth={1.5}>
+          {node.title}
+        </Text>
+        <Text fontSize={0.1} color="#9aa4b5" anchorX="center" anchorY="top" position={[0, -0.02, 0]}>
+          {node.status}
+        </Text>
+      </Billboard>
     </group>
   );
 }
@@ -247,25 +227,21 @@ function AgentFigure({
 }) {
   const group = useRef<THREE.Group>(null);
   const glow = useRef<THREE.Mesh>(null);
-  const antenna = useRef<THREE.Mesh>(null);
   const color = ROLE_HEX[agent.role];
   const dead = agent.visualStatus === "dead" || agent.visualStatus === "error";
   const working = agent.visualStatus === "working";
-  const opacity = dim ? 0.28 : dead ? 0.42 : 1;
+  const opacity = dim ? 0.32 : dead ? 0.5 : 1;
   const scale = agent.scale;
 
   useFrame(({ clock }) => {
     const t = clock.getElapsedTime();
     if (group.current) {
-      group.current.position.y = agent.position[1] + (working ? Math.sin(t * 2.4) * 0.045 : 0);
-      if (working) group.current.rotation.y = Math.sin(t * 1.1) * 0.12;
+      group.current.position.y = agent.position[1] + (working ? Math.sin(t * 2.4) * 0.04 : 0);
+      if (working) group.current.rotation.y = Math.sin(t * 1.1) * 0.1;
     }
     if (glow.current) {
       const mat = glow.current.material as THREE.MeshStandardMaterial;
-      mat.opacity = working ? 0.18 + Math.sin(t * 3.2) * 0.08 : 0.02;
-    }
-    if (antenna.current && working) {
-      antenna.current.position.y = 1.1 + Math.sin(t * 6) * 0.02;
+      mat.opacity = working ? 0.22 + Math.sin(t * 3.2) * 0.08 : 0.05;
     }
   });
 
@@ -286,105 +262,98 @@ function AgentFigure({
       }}
     >
       <mesh ref={glow} position={[0, 0.55, 0]}>
-        <sphereGeometry args={[0.72, 16, 16]} />
+        <sphereGeometry args={[0.7, 16, 16]} />
         <meshStandardMaterial
           color={color}
           emissive={color}
-          emissiveIntensity={working ? 0.8 : 0.05}
+          emissiveIntensity={working ? 1 : 0.15}
           transparent
-          opacity={0.04}
+          opacity={0.08}
           depthWrite={false}
         />
       </mesh>
 
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.01, 0]}>
-        <circleGeometry args={[0.24, 20]} />
-        <meshBasicMaterial color="#000" transparent opacity={0.35} />
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.015, 0]}>
+        <circleGeometry args={[0.26, 20]} />
+        <meshBasicMaterial color="#000" transparent opacity={0.4} />
       </mesh>
 
       {selected && (
         <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.03, 0]}>
-          <ringGeometry args={[0.3, 0.36, 28]} />
-          <meshBasicMaterial color={color} transparent opacity={0.85} />
+          <ringGeometry args={[0.32, 0.4, 28]} />
+          <meshBasicMaterial color={color} transparent opacity={0.95} />
         </mesh>
       )}
 
       <mesh position={[-0.07, 0.2, 0]}>
-        <capsuleGeometry args={[0.035, 0.22, 4, 8]} />
+        <capsuleGeometry args={[0.04, 0.22, 4, 8]} />
         <BodyMaterial color={color} opacity={opacity} working={working} />
       </mesh>
       <mesh position={[0.07, 0.2, 0]}>
-        <capsuleGeometry args={[0.035, 0.22, 4, 8]} />
+        <capsuleGeometry args={[0.04, 0.22, 4, 8]} />
         <BodyMaterial color={color} opacity={opacity} working={working} />
       </mesh>
-
-      <mesh position={[0, 0.52, 0]}>
-        <capsuleGeometry args={[0.13, 0.28, 6, 12]} />
+      <mesh position={[0, 0.54, 0]}>
+        <capsuleGeometry args={[0.14, 0.3, 6, 12]} />
         <BodyMaterial color={color} opacity={opacity} working={working} />
       </mesh>
-
-      <mesh
-        position={[-0.2, working ? 0.68 : 0.52, 0]}
-        rotation={[0, 0, working ? 0.9 : 0.35]}
-      >
-        <capsuleGeometry args={[0.03, 0.24, 4, 8]} />
+      <mesh position={[-0.22, working ? 0.7 : 0.54, 0]} rotation={[0, 0, working ? 0.95 : 0.38]}>
+        <capsuleGeometry args={[0.032, 0.26, 4, 8]} />
         <BodyMaterial color={color} opacity={opacity} working={working} />
       </mesh>
-      <mesh position={[0.2, 0.52, 0]} rotation={[0, 0, -0.35]}>
-        <capsuleGeometry args={[0.03, 0.24, 4, 8]} />
+      <mesh position={[0.22, 0.54, 0]} rotation={[0, 0, -0.38]}>
+        <capsuleGeometry args={[0.032, 0.26, 4, 8]} />
         <BodyMaterial color={color} opacity={opacity} working={working} />
       </mesh>
-
-      <mesh position={[0, 0.84, 0]}>
-        <sphereGeometry args={[0.13, 18, 18]} />
+      <mesh position={[0, 0.88, 0]}>
+        <sphereGeometry args={[0.14, 18, 18]} />
         <BodyMaterial color={color} opacity={opacity} working={working} />
       </mesh>
-      <mesh position={[-0.045, 0.86, 0.1]}>
-        <sphereGeometry args={[0.02, 8, 8]} />
+      <mesh position={[-0.045, 0.9, 0.11]}>
+        <sphereGeometry args={[0.022, 8, 8]} />
         <meshStandardMaterial color="#0d1118" />
       </mesh>
-      <mesh position={[0.045, 0.86, 0.1]}>
-        <sphereGeometry args={[0.02, 8, 8]} />
+      <mesh position={[0.045, 0.9, 0.11]}>
+        <sphereGeometry args={[0.022, 8, 8]} />
         <meshStandardMaterial color="#0d1118" />
       </mesh>
-
-      <mesh position={[0, 1.02, 0]}>
-        <cylinderGeometry args={[0.012, 0.012, 0.16, 8]} />
+      <mesh position={[0, 1.06, 0]}>
+        <cylinderGeometry args={[0.014, 0.014, 0.18, 8]} />
         <BodyMaterial color={color} opacity={opacity} working={working} />
       </mesh>
-      <mesh ref={antenna} position={[0, 1.12, 0]}>
-        <sphereGeometry args={[0.04, 12, 12]} />
+      <mesh position={[0, 1.18, 0]}>
+        <sphereGeometry args={[0.045, 12, 12]} />
         <meshStandardMaterial
           color={color}
           emissive={color}
-          emissiveIntensity={working ? 1.4 : 0.25}
+          emissiveIntensity={working ? 1.6 : 0.4}
           transparent
           opacity={opacity}
         />
       </mesh>
 
       {agent.role === "orchestrator" && (
-        <mesh rotation={[Math.PI / 2, 0, 0]} position={[0, 0.95, 0]}>
-          <torusGeometry args={[0.28, 0.018, 10, 28]} />
-          <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.6} transparent opacity={0.85} />
+        <mesh rotation={[Math.PI / 2, 0, 0]} position={[0, 1.0, 0]}>
+          <torusGeometry args={[0.3, 0.02, 10, 28]} />
+          <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.85} />
         </mesh>
       )}
 
       {agent.visualStatus === "error" && (
-        <mesh position={[0.16, 0.95, 0.08]} rotation={[0, 0, -0.7]}>
-          <boxGeometry args={[0.28, 0.025, 0.025]} />
-          <meshStandardMaterial color="#f07070" emissive="#f07070" emissiveIntensity={0.8} />
+        <mesh position={[0.18, 1.0, 0.08]} rotation={[0, 0, -0.7]}>
+          <boxGeometry args={[0.3, 0.03, 0.03]} />
+          <meshStandardMaterial color="#f07070" emissive="#f07070" emissiveIntensity={0.9} />
         </mesh>
       )}
 
-      <Html position={[0, dead ? 1.25 : 1.42, 0]} center distanceFactor={7} occlude={false}>
-        <div className={`text-center ${dim ? "opacity-40" : ""}`}>
-          <div className="whitespace-nowrap text-[11px] font-medium text-[#e8e8e8]">@{agent.label}</div>
-          <div className="text-[10px]" style={{ color }}>
-            {agent.visualStatus}
-          </div>
-        </div>
-      </Html>
+      <Billboard position={[0, dead ? 1.32 : 1.5, 0]}>
+        <Text fontSize={0.16} color={dim ? "#8a8a8a" : "#f2f2f2"} anchorX="center" anchorY="bottom">
+          @{agent.label}
+        </Text>
+        <Text fontSize={0.12} color={color} anchorX="center" anchorY="top" position={[0, -0.02, 0]}>
+          {agent.visualStatus}
+        </Text>
+      </Billboard>
     </group>
   );
 }
@@ -402,9 +371,9 @@ function BodyMaterial({
     <meshStandardMaterial
       color={color}
       emissive={color}
-      emissiveIntensity={working ? 0.45 : 0.12}
-      metalness={0.22}
-      roughness={0.42}
+      emissiveIntensity={working ? 0.55 : 0.2}
+      metalness={0.18}
+      roughness={0.4}
       transparent
       opacity={opacity}
     />
