@@ -168,7 +168,7 @@ export default function ArtifactsPanel({
   return (
     <RightOverlay hideHeader onClose={onClose}>
       {(width) => {
-        const listWidth = Math.round(Math.min(200, Math.max(128, width * 0.34)));
+        const listWidth = width < 460 ? 128 : 156;
         return (
           <div className="flex h-full min-h-0 min-w-0">
             <aside

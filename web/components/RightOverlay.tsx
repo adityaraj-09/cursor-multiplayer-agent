@@ -10,19 +10,29 @@ import {
 import { X } from "lucide-react";
 
 const WIDTH_KEY = "steer-right-overlay-width";
-const DEFAULT_WIDTH = 380;
-const MIN_WIDTH = 300;
+const DEFAULT_WIDTH = 480;
+const MIN_WIDTH = 320;
+const COMPACT_WIDTH = 380;
 
 function maxWidth(): number {
-  if (typeof window === "undefined") return 920;
+  if (typeof window === "undefined") return 1100;
   return Math.max(MIN_WIDTH, Math.round(window.innerWidth * 0.92));
+}
+
+function largeWidth(): number {
+  if (typeof window === "undefined") return 860;
+  return Math.min(maxWidth(), Math.max(640, Math.round(window.innerWidth * 0.72)));
+}
+
+function clampWidth(value: number): number {
+  return Math.min(maxWidth(), Math.max(MIN_WIDTH, Math.round(value)));
 }
 
 function readStoredWidth(): number {
   if (typeof window === "undefined") return DEFAULT_WIDTH;
   const stored = Number(window.localStorage.getItem(WIDTH_KEY));
   if (!Number.isFinite(stored)) return DEFAULT_WIDTH;
-  return Math.min(maxWidth(), Math.max(MIN_WIDTH, stored));
+  return clampWidth(stored);
 }
 
 export default function RightOverlay({
@@ -41,8 +51,8 @@ export default function RightOverlay({
   children: ReactNode | ((width: number) => ReactNode);
 }) {
   const [width, setWidth] = useState(DEFAULT_WIDTH);
+  const [resizing, setResizing] = useState(false);
   const widthRef = useRef(DEFAULT_WIDTH);
-  const dragging = useRef(false);
 
   useEffect(() => {
     const next = readStoredWidth();
@@ -51,41 +61,50 @@ export default function RightOverlay({
   }, []);
 
   const persist = (next: number) => {
-    widthRef.current = next;
-    setWidth(next);
-    window.localStorage.setItem(WIDTH_KEY, String(next));
+    const clamped = clampWidth(next);
+    widthRef.current = clamped;
+    setWidth(clamped);
+    window.localStorage.setItem(WIDTH_KEY, String(clamped));
   };
 
   const onPointerDown = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     event.preventDefault();
-    dragging.current = true;
+    event.stopPropagation();
+    const handle = event.currentTarget;
+    handle.setPointerCapture(event.pointerId);
     const startX = event.clientX;
     const startW = widthRef.current;
     const previousUserSelect = document.body.style.userSelect;
     const previousCursor = document.body.style.cursor;
     document.body.style.userSelect = "none";
     document.body.style.cursor = "ew-resize";
+    setResizing(true);
 
     const onMove = (move: PointerEvent) => {
-      if (!dragging.current) return;
-      const next = Math.min(
-        maxWidth(),
-        Math.max(MIN_WIDTH, startW + (startX - move.clientX)),
-      );
+      const next = clampWidth(startW + (startX - move.clientX));
       widthRef.current = next;
       setWidth(next);
     };
     const onUp = () => {
-      dragging.current = false;
+      try {
+        handle.releasePointerCapture(event.pointerId);
+      } catch {
+        /* already released */
+      }
       document.body.style.userSelect = previousUserSelect;
       document.body.style.cursor = previousCursor;
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
+      setResizing(false);
       persist(widthRef.current);
     };
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
   }, []);
+
+  const toggleLarge = () => {
+    persist(widthRef.current < largeWidth() - 40 ? largeWidth() : COMPACT_WIDTH);
+  };
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -110,11 +129,17 @@ export default function RightOverlay({
         <div
           role="separator"
           aria-orientation="vertical"
-          aria-label="Resize panel"
+          aria-label="Drag to resize panel"
+          title="Drag to resize · double-click to expand"
           onPointerDown={onPointerDown}
-          className="group absolute inset-y-0 -left-1 z-20 w-2 cursor-ew-resize touch-none"
+          onDoubleClick={toggleLarge}
+          className="absolute inset-y-0 -left-1.5 z-20 flex w-3 cursor-ew-resize touch-none items-center justify-center"
         >
-          <span className="absolute inset-y-0 left-[3px] w-px bg-[#2a2a2a] transition-colors group-hover:bg-[#4d9fff]" />
+          <span
+            className={`h-12 w-1 rounded-full transition-colors ${
+              resizing ? "bg-[#4d9fff]" : "bg-[#4a4a4a] hover:bg-[#4d9fff]"
+            }`}
+          />
         </div>
         {!hideHeader && (
           <header className="flex h-11 shrink-0 items-center gap-2 border-b border-[#1c1c1c] px-3">
