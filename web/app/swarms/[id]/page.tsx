@@ -207,8 +207,30 @@ export default function SwarmDetailPage() {
       createHref={workspace.sessionCreateHref}
       userName={user.name}
     >
-      <main className="mx-auto w-full max-w-7xl px-4 sm:px-6 py-6 sm:py-8">
-        <Link href="/swarms" className="text-[12px] text-[#6e6e6e] hover:text-[#e4e4e4]">
+      <main
+        className={
+          layout === "scene"
+            ? "relative min-h-[calc(100dvh)] bg-[#0b0d12]"
+            : "mx-auto w-full max-w-7xl px-4 sm:px-6 py-6 sm:py-8"
+        }
+      >
+        {layout === "scene" && snap && (
+          <div className="absolute inset-0">
+            <SwarmVisualizer
+              agents={snap.agents}
+              tasks={snap.tasks}
+              selectedId={visualAgentId}
+              onSelect={setVisualAgentId}
+              showRetired
+              fill
+            />
+          </div>
+        )}
+        <div className={layout === "scene" ? "relative z-10 px-4 sm:px-6 pt-5 pointer-events-none" : ""}>
+        <Link
+          href="/swarms"
+          className={`text-[12px] text-[#6e6e6e] hover:text-[#e4e4e4] ${layout === "scene" ? "pointer-events-auto" : ""}`}
+        >
           ← Swarms
         </Link>
 
@@ -216,7 +238,7 @@ export default function SwarmDetailPage() {
 
         {snap && swarm && counts && (
           <>
-            <header className="mt-3 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <header className={`mt-3 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between ${layout === "scene" ? "pointer-events-auto" : ""}`}>
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-2">
                   <StatusPill status={swarm.status} />
@@ -238,13 +260,15 @@ export default function SwarmDetailPage() {
                   )}
                   {swarm.creatorName && <span>by {swarm.creatorName}</span>}
                 </div>
-                <div className="mt-3">
-                  <PhaseStepper swarm={swarm} />
-                </div>
+                {layout !== "scene" && (
+                  <div className="mt-3">
+                    <PhaseStepper swarm={swarm} />
+                  </div>
+                )}
               </div>
 
-              <div className="flex w-full flex-col gap-3 lg:w-80">
-                <BudgetMeter spent={swarm.spentUsd} budget={swarm.budgetUsd} />
+              <div className={`flex w-full flex-col gap-3 ${layout === "scene" ? "lg:w-auto" : "lg:w-80"}`}>
+                {layout !== "scene" && <BudgetMeter spent={swarm.spentUsd} budget={swarm.budgetUsd} />}
                 <div className="flex flex-wrap items-center gap-2">
                   <button
                     type="button"
@@ -318,27 +342,33 @@ export default function SwarmDetailPage() {
               </div>
             </header>
 
-            {error && <p className="mt-3 text-[12px] text-[#f07070]">{error}</p>}
+            {error && (
+              <p className={`mt-3 text-[12px] text-[#f07070] ${layout === "scene" ? "pointer-events-auto" : ""}`}>
+                {error}
+              </p>
+            )}
 
             {settingsOpen && snap.canEdit && (
-              <SettingsPanel
-                snap={snap}
-                busy={busy === "settings"}
-                onSave={(data) => void patch(data)}
-                onDelete={async () => {
-                  if (!window.confirm("Delete this swarm and everything it produced?")) return;
-                  try {
-                    await deleteSwarm(id);
-                    router.push("/swarms");
-                  } catch (err) {
-                    setError(err instanceof Error ? err.message : "Delete failed");
-                  }
-                }}
-              />
+              <div className={layout === "scene" ? "pointer-events-auto" : ""}>
+                <SettingsPanel
+                  snap={snap}
+                  busy={busy === "settings"}
+                  onSave={(data) => void patch(data)}
+                  onDelete={async () => {
+                    if (!window.confirm("Delete this swarm and everything it produced?")) return;
+                    try {
+                      await deleteSwarm(id);
+                      router.push("/swarms");
+                    } catch (err) {
+                      setError(err instanceof Error ? err.message : "Delete failed");
+                    }
+                  }}
+                />
+              </div>
             )}
 
             {swarm.status === "awaiting_approval" && (
-              <section className="mt-5 rounded-xl border border-[#4a3d1f] bg-[#1d1810] p-4">
+              <section className={`mt-5 rounded-xl border border-[#4a3d1f] bg-[#1d1810] p-4 ${layout === "scene" ? "pointer-events-auto" : ""}`}>
                 <p className="text-[11px] font-medium uppercase tracking-wide text-[#e6c07b]">Build phase approval</p>
                 <p className="mt-1 text-[12px] text-[#a0a0a0]">
                   Research is done. The orchestrator wants to prototype this on{" "}
@@ -380,7 +410,7 @@ export default function SwarmDetailPage() {
             )}
 
             {swarm.status === "paused" && (
-              <div className="mt-5 flex flex-wrap items-center gap-3 rounded-xl border border-[#3c3420] bg-[#1c1911] px-4 py-3 text-[12px] text-[#e6c07b]">
+              <div className={`mt-5 flex flex-wrap items-center gap-3 rounded-xl border border-[#3c3420] bg-[#1c1911] px-4 py-3 text-[12px] text-[#e6c07b] ${layout === "scene" ? "pointer-events-auto" : ""}`}>
                 <span>{PAUSE_REASONS[swarm.stopReason || ""] || "Paused."}</span>
                 {swarm.stopReason === "budget" && snap.canEdit && (
                   <button
@@ -406,7 +436,7 @@ export default function SwarmDetailPage() {
                   swarm.status === "done"
                     ? "border-[#1f3d2e] bg-[#121c16] text-[#3ecf8e]"
                     : "border-[#2b2b2b] bg-[#171717] text-[#a0a0a0]"
-                }`}
+                } ${layout === "scene" ? "pointer-events-auto" : ""}`}
               >
                 {STOP_REASONS[swarm.stopReason] || `Ended: ${swarm.stopReason}`}
                 {snap.artifacts.some((a) => a.kind === "report") && (
@@ -417,24 +447,7 @@ export default function SwarmDetailPage() {
               </div>
             )}
 
-            {layout === "scene" ? (
-              <div className="mt-5 pb-10">
-                <SwarmVisualizer
-                  agents={snap.agents}
-                  tasks={snap.tasks}
-                  selectedId={visualAgentId}
-                  onSelect={setVisualAgentId}
-                  showRetired
-                />
-                {visualAgent && (
-                  <AgentDrawer
-                    swarmId={id}
-                    agent={visualAgent}
-                    onClose={() => setVisualAgentId(null)}
-                  />
-                )}
-              </div>
-            ) : (
+            {layout !== "scene" && (
             <>
             <section className="mt-5 rounded-xl border border-[#2b2b2b] bg-[#161616] px-4 py-3">
               <button
@@ -499,6 +512,10 @@ export default function SwarmDetailPage() {
             </>
             )}
           </>
+        )}
+        </div>
+        {layout === "scene" && visualAgent && (
+          <AgentDrawer swarmId={id} agent={visualAgent} onClose={() => setVisualAgentId(null)} />
         )}
       </main>
     </DashboardShell>

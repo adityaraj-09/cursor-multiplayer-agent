@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SwarmAgentInfo, SwarmTaskInfo } from "../shared/swarm.js";
-import { buildSwarmVisualGraph, visualStatusFor } from "../shared/swarmVisual.js";
+import { addVec, buildSwarmVisualGraph, visualStatusFor } from "../shared/swarmVisual.js";
 
 function agent(partial: Partial<SwarmAgentInfo> & Pick<SwarmAgentInfo, "id" | "role" | "label">): SwarmAgentInfo {
   return {
@@ -85,6 +85,10 @@ const survey = task({
 });
 
 describe("swarm visual graph", () => {
+  it("adds vectors for dragged role planes", () => {
+    expect(addVec([1, 2, 3], [4, -1, 0.5])).toEqual([5, 1, 3.5]);
+  });
+
   it("maps agent statuses for the scene", () => {
     expect(visualStatusFor("idle")).toBe("idle");
     expect(visualStatusFor("running")).toBe("working");
