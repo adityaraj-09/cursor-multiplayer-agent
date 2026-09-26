@@ -16,10 +16,19 @@ import {
   TOOL_RESULT_DETAIL_LIMIT,
   stringifyUnknown,
 } from "./cursor.js";
+
 interface PendingTool {
   name: string;
   path?: string;
   args?: Record<string, unknown>;
+}
+
+/** In-flight tool_use block while input_json_delta chunks arrive. */
+interface StreamingToolBlock {
+  callId: string;
+  name: string;
+  inputJson: string;
+  parentCallId: string | null;
 }
 
 function extractText(message: unknown): string {
@@ -40,6 +49,41 @@ function extractText(message: unknown): string {
       return "";
     })
     .join("");
+}
+
+function parentCallIdOf(ev: Record<string, unknown>): string | null {
+  return typeof ev.parent_tool_use_id === "string" && ev.parent_tool_use_id
+    ? ev.parent_tool_use_id
+    : null;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function blockIndex(event: Record<string, unknown>): number {
+  return typeof event.index === "number" && Number.isFinite(event.index)
+    ? event.index
+    : Number(event.index ?? 0) || 0;
+}
+
+function tryParseToolArgs(raw: string): Record<string, unknown> | undefined {
+  const trimmed = raw.trim();
+  if (!trimmed) return undefined;
+  try {
+    return asRecord(JSON.parse(trimmed));
+  } catch {
+    return undefined;
+  }
+}
+
+/** `message.content` on assistant/user rows, or top-level `content` fallback. */
+function messageContent(ev: Record<string, unknown>): unknown {
+  const message = asRecord(ev.message);
+  if (message && message.content !== undefined) return message.content;
+  return ev.content;
 }
 
 function toolPathFromArgs(args: Record<string, unknown> | undefined): string | undefined {
@@ -127,8 +171,10 @@ export class ClaudeCodeBackend implements WorkerBackend {
   readonly available = true;
   readonly command = "claude";
 
-  /** tool_use id → metadata, filled on assistant tool_use, consumed on tool_result */
+  /** tool_use id → metadata, filled on assistant/stream tool_use, consumed on tool_result */
   private pendingTools = new Map<string, PendingTool>();
+  /** content_block index → accumulating tool_use input JSON */
+  private streamingBlocks = new Map<number, StreamingToolBlock>();
 
   buildArgs(opts: BuildArgsOptions): string[] {
     const args = [
@@ -171,20 +217,23 @@ export class ClaudeCodeBackend implements WorkerBackend {
       return out;
     }
 
-    // Token-level streaming (requires --include-partial-messages)
+    // Token-level streaming (requires --include-partial-messages).
+    // Tool calls start as content_block_start { type: tool_use, input: {} }
+    // with args arriving later as input_json_delta — must not return after
+    // text_delta only or the room UI never gets tool_start cards.
     if (type === "stream_event") {
-      const event = ev.event as Record<string, unknown> | undefined;
-      if (!event || typeof event !== "object") return out;
-      if (event.type === "content_block_delta") {
-        const delta = event.delta as Record<string, unknown> | undefined;
-        if (delta?.type === "text_delta" && typeof delta.text === "string") {
-          ctx.assistantBuf.value += delta.text;
-          out.push({
-            kind: "assistant_delta",
-            text: ctx.assistantBuf.value,
-          });
-        }
-      }
+      const event = asRecord(ev.event);
+      if (!event) return out;
+      this.parseContentBlockEvent(event, parentCallIdOf(ev), ctx, out);
+      return out;
+    }
+
+    if (
+      type === "content_block_start" ||
+      type === "content_block_delta" ||
+      type === "content_block_stop"
+    ) {
+      this.parseContentBlockEvent(ev, parentCallIdOf(ev), ctx, out);
       return out;
     }
 
@@ -203,79 +252,28 @@ export class ClaudeCodeBackend implements WorkerBackend {
         }
       }
 
-      const content =
-        message && typeof message === "object"
-          ? (message as { content?: unknown }).content
-          : undefined;
+      const content = messageContent(ev);
       if (Array.isArray(content)) {
         for (const block of content) {
-          if (!block || typeof block !== "object") continue;
-          const b = block as Record<string, unknown>;
-          if (b.type !== "tool_use") continue;
-          const callId = String(b.id ?? "");
-          if (!callId) continue;
-          const name = String(b.name ?? "tool");
-          const args =
-            b.input && typeof b.input === "object"
-              ? (b.input as Record<string, unknown>)
-              : undefined;
-          const path = toolPathFromArgs(args);
-          const parentCallId =
-            typeof ev.parent_tool_use_id === "string"
-              ? ev.parent_tool_use_id
-              : null;
-
-          const alreadyStarted = this.pendingTools.has(callId);
-          this.pendingTools.set(callId, { name, path, args });
-          // Partial assistant messages can re-emit the same tool_use — only
-          // start once per callId so the UI doesn't get duplicate rows.
-          if (alreadyStarted) continue;
-
-          const todos = args ? todosFromToolArgs(args) : [];
-          const questions = args ? parseQuestionToolArgs(args) : [];
-          if (parentCallId) {
-            out.push({
-              kind: "subagent_nested",
-              parentCallId,
-              callId,
-              name,
-              detail: toolDetail(name, args, path),
-              path,
-              status: "started",
-            });
-          } else {
-            out.push({
-              kind: "tool_start",
-              callId,
-              name:
-                todos.length && !isTodoTool(name)
-                  ? "todo"
-                  : isQuestionTool(name)
-                    ? "AskUserQuestion"
-                    : name,
-              detail: toolDetail(name, args, path),
-              path,
-              todos: todos.length ? todos : undefined,
-              questions: questions.length ? questions : undefined,
-            });
-          }
+          const b = asRecord(block);
+          if (!b || b.type !== "tool_use") continue;
+          this.startTool(
+            String(b.id ?? ""),
+            String(b.name ?? "tool"),
+            asRecord(b.input),
+            parentCallIdOf(ev),
+            out,
+          );
         }
       }
       return out;
     }
 
     if (type === "user") {
-      const message = ev.message;
-      const content =
-        message && typeof message === "object"
-          ? (message as { content?: unknown }).content
-          : undefined;
+      const content = messageContent(ev);
       if (!Array.isArray(content)) return out;
 
-      const parentCallId =
-        typeof ev.parent_tool_use_id === "string"
-          ? ev.parent_tool_use_id
-          : null;
+      const parentCallId = parentCallIdOf(ev);
 
       for (const block of content) {
         if (!block || typeof block !== "object") continue;
@@ -382,6 +380,144 @@ export class ClaudeCodeBackend implements WorkerBackend {
     }
 
     return out;
+  }
+
+  private parseContentBlockEvent(
+    event: Record<string, unknown>,
+    parentCallId: string | null,
+    ctx: ParseLineContext,
+    out: NormalizedAgentEvent[],
+  ): void {
+    const eventType = String(event.type ?? "");
+    const index = blockIndex(event);
+
+    if (eventType === "content_block_start") {
+      const block = asRecord(event.content_block);
+      if (!block || block.type !== "tool_use") return;
+      const callId = String(block.id ?? "");
+      if (!callId) return;
+      const name = String(block.name ?? "tool");
+      const args = asRecord(block.input);
+      this.streamingBlocks.set(index, {
+        callId,
+        name,
+        inputJson:
+          args && Object.keys(args).length > 0 ? JSON.stringify(args) : "",
+        parentCallId,
+      });
+      this.startTool(callId, name, args, parentCallId, out);
+      return;
+    }
+
+    if (eventType === "content_block_delta") {
+      const delta = asRecord(event.delta);
+      if (!delta) return;
+      if (delta.type === "text_delta" && typeof delta.text === "string") {
+        ctx.assistantBuf.value += delta.text;
+        out.push({
+          kind: "assistant_delta",
+          text: ctx.assistantBuf.value,
+        });
+        return;
+      }
+      if (
+        delta.type === "input_json_delta" &&
+        typeof delta.partial_json === "string"
+      ) {
+        const streaming = this.streamingBlocks.get(index);
+        if (!streaming) return;
+        streaming.inputJson += delta.partial_json;
+        const args = tryParseToolArgs(streaming.inputJson);
+        if (args) {
+          this.startTool(
+            streaming.callId,
+            streaming.name,
+            args,
+            streaming.parentCallId,
+            out,
+          );
+        }
+      }
+      return;
+    }
+
+    if (eventType === "content_block_stop") {
+      const streaming = this.streamingBlocks.get(index);
+      if (!streaming) return;
+      this.streamingBlocks.delete(index);
+      const args = tryParseToolArgs(streaming.inputJson);
+      if (args) {
+        this.startTool(
+          streaming.callId,
+          streaming.name,
+          args,
+          streaming.parentCallId,
+          out,
+        );
+      }
+    }
+  }
+
+  /**
+   * Record a tool_use and emit tool_start once. Re-emits when args go from
+   * empty `{}` (content_block_start placeholder) to a real path/command so
+   * the existing chat row can pick up a useful title.
+   */
+  private startTool(
+    callId: string,
+    name: string,
+    args: Record<string, unknown> | undefined,
+    parentCallId: string | null,
+    out: NormalizedAgentEvent[],
+  ): void {
+    if (!callId) return;
+    const path = toolPathFromArgs(args);
+    const existing = this.pendingTools.get(callId);
+    const hasArgs = Boolean(args && Object.keys(args).length > 0);
+    const hadArgs = Boolean(
+      existing?.args && Object.keys(existing.args).length > 0,
+    );
+    const mergedArgs = hasArgs ? args : existing?.args;
+    const mergedPath = path || existing?.path;
+    const mergedName = existing?.name || name;
+    this.pendingTools.set(callId, {
+      name: mergedName,
+      path: mergedPath,
+      args: mergedArgs,
+    });
+
+    const alreadyStarted = Boolean(existing);
+    const detailImproved = alreadyStarted && hasArgs && !hadArgs;
+    if (alreadyStarted && !detailImproved) return;
+
+    const todos = mergedArgs ? todosFromToolArgs(mergedArgs) : [];
+    const questions = mergedArgs ? parseQuestionToolArgs(mergedArgs) : [];
+    if (parentCallId) {
+      out.push({
+        kind: "subagent_nested",
+        parentCallId,
+        callId,
+        name: mergedName,
+        detail: toolDetail(mergedName, mergedArgs, mergedPath),
+        path: mergedPath,
+        status: "started",
+      });
+      return;
+    }
+    out.push({
+      kind: "tool_start",
+      callId,
+      name:
+        todos.length && !isTodoTool(mergedName)
+          ? "todo"
+          : isQuestionTool(mergedName)
+            ? "AskUserQuestion"
+            : mergedName,
+      detail: toolDetail(mergedName, mergedArgs, mergedPath),
+      path: mergedPath,
+      todos: todos.length ? todos : undefined,
+      questions: questions.length ? questions : undefined,
+    });
   }
 }
 
