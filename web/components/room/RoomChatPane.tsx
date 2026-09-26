@@ -80,7 +80,7 @@ export default function RoomChatPane() {
     canManage,
     models,
     modelError,
-    savingModel,
+    savingModelAgentId,
     decidingApprovalId,
     setSettingsOpen,
     artifactsOpen,
@@ -184,13 +184,11 @@ export default function RoomChatPane() {
       models={models}
       modelId={selectedModelId}
       onModelChange={(id) => void handleModelChange(id)}
-      modelDisabled={!canManage || savingModel}
+      modelDisabled={!canManage || savingModelAgentId === selectedAgentId}
       modelLockReason={
         !canManage
           ? "Only the host or a team admin can change the model"
-          : savingModel
-            ? "Saving…"
-            : undefined
+          : undefined
       }
       placeholder={
         !canSteerSelected
@@ -231,7 +229,7 @@ export default function RoomChatPane() {
       connected={connected}
       models={models}
       canManage={canManage}
-      savingModel={savingModel}
+      savingModelAgentId={savingModelAgentId}
       onSend={(text, agentId, attachmentIds) =>
         sendSteer(text, agentId, attachmentIds)
       }

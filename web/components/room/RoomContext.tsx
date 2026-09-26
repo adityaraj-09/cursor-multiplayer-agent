@@ -85,7 +85,7 @@ export type RoomContextValue = {
   canFlag: boolean;
   models: ModelInfo[];
   modelError: string;
-  savingModel: boolean;
+  savingModelAgentId: string | null;
   savingControlMode: boolean;
   savingApprovalMode: boolean;
   togglingPlanMode: boolean;

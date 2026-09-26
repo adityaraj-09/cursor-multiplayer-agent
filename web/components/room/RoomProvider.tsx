@@ -157,7 +157,9 @@ export default function RoomProvider({
   const canFlag = myRole === "owner" || myRole === "editor";
   const [models, setModels] = useState<ModelInfo[]>(FALLBACK_MODELS);
   const [modelError, setModelError] = useState("");
-  const [savingModel, setSavingModel] = useState(false);
+  const [savingModelAgentId, setSavingModelAgentId] = useState<string | null>(
+    null,
+  );
   const [savingControlMode, setSavingControlMode] = useState(false);
   const [savingApprovalMode, setSavingApprovalMode] = useState(false);
   const [togglingPlanMode, setTogglingPlanMode] = useState(false);
@@ -510,7 +512,7 @@ export default function RoomProvider({
       const current =
         agents.find((a) => a.id === agentId)?.modelId || selectedModelId;
       if (!agentId || !next || next === current) return;
-      setSavingModel(true);
+      setSavingModelAgentId(agentId);
       setModelError("");
       try {
         const updated = await updateRoomModel(roomId, next, agentId);
@@ -520,7 +522,7 @@ export default function RoomProvider({
           err instanceof Error ? err.message : "Failed to change model",
         );
       } finally {
-        setSavingModel(false);
+        setSavingModelAgentId((cur) => (cur === agentId ? null : cur));
       }
     },
     [agents, selectedModelId, onRoomInfo, roomId],
@@ -871,7 +873,7 @@ export default function RoomProvider({
         canFlag,
         models,
         modelError,
-        savingModel,
+        savingModelAgentId,
         savingControlMode,
         savingApprovalMode,
         togglingPlanMode,

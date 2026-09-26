@@ -48,7 +48,7 @@ export default function LandingPage() {
   const primaryHref = signedIn ? "/dashboard" : "/login?redirect=/dashboard";
   const createHref = signedIn
     ? "/dashboard?compose=1"
-    : `/login?redirect=${encodeURIComponent("/dashboard?compose=1")}`;
+    : `/signup?redirect=${encodeURIComponent("/dashboard?compose=1")}`;
   const issuesHref = signedIn ? "/issues" : "/login?redirect=/issues";
 
   return (

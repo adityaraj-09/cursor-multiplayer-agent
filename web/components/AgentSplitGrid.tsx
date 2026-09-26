@@ -56,7 +56,7 @@ export default function AgentSplitGrid({
   connected,
   models,
   canManage,
-  savingModel,
+  savingModelAgentId,
   onSend,
   onTyping,
   onTypingStop,
@@ -94,7 +94,7 @@ export default function AgentSplitGrid({
   connected: boolean;
   models: ModelInfo[];
   canManage: boolean;
-  savingModel: boolean;
+  savingModelAgentId: string | null;
   onSend: (text: string, agentId: string, attachmentIds?: string[]) => void;
   onTyping?: (agentId: string) => void;
   onTypingStop?: (agentId?: string) => void;
@@ -283,13 +283,13 @@ export default function AgentSplitGrid({
                   models={models}
                   modelId={agent.modelId || "auto"}
                   onModelChange={(id) => onModelChange(agent.id, id)}
-                  modelDisabled={!canManage || savingModel}
+                  modelDisabled={
+                    !canManage || savingModelAgentId === agent.id
+                  }
                   modelLockReason={
                     !canManage
                       ? "Only the host or a team admin can change the model"
-                      : savingModel
-                        ? "Saving…"
-                        : undefined
+                      : undefined
                   }
                   placeholder={
                     canSteer ? `Message ${agent.label}…` : lockReason || "View only"

@@ -1,12 +1,12 @@
 "use client";
 
 import { Suspense } from "react";
-import { SignIn } from "@clerk/nextjs";
+import { SignUp } from "@clerk/nextjs";
 import { useSearchParams } from "next/navigation";
 import AuthSplitLayout from "../../components/auth/AuthSplitLayout";
 import { authClerkAppearance } from "../../lib/authClerkAppearance";
 
-function LoginPageInner() {
+function SignupPageInner() {
   const searchParams = useSearchParams();
   const redirect = searchParams.get("redirect") || "/dashboard";
   const qs =
@@ -16,17 +16,17 @@ function LoginPageInner() {
 
   return (
     <AuthSplitLayout>
-      <SignIn
+      <SignUp
         routing="hash"
         fallbackRedirectUrl={redirect}
-        signUpUrl={`/signup${qs}`}
+        signInUrl={`/login${qs}`}
         appearance={authClerkAppearance}
       />
     </AuthSplitLayout>
   );
 }
 
-export default function LoginPage() {
+export default function SignupPage() {
   return (
     <Suspense
       fallback={
@@ -35,7 +35,7 @@ export default function LoginPage() {
         </div>
       }
     >
-      <LoginPageInner />
+      <SignupPageInner />
     </Suspense>
   );
 }

@@ -116,9 +116,6 @@ export default function SessionComposeModal({
   const isCodexCloud = isCodex && runtime === "cloud";
   const cliLabel = isCodex ? "Codex" : "Claude Code";
   const inOrg = workspace !== "personal";
-  const settingsHref = inOrg
-    ? `/settings?org=${encodeURIComponent(workspace)}`
-    : "/settings";
   const githubReady = Boolean(github?.connected);
   const activeOrg = orgs.find((o) => o.id === workspace) || null;
   const teamKeyReady = inOrg
@@ -545,12 +542,6 @@ export default function SessionComposeModal({
   const authOptions: AuthMode[] =
     runtime === "local" ? ["cli", "server", "byok"] : ["server", "byok"];
 
-  const subtitle = isCliSandbox
-    ? runtime === "cloud"
-      ? `${cliLabel} in a Blaxel sandbox — ${isCodex ? "OpenAI" : "Anthropic"} key required.`
-      : `${cliLabel} on your machine via the Steer CLI worker.`
-    : "Local uses your Cursor CLI login. Cloud needs a server key or BYOK.";
-
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center px-3 pt-[5vh] sm:pt-[8vh] pb-6">
       <button
@@ -607,9 +598,8 @@ export default function SessionComposeModal({
                 }
               }}
             />
-            <p className="text-[12px] text-[#6e6e6e] mb-4">{subtitle}</p>
 
-            <div className="space-y-4">
+            <div className="space-y-4 mt-3">
               <Field label="Workspace">
                 <select
                   value={workspace}
@@ -628,194 +618,80 @@ export default function SessionComposeModal({
                     </option>
                   ))}
                 </select>
-                <p className="text-[11px] text-[#6e6e6e] mt-1.5">
-                  {inOrg
-                    ? "Team sessions appear on every member’s shared dashboard."
-                    : "Personal sessions stay under your account."}
-                </p>
               </Field>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <Field label="Agent backend">
-                  <Segmented
+                  <select
                     value={backend}
-                    onChange={selectBackend}
-                    options={[
-                      { id: "cursor", label: "Cursor" },
-                      { id: "claude-code", label: "Claude" },
-                      { id: "codex", label: "Codex" },
-                    ]}
-                  />
+                    onChange={(e) =>
+                      selectBackend(e.target.value as AgentBackendKind)
+                    }
+                    className={inputClass}
+                  >
+                    <option value="cursor">Cursor</option>
+                    <option value="claude-code">Claude</option>
+                    <option value="codex">Codex</option>
+                  </select>
                 </Field>
                 <Field label="Runtime">
-                  <Segmented
+                  <select
                     value={runtime}
-                    onChange={selectRuntime}
-                    options={[
-                      {
-                        id: "local",
-                        label: isCliSandbox ? "Local (CLI)" : "Local",
-                      },
-                      {
-                        id: "cloud",
-                        label: isCliSandbox ? "Cloud (Blaxel)" : "Cloud",
-                      },
-                    ]}
-                  />
+                    onChange={(e) =>
+                      selectRuntime(e.target.value as AgentRuntime)
+                    }
+                    className={inputClass}
+                  >
+                    <option value="local">Local</option>
+                    <option value="cloud">Cloud</option>
+                  </select>
                 </Field>
               </div>
 
               <Field label="Control mode">
-                <div className="grid grid-cols-3 gap-1.5">
-                  {(
-                    [
-                      {
-                        id: "open" as const,
-                        label: "Open",
-                        body: "Any editor",
-                      },
-                      {
-                        id: "driver" as const,
-                        label: "Driver",
-                        body: "Driver/host",
-                      },
-                      {
-                        id: "host" as const,
-                        label: "Host only",
-                        body: "Host alone",
-                      },
-                    ] as const
-                  ).map((opt) => (
-                    <ChoiceCard
-                      key={opt.id}
-                      active={controlMode === opt.id}
-                      onClick={() => setControlMode(opt.id)}
-                      label={opt.label}
-                      body={opt.body}
-                    />
-                  ))}
-                </div>
-                {runtime === "local" && (
-                  <p className="text-[11px] text-[#c9a227] mt-2">
-                    Local agents can operate on the host machine. Driver mode is
-                    recommended.
-                  </p>
-                )}
+                <select
+                  value={controlMode}
+                  onChange={(e) =>
+                    setControlMode(e.target.value as "open" | "driver" | "host")
+                  }
+                  className={inputClass}
+                >
+                  <option value="open">Open</option>
+                  <option value="driver">Driver</option>
+                  <option value="host">Host only</option>
+                </select>
               </Field>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <Field label="Agent mode">
-                  <div className="grid grid-cols-2 gap-1.5">
-                    <ChoiceCard
-                      active={!planMode}
-                      onClick={() => setPlanMode(false)}
-                      label="Agent"
-                      body="Edit + shell"
-                    />
-                    <ChoiceCard
-                      active={planMode}
-                      onClick={() => setPlanMode(true)}
-                      label="Plan"
-                      body="Propose only"
-                    />
-                  </div>
+                  <select
+                    value={planMode ? "plan" : "agent"}
+                    onChange={(e) => setPlanMode(e.target.value === "plan")}
+                    className={inputClass}
+                  >
+                    <option value="agent">Agent</option>
+                    <option value="plan">Plan</option>
+                  </select>
                 </Field>
                 <Field label="Approval gates">
-                  <div className="grid grid-cols-3 gap-1.5">
-                    {(
-                      [
-                        { id: "off" as const, label: "Off" },
-                        { id: "dangerous" as const, label: "Dangerous" },
-                        { id: "all" as const, label: "All tools" },
-                      ] as const
-                    ).map((opt) => (
-                      <button
-                        key={opt.id}
-                        type="button"
-                        onClick={() => setApprovalMode(opt.id)}
-                        className={`h-9 rounded-md border px-1.5 text-[12px] transition-colors ${
-                          approvalMode === opt.id
-                            ? "bg-[#252525] border-[#c9a227] text-[#e4e4e4]"
-                            : "bg-[#171717] border-[#2b2b2b] text-[#6e6e6e] hover:text-[#a0a0a0]"
-                        }`}
-                      >
-                        {opt.label}
-                      </button>
-                    ))}
-                  </div>
+                  <select
+                    value={approvalMode}
+                    onChange={(e) =>
+                      setApprovalMode(
+                        e.target.value as "off" | "dangerous" | "all",
+                      )
+                    }
+                    className={inputClass}
+                  >
+                    <option value="off">Off</option>
+                    <option value="dangerous">Dangerous</option>
+                    <option value="all">All tools</option>
+                  </select>
                 </Field>
               </div>
 
-              <p className="text-[11px] text-[#6e6e6e] -mt-1">
-                Starts on Auto. Pick a specific model in the room — the catalog
-                is fetched live.
-              </p>
-
-              {isCliLocal && (
-                <Note>
-                  <p className="text-[12px] text-[#e4e4e4]">Local {cliLabel}</p>
-                  <p className="text-[11px] text-[#6e6e6e] mt-1">
-                    Uses your paired Steer worker and the{" "}
-                    <code className="text-[#a0a0a0]">
-                      {isCodex ? "codex" : "claude"}
-                    </code>{" "}
-                    CLI. No provider key is stored on the server.
-                  </p>
-                  <p
-                    className={`text-[11px] mt-1 ${
-                      workerOnline ? "text-[#3ecf8e]" : "text-[#f07070]"
-                    }`}
-                  >
-                    {workerOnline
-                      ? "CLI worker online"
-                      : "CLI worker offline — run `steer start`"}
-                  </p>
-                </Note>
-              )}
-
               {isClaudeCloud && (
                 <div className="space-y-3">
-                  <Note>
-                    <p className="text-[12px] text-[#e4e4e4]">
-                      Cloud Claude Code
-                    </p>
-                    <p className="text-[11px] text-[#6e6e6e] mt-1">
-                      Runs in a Blaxel sandbox. Clone, push, and PRs use your
-                      connected GitHub
-                      {github?.login ? ` (@${github.login})` : ""} — including
-                      private repos.
-                    </p>
-                    <p
-                      className={`text-[11px] mt-1 ${
-                        githubReady ? "text-[#3ecf8e]" : "text-[#f07070]"
-                      }`}
-                    >
-                      {githubReady ? (
-                        `GitHub connected${github?.login ? ` as @${github.login}` : ""}`
-                      ) : (
-                        <>
-                          Connect GitHub in{" "}
-                          <Link
-                            href={settingsHref}
-                            className="text-[#4d9fff] hover:underline"
-                          >
-                            Settings
-                          </Link>{" "}
-                          to clone and push private repos.
-                        </>
-                      )}
-                    </p>
-                    <p
-                      className={`text-[11px] mt-1 ${
-                        blaxelConfigured ? "text-[#3ecf8e]" : "text-[#f07070]"
-                      }`}
-                    >
-                      {blaxelConfigured
-                        ? "Blaxel configured on server"
-                        : "Server missing BL_API_KEY / BL_WORKSPACE"}
-                    </p>
-                  </Note>
-
                   <Field label="Anthropic API key">
                     {inOrg &&
                     orgAnthropicKeyConfigured &&
@@ -878,45 +754,6 @@ export default function SessionComposeModal({
 
               {isCodexCloud && (
                 <div className="space-y-3">
-                  <Note>
-                    <p className="text-[12px] text-[#e4e4e4]">Cloud Codex</p>
-                    <p className="text-[11px] text-[#6e6e6e] mt-1">
-                      Runs in a Blaxel sandbox. Clone, push, and PRs use your
-                      connected GitHub
-                      {github?.login ? ` (@${github.login})` : ""} — including
-                      private repos.
-                    </p>
-                    <p
-                      className={`text-[11px] mt-1 ${
-                        githubReady ? "text-[#3ecf8e]" : "text-[#f07070]"
-                      }`}
-                    >
-                      {githubReady ? (
-                        `GitHub connected${github?.login ? ` as @${github.login}` : ""}`
-                      ) : (
-                        <>
-                          Connect GitHub in{" "}
-                          <Link
-                            href={settingsHref}
-                            className="text-[#4d9fff] hover:underline"
-                          >
-                            Settings
-                          </Link>{" "}
-                          to clone and push private repos.
-                        </>
-                      )}
-                    </p>
-                    <p
-                      className={`text-[11px] mt-1 ${
-                        blaxelConfigured ? "text-[#3ecf8e]" : "text-[#f07070]"
-                      }`}
-                    >
-                      {blaxelConfigured
-                        ? "Blaxel configured on server"
-                        : "Server missing BL_API_KEY / BL_WORKSPACE"}
-                    </p>
-                  </Note>
-
                   <Field label="OpenAI API key">
                     {inOrg &&
                     orgOpenaiKeyConfigured &&
@@ -979,29 +816,25 @@ export default function SessionComposeModal({
 
               {!isCliSandbox && (
                 <Field label="Auth">
-                  <div className="flex flex-wrap gap-1.5 mb-2">
+                  <select
+                    value={authMode}
+                    onChange={(e) => {
+                      const next = e.target.value as AuthMode;
+                      if (next === "byok" && !byokAvailable) return;
+                      setAuthMode(next);
+                    }}
+                    className={`${inputClass} mb-2`}
+                  >
                     {authOptions.map((mode) => (
-                      <button
+                      <option
                         key={mode}
-                        type="button"
+                        value={mode}
                         disabled={mode === "byok" && !byokAvailable}
-                        onClick={() => setAuthMode(mode)}
-                        className={`h-8 px-2.5 rounded-md text-[12px] border transition-colors disabled:opacity-40 ${
-                          authMode === mode
-                            ? "bg-[#252525] border-[#4d9fff] text-[#e4e4e4]"
-                            : "bg-[#171717] border-[#2b2b2b] text-[#6e6e6e] hover:text-[#a0a0a0]"
-                        }`}
                       >
                         {authLabel(mode, inOrg)}
-                      </button>
+                      </option>
                     ))}
-                  </div>
-                  {authMode === "cli" && (
-                    <p className="text-[11px] text-[#6e6e6e]">
-                      Uses the Cursor account already logged in on this machine.
-                      No API key required.
-                    </p>
-                  )}
+                  </select>
                   {authMode === "server" && (
                     <div className="space-y-2">
                       {inOrg ? (
@@ -1147,11 +980,6 @@ export default function SessionComposeModal({
                       {pickingFolder ? "Opening…" : "Browse…"}
                     </button>
                   </div>
-                  <p className="text-[11px] text-[#6e6e6e] mt-1.5">
-                    {workerOnline
-                      ? "Opens a folder picker on the machine running `steer start`."
-                      : "Start your CLI worker first (`steer start`), then browse."}
-                  </p>
                 </Field>
               ) : (
                 <>
@@ -1179,24 +1007,6 @@ export default function SessionComposeModal({
                       placeholder="https://github.com/org/repo"
                       className={`${inputClass} font-mono`}
                     />
-                    {isCliSandbox && (
-                      <p className="text-[11px] text-[#6e6e6e] mt-1.5">
-                        {githubReady
-                          ? "Private and public repos from your connected GitHub. Auto-create PR uses that same account."
-                          : (
-                            <>
-                              Connect GitHub in{" "}
-                              <Link
-                                href={settingsHref}
-                                className="text-[#4d9fff] hover:underline"
-                              >
-                                Settings
-                              </Link>{" "}
-                              so {cliLabel} can clone and push private repos.
-                            </>
-                          )}
-                      </p>
-                    )}
                   </Field>
                   <div className="grid grid-cols-2 gap-3">
                     <Field label="Starting ref">
@@ -1268,68 +1078,3 @@ function Field({
   );
 }
 
-function Note({ children }: { children: ReactNode }) {
-  return (
-    <div className="rounded-md border border-[#2b2b2b] bg-[#171717] px-3 py-2.5">
-      {children}
-    </div>
-  );
-}
-
-function Segmented<T extends string>({
-  value,
-  onChange,
-  options,
-}: {
-  value: T;
-  onChange: (value: T) => void;
-  options: Array<{ id: T; label: string }>;
-}) {
-  return (
-    <div className="flex gap-1.5">
-      {options.map((opt) => (
-        <button
-          key={opt.id}
-          type="button"
-          onClick={() => onChange(opt.id)}
-          className={`h-9 flex-1 rounded-md text-[12px] border transition-colors ${
-            value === opt.id
-              ? "bg-[#252525] border-[#4d9fff] text-[#e4e4e4]"
-              : "bg-[#171717] border-[#2b2b2b] text-[#6e6e6e] hover:text-[#a0a0a0]"
-          }`}
-        >
-          {opt.label}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-function ChoiceCard({
-  active,
-  onClick,
-  label,
-  body,
-}: {
-  active: boolean;
-  onClick: () => void;
-  label: string;
-  body: string;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`rounded-md border px-2.5 py-2 text-left transition-colors ${
-        active
-          ? "bg-[#252525] border-[#4d9fff] text-[#e4e4e4]"
-          : "bg-[#171717] border-[#2b2b2b] text-[#6e6e6e] hover:text-[#a0a0a0]"
-      }`}
-    >
-      <div className="text-[12px] text-[#e4e4e4] leading-tight">{label}</div>
-      <div className="text-[10px] text-[#6e6e6e] mt-0.5 leading-tight">
-        {body}
-      </div>
-    </button>
-  );
-}

@@ -586,3 +586,33 @@ body {
   --color-primary-darker: #3a88e6;
   font-family: var(--font-ui);
 }
+
+/* Auth page: Clerk card stays rectangular; only controls are pills. */
+.steer-auth-clerk,
+.steer-auth-clerk .cl-card,
+.steer-auth-clerk .cl-cardBox,
+.steer-auth-card {
+  background: transparent !important;
+  box-shadow: none !important;
+  border: none !important;
+  border-radius: 0 !important;
+  width: 100% !important;
+  max-width: 100% !important;
+}
+
+.steer-auth-clerk .cl-socialButtonsBlockButton,
+.steer-auth-clerk .cl-formButtonPrimary,
+.steer-auth-clerk .cl-alternativeMethodsBlockButton,
+.steer-auth-clerk .steer-auth-pill {
+  height: 44px !important;
+  min-height: 44px !important;
+  max-height: 44px !important;
+  border-radius: 9999px !important;
+  overflow: hidden;
+}
+
+.steer-auth-clerk .cl-formFieldInput {
+  height: 44px !important;
+  min-height: 44px !important;
+  border-radius: 9999px !important;
+}
