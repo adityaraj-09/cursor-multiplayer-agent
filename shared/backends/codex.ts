@@ -9,8 +9,8 @@ import {
   formatToolResultDetail,
   isEditTool,
   TOOL_RESULT_DETAIL_LIMIT,
+  stringifyUnknown,
 } from "./cursor.js";
-import { stringifyUnknown } from "../stringifyUnknown";
 
 /**
  * OpenAI Codex CLI headless backend.
