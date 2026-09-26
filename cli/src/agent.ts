@@ -80,7 +80,9 @@ export function runAgentWithHandle(
   mode: "agent" | "plan" = "agent",
 ): RunHandle {
   const kind: AgentBackendKind =
-    backendKind === "claude-code" ? "claude-code" : "cursor";
+    backendKind === "claude-code" || backendKind === "codex"
+      ? backendKind
+      : "cursor";
   const backend = getBackend(kind);
 
   const promise = new Promise<void>((resolvePromise, reject) => {

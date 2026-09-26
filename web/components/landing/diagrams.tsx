@@ -103,7 +103,7 @@ export function RuntimeDiagram() {
 
         <rect x="390" y="44" width="190" height="118" rx="26" fill="#FAFAF8" stroke="#191919" strokeOpacity="0.10" />
         <text x="420" y="88" fill="#191919" fontSize="18" fontFamily="Georgia">Cloud</text>
-        <text x="420" y="118" fill="#191919" fillOpacity="0.52" fontSize="13" fontFamily="Inter">SDK + E2B</text>
+        <text x="420" y="118" fill="#191919" fillOpacity="0.52" fontSize="13" fontFamily="Inter">SDK + Blaxel</text>
         <rect x="420" y="132" width="96" height="8" rx="4" fill="#191919" fillOpacity="0.14" />
 
         <rect x="205" y="220" width="210" height="96" rx="30" fill="#191919" />

@@ -25,8 +25,10 @@ This project defaults to **SQLite** when `DATABASE_URL` is unset — good for on
 | `CORS_ORIGIN` | Your Vercel URL, e.g. `https://steer.vercel.app` |
 | `CURSOR_API_KEY` | Optional (Cursor Cloud / server auth) |
 | `ANTHROPIC_API_KEY` | Optional fallback for Claude Code cloud (prefer user BYOK) |
-| `E2B_API_KEY` | Required for Claude Code cloud (E2B sandboxes) |
-| `GITHUB_TOKEN` | Optional but recommended — push/PR for Claude Code cloud (`GH_TOKEN` also accepted) |
+| `OPENAI_API_KEY` | Optional fallback for Codex cloud (prefer user BYOK) |
+| `BL_API_KEY` | Required for Claude Code / Codex cloud (Blaxel sandboxes) |
+| `BL_WORKSPACE` | Required Blaxel workspace slug |
+| `GITHUB_TOKEN` | Optional but recommended — push/PR for Claude Code / Codex cloud (`GH_TOKEN` also accepted) |
 
 4. Note the service URL, e.g. `https://steer-api.onrender.com`.
 

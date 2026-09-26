@@ -8,8 +8,16 @@ import {
   isClaudeModelId,
 } from "../../shared/claudeModels";
 import {
+  CODEX_MODELS,
+  DEFAULT_CODEX_MODEL,
+  isCodexModelId,
+} from "../../shared/codexModels";
+import type { AgentBackendKind } from "../../shared/backends/types";
+import { isCliSandboxBackend } from "../../shared/backends/types";
+import {
   clearAnthropicByokKey,
   clearByokKey,
+  clearOpenaiByokKey,
   fetchAuthStatus,
   fetchModels,
   validateAgentScope,
@@ -21,10 +29,11 @@ interface AddAgentDialogProps {
   roomId: string;
   onSubmit: (data: {
     label: string;
-    backend: "cursor" | "claude-code";
+    backend: AgentBackendKind;
     scopePath?: string;
     modelId?: string;
     anthropicApiKey?: string;
+    openaiApiKey?: string;
     apiKey?: string;
     planMode?: boolean;
     seedContext?: boolean;
@@ -48,7 +57,7 @@ export default function AddAgentDialog({
   orgId,
 }: AddAgentDialogProps) {
   const [label, setLabel] = useState("");
-  const [backend, setBackend] = useState<"cursor" | "claude-code">("cursor");
+  const [backend, setBackend] = useState<AgentBackendKind>("cursor");
   const [scopePath, setScopePath] = useState("");
   const [scopeWarning, setScopeWarning] = useState("");
   const [modelId, setModelId] = useState("auto");
@@ -56,14 +65,19 @@ export default function AddAgentDialog({
   const [loadingCursorModels, setLoadingCursorModels] = useState(false);
   const [apiKey, setApiKey] = useState("");
   const [anthropicApiKey, setAnthropicApiKey] = useState("");
+  const [openaiApiKey, setOpenaiApiKey] = useState("");
   const [anthropicConfigured, setAnthropicConfigured] = useState(false);
   const [anthropicHint, setAnthropicHint] = useState<string | null>(null);
+  const [openaiConfigured, setOpenaiConfigured] = useState(false);
+  const [openaiHint, setOpenaiHint] = useState<string | null>(null);
   const [orgAnthropicConfigured, setOrgAnthropicConfigured] = useState(false);
   const [orgAnthropicHint, setOrgAnthropicHint] = useState<string | null>(null);
+  const [orgOpenaiConfigured, setOrgOpenaiConfigured] = useState(false);
+  const [orgOpenaiHint, setOrgOpenaiHint] = useState<string | null>(null);
   const [userByokConfigured, setUserByokConfigured] = useState(false);
   const [userByokHint, setUserByokHint] = useState<string | null>(null);
   const [serverKeyConfigured, setServerKeyConfigured] = useState(false);
-  const [e2bConfigured, setE2bConfigured] = useState(false);
+  const [blaxelConfigured, setBlaxelConfigured] = useState(false);
   const [byokAvailable, setByokAvailable] = useState(false);
   const [planMode, setPlanMode] = useState(false);
   const [seedContext, setSeedContext] = useState(true);
@@ -77,6 +91,8 @@ export default function AddAgentDialog({
     Boolean(anthropicApiKey.trim()) ||
     anthropicConfigured ||
     orgAnthropicConfigured;
+  const hasOpenaiAuth =
+    Boolean(openaiApiKey.trim()) || openaiConfigured || orgOpenaiConfigured;
 
   useEffect(() => {
     if (!open) return;
@@ -88,10 +104,14 @@ export default function AddAgentDialog({
         setAnthropicHint(s.userAnthropicByokHint ?? null);
         setOrgAnthropicConfigured(Boolean(s.orgAnthropicKeyConfigured));
         setOrgAnthropicHint(s.orgAnthropicKeyHint ?? null);
+        setOpenaiConfigured(Boolean(s.userOpenaiByokConfigured));
+        setOpenaiHint(s.userOpenaiByokHint ?? null);
+        setOrgOpenaiConfigured(Boolean(s.orgOpenaiKeyConfigured));
+        setOrgOpenaiHint(s.orgOpenaiKeyHint ?? null);
         setUserByokConfigured(Boolean(s.userByokConfigured));
         setUserByokHint(s.userByokHint ?? null);
         setServerKeyConfigured(Boolean(s.serverKeyConfigured));
-        setE2bConfigured(Boolean(s.e2bConfigured));
+        setBlaxelConfigured(Boolean(s.blaxelConfigured ?? s.e2bConfigured));
         setByokAvailable(Boolean(s.byokAvailable));
       })
       .catch(() => {
@@ -111,9 +131,17 @@ export default function AddAgentDialog({
           ? defaultModelId
           : DEFAULT_CLAUDE_MODEL,
       );
+    } else if (backend === "codex") {
+      setModelId(
+        defaultModelId && isCodexModelId(defaultModelId)
+          ? defaultModelId
+          : DEFAULT_CODEX_MODEL,
+      );
     } else {
       const fallback =
-        defaultModelId && !isClaudeModelId(defaultModelId)
+        defaultModelId &&
+        !isClaudeModelId(defaultModelId) &&
+        !isCodexModelId(defaultModelId)
           ? defaultModelId
           : "auto";
       setModelId(fallback);
@@ -223,6 +251,19 @@ export default function AddAgentDialog({
     }
   };
 
+  const handleClearOpenai = async () => {
+    try {
+      await clearOpenaiByokKey();
+      setOpenaiConfigured(false);
+      setOpenaiHint(null);
+      setOpenaiApiKey("");
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Failed to clear OpenAI key",
+      );
+    }
+  };
+
   const handleClearByok = async () => {
     try {
       await clearByokKey();
@@ -254,6 +295,14 @@ export default function AddAgentDialog({
       );
       return;
     }
+    if (backend === "codex" && runtime === "cloud" && !hasOpenaiAuth) {
+      setError(
+        orgId
+          ? "Set a shared OpenAI key in Team settings, or paste your key"
+          : "Paste your OpenAI API key for Codex",
+      );
+      return;
+    }
     if (needsCursorKey && !apiKey.trim() && !userByokConfigured && !serverKeyConfigured) {
       setError(
         "Paste your Cursor API key (or reuse the one saved from a previous session)",
@@ -273,6 +322,10 @@ export default function AddAgentDialog({
           backend === "claude-code" && anthropicApiKey.trim()
             ? anthropicApiKey.trim()
             : undefined,
+        openaiApiKey:
+          backend === "codex" && openaiApiKey.trim()
+            ? openaiApiKey.trim()
+            : undefined,
         apiKey:
           backend === "cursor" && apiKey.trim() ? apiKey.trim() : undefined,
       });
@@ -282,6 +335,7 @@ export default function AddAgentDialog({
       setPlanMode(false);
       setSeedContext(true);
       setAnthropicApiKey("");
+      setOpenaiApiKey("");
       setApiKey("");
       onClose();
     } catch (err) {
@@ -294,11 +348,16 @@ export default function AddAgentDialog({
   const modelOptions =
     backend === "claude-code"
       ? CLAUDE_MODELS
-      : cursorModels.length
-        ? cursorModels
-        : models.length && !models.every((m) => isClaudeModelId(m.id))
-          ? models
-          : [{ id: "auto", displayName: "Auto" }];
+      : backend === "codex"
+        ? CODEX_MODELS
+        : cursorModels.length
+          ? cursorModels
+          : models.length &&
+              !models.every(
+                (m) => isClaudeModelId(m.id) || isCodexModelId(m.id),
+              )
+            ? models
+            : [{ id: "auto", displayName: "Auto" }];
 
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 p-3">
@@ -329,7 +388,7 @@ export default function AddAgentDialog({
         <select
           value={backend}
           onChange={(e) => {
-            const next = e.target.value as "cursor" | "claude-code";
+            const next = e.target.value as AgentBackendKind;
             setBackend(next);
             setError("");
           }}
@@ -338,16 +397,20 @@ export default function AddAgentDialog({
           <option value="cursor">Cursor</option>
           <option value="claude-code">
             Claude Code
-            {runtime === "cloud" ? " (E2B sandbox)" : " (local CLI)"}
+            {runtime === "cloud" ? " (Blaxel sandbox)" : " (local CLI)"}
+          </option>
+          <option value="codex">
+            Codex
+            {runtime === "cloud" ? " (Blaxel sandbox)" : " (local CLI)"}
           </option>
         </select>
-        {backend === "claude-code" && (
+        {isCliSandboxBackend(backend) && (
           <p className="text-[11px] text-[#6e6e6e] mb-3 -mt-1">
             {runtime === "cloud"
-              ? e2bConfigured
-                ? "Runs in an E2B sandbox. Bring your own Anthropic API key."
-                : "Server is missing E2B_API_KEY — Claude Code cloud won’t start until it’s set."
-              : "Uses the claude CLI on the host running steer start."}
+              ? blaxelConfigured
+                ? `Runs in a Blaxel sandbox. Bring your own ${backend === "codex" ? "OpenAI" : "Anthropic"} API key.`
+                : "Server is missing BL_API_KEY / BL_WORKSPACE — cloud CLI agents won’t start until they’re set."
+              : `Uses the ${backend === "codex" ? "codex" : "claude"} CLI on the host running steer start.`}
           </p>
         )}
         {backend === "cursor" && runtime === "cloud" && (
@@ -456,6 +519,57 @@ export default function AddAgentDialog({
               </button>
             )}
             {!anthropicConfigured && <div className="mb-3" />}
+          </>
+        )}
+
+        {backend === "codex" && runtime === "cloud" && (
+          <>
+            <label className="block text-[11px] text-[#6e6e6e] mb-1">
+              OpenAI API key
+            </label>
+            {orgOpenaiConfigured &&
+            !openaiApiKey.trim() &&
+            !openaiConfigured ? (
+              <p className="text-[11px] text-[#a0a0a0] mb-1">
+                Using team shared OpenAI key {orgOpenaiHint}. Paste a
+                personal key below only to override.
+              </p>
+            ) : openaiConfigured && !openaiApiKey.trim() ? (
+              <p className="text-[11px] text-[#a0a0a0] mb-1">
+                Using your saved key {openaiHint}. Paste a new key below to
+                replace it.
+              </p>
+            ) : (
+              <p className="text-[11px] text-[#6e6e6e] mb-1">
+                {openaiConfigured
+                  ? `Replacing saved key ${openaiHint}. Saved to your account for future Codex agents.`
+                  : orgId && !orgOpenaiConfigured
+                    ? "No team OpenAI key — paste one or set it in Team settings."
+                    : byokAvailable
+                      ? "Saved to your account for future Codex agents."
+                      : "Paste your OpenAI API key (sk-…)."}
+              </p>
+            )}
+            <input
+              type="password"
+              value={openaiApiKey}
+              onChange={(e) => setOpenaiApiKey(e.target.value)}
+              placeholder={
+                hasOpenaiAuth ? "Paste new key to override…" : "sk-…"
+              }
+              autoComplete="off"
+              className="w-full h-9 mb-1 px-2.5 rounded-md bg-[#252525] border border-[#2b2b2b] text-[13px] text-[#e4e4e4] outline-none focus:border-[#4d9fff]"
+            />
+            {openaiConfigured && (
+              <button
+                type="button"
+                onClick={() => void handleClearOpenai()}
+                className="text-[11px] text-[#a0a0a0] hover:text-[#f07070] mb-3"
+              >
+                Clear saved OpenAI key
+              </button>
+            )}
+            {!openaiConfigured && <div className="mb-3" />}
           </>
         )}
 

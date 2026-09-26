@@ -548,6 +548,12 @@ export class WorkerRelay {
       );
     }
 
+    if (backend === "codex" && worker.protocol < 5) {
+      throw new Error(
+        "Update the Steer CLI (`npm i -g @oblivihon/steer@latest`) to run Codex agents",
+      );
+    }
+
     if (attachments?.length && worker.protocol < 4) {
       throw new Error(
         "Update the Steer CLI (`npm i -g @oblivihon/steer@latest`) to forward images and files to local agents",
@@ -566,7 +572,8 @@ export class WorkerRelay {
       cwd: cwd || repoPath,
       modelId,
       sessionId,
-      backend: backend === "claude-code" ? "claude-code" : "cursor",
+      backend:
+        backend === "claude-code" || backend === "codex" ? backend : "cursor",
       mode: mode === "plan" ? "plan" : "agent",
       attachments:
         attachments && attachments.length > 0 ? attachments : undefined,
