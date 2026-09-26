@@ -22,17 +22,16 @@ describe("Blaxel CLI sandbox user", () => {
     assertValidSh(script);
   });
 
-  it("drops root via su and inlines IS_SANDBOX for Claude", () => {
+  it("inlines IS_SANDBOX without su so stdout can stream", () => {
     const cmd = wrapSandboxCliCommand("claude -p hi", {
       IS_SANDBOX: "1",
       ANTHROPIC_API_KEY: "sk-ant-test",
     });
-    expect(cmd).toContain(`su -s /bin/sh ${SANDBOX_USER} -c`);
     expect(cmd).toContain("IS_SANDBOX=1");
     expect(cmd).toContain("ANTHROPIC_API_KEY=");
     expect(cmd).toContain("claude -p hi");
+    expect(cmd).not.toContain(" su ");
     expect(cmd).not.toMatch(/\bthen\b/);
-    expect(cmd).not.toMatch(/\bfi\b/);
     assertValidSh(cmd);
   });
 
