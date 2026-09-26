@@ -21,7 +21,6 @@ import DriverControls from "../DriverControls";
 import AgentTabs from "../AgentTabs";
 import AgentSplitGrid from "../AgentSplitGrid";
 import SplitViewMenu from "../SplitViewMenu";
-import LockPanel from "../LockPanel";
 import ReviewPingBanner from "../ReviewPingBanner";
 import AttentionBadge from "../board/AttentionBadge";
 import FullscreenButton from "../FullscreenButton";
@@ -125,13 +124,9 @@ export default function RoomChatPane() {
     handleGrantDrive,
     handleAbortRun,
     handleStopAgent,
-    handleForceRelease,
     handleDecideApproval,
     handleAnswerQuestions,
     handleIntegrateAgent,
-    conflicts,
-    fileLocks,
-    lastBlocked,
     agentError,
     hasMoreHistory,
     hasMoreByAgent,
@@ -623,16 +618,6 @@ export default function RoomChatPane() {
               )}
           </div>
         )}
-
-      <LockPanel
-        conflicts={conflicts}
-        fileLocks={fileLocks}
-        agents={agents}
-        currentAgentId={selectedAgentId}
-        amHost={canManage}
-        lastBlocked={lastBlocked}
-        onForceRelease={handleForceRelease}
-      />
 
       <main className="relative z-10 flex min-h-0 min-w-0 flex-1 overflow-hidden overscroll-none">
         {!splitActive && (

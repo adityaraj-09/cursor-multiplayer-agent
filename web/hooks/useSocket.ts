@@ -4,15 +4,12 @@ import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { useAuth as useClerkAuth } from "@clerk/nextjs";
 import { acquireSocket, releaseSocket, type AppSocket } from "../lib/socket";
 import type {
-  AgentConflict,
-  AgentConflictBlocked,
   AgentInfo,
   AgentRunStatus,
   ApprovalRequestInfo,
   ChatHistoryPage,
   ChatMessage,
   CloudMeta,
-  FileLease,
   Participant,
 
   PingInfo,
@@ -24,13 +21,6 @@ import {
   applyChatDelta,
   resetStreamContents,
 } from "../lib/streamContents";
-import type {
-  AgentContextReceiptInfo,
-  MemoryEntryInfo,
-  RepoMapInfo,
-  RoomContextSnapshot,
-} from "../../shared/roomContext";
-
 interface UseSocketReturn {
   socket: AppSocket | null;
   connected: boolean;
@@ -43,9 +33,6 @@ interface UseSocketReturn {
   statusByAgent: Record<string, AgentRunStatus>;
   errorByAgent: Record<string, string>;
   diffByAgent: Record<string, string>;
-  conflicts: AgentConflict[];
-  fileLocks: FileLease[];
-  lastBlocked: AgentConflictBlocked | null;
   /** Open approval gates waiting for a human decision. */
   pendingApprovals: ApprovalRequestInfo[];
   /** Open review pings for this room. */
@@ -92,13 +79,6 @@ interface UseSocketReturn {
   removeMember: (userId: string) => void;
   dismissDriveRequest: () => void;
   drivingAgentIds: string[];
-  roomContext: RoomContextSnapshot | null;
-  contextStale: {
-    agentId: string;
-    usedVersion: number;
-    currentVersion: number;
-  } | null;
-  autoMemoryNotice: { agentId: string; count: number } | null;
 }
 
 function parseAgentStatus(
@@ -149,14 +129,10 @@ export function useSocket(
     {},
   );
   const [diffByAgent, setDiffByAgent] = useState<Record<string, string>>({});
-  const [conflicts, setConflicts] = useState<AgentConflict[]>([]);
-  const [fileLocks, setFileLocks] = useState<FileLease[]>([]);
   const [pendingApprovals, setPendingApprovals] = useState<
     ApprovalRequestInfo[]
   >([]);
   const [openPings, setOpenPings] = useState<PingInfo[]>([]);
-  const [lastBlocked, setLastBlocked] =
-    useState<AgentConflictBlocked | null>(null);
   const [agentStatus, setAgentStatus] = useState<AgentRunStatus>("idle");
   const [agentError, setAgentError] = useState("");
   const [pendingRequest, setPendingRequest] = useState<{
@@ -180,18 +156,6 @@ export function useSocket(
   const [typingByAgent, setTypingByAgent] = useState<
     Record<string, TypingUser[]>
   >({});
-  const [roomContext, setRoomContext] = useState<RoomContextSnapshot | null>(
-    null,
-  );
-  const [contextStale, setContextStale] = useState<{
-    agentId: string;
-    usedVersion: number;
-    currentVersion: number;
-  } | null>(null);
-  const [autoMemoryNotice, setAutoMemoryNotice] = useState<{
-    agentId: string;
-    count: number;
-  } | null>(null);
   const socketRef = useRef<AppSocket | null>(null);
 
   const drivingAgentIds = useMemo(() => {
@@ -247,13 +211,10 @@ export function useSocket(
           : {},
       );
       setAgents(Array.isArray(snap.agents) ? snap.agents : []);
-      setConflicts(Array.isArray(snap.conflicts) ? snap.conflicts : []);
-      setFileLocks(Array.isArray(snap.fileLocks) ? snap.fileLocks : []);
       setPendingApprovals(
         Array.isArray(snap.pendingApprovals) ? snap.pendingApprovals : [],
       );
       setOpenPings(Array.isArray(snap.openPings) ? snap.openPings : []);
-      if (snap.roomContext) setRoomContext(snap.roomContext);
       if (snap.cloudMeta) setCloudMeta(snap.cloudMeta);
       if (Array.isArray(snap.members)) setMembers(snap.members);
     };
@@ -371,8 +332,6 @@ export function useSocket(
       }
     };
     const onAgents = (list: AgentInfo[]) => setAgents(list);
-    const onConflicts = (c: AgentConflict[]) => setConflicts(c);
-    const onFileLocks = (leases: FileLease[]) => setFileLocks(leases);
     const onToolApprovals = (list: ApprovalRequestInfo[]) =>
       setPendingApprovals(Array.isArray(list) ? list : []);
     const onToolApprovalRequested = (req: ApprovalRequestInfo) => {
@@ -414,8 +373,6 @@ export function useSocket(
       if (!ping?.id) return;
       setOpenPings((prev) => prev.filter((p) => p.id !== ping.id));
     };
-    const onConflictBlocked = (payload: AgentConflictBlocked) =>
-      setLastBlocked(payload);
     const onDriveRequested = (payload: {
       socketId: string;
       name: string;
@@ -514,79 +471,6 @@ export function useSocket(
         return changed ? next : prev;
       });
     };
-    const onRoomContext = (snapshot: RoomContextSnapshot) => {
-      if (!snapshot) return;
-      setRoomContext(snapshot);
-    };
-    const onMemoryUpdated = (entry: MemoryEntryInfo, memoryVersion: number) => {
-      if (!entry?.id) return;
-      setRoomContext((prev) => {
-        const entries = prev?.entries ? [...prev.entries] : [];
-        const idx = entries.findIndex((e) => e.id === entry.id);
-        if (idx >= 0) entries[idx] = entry;
-        else entries.unshift(entry);
-        return {
-          memoryVersion,
-          map: prev?.map ?? null,
-          entries,
-          lastReceiptByAgent: prev?.lastReceiptByAgent ?? {},
-        };
-      });
-    };
-    const onRepoMapUpdated = (map: RepoMapInfo) => {
-      if (!map) return;
-      setRoomContext((prev) => ({
-        memoryVersion: prev?.memoryVersion ?? 0,
-        map,
-        entries: prev?.entries ?? [],
-        lastReceiptByAgent: prev?.lastReceiptByAgent ?? {},
-      }));
-    };
-    const onContextReceipt = (receipt: AgentContextReceiptInfo) => {
-      if (!receipt?.agentId) return;
-      setRoomContext((prev) => ({
-        memoryVersion: prev?.memoryVersion ?? receipt.memoryVersion,
-        map: prev?.map ?? null,
-        entries: prev?.entries ?? [],
-        lastReceiptByAgent: {
-          ...(prev?.lastReceiptByAgent ?? {}),
-          [receipt.agentId]: receipt,
-        },
-      }));
-    };
-    const onContextStale = (payload: {
-      agentId: string;
-      usedVersion: number;
-      currentVersion: number;
-    }) => {
-      if (!payload?.agentId) return;
-      setContextStale(payload);
-    };
-    const onAutoMemorySaved = (payload: {
-      agentId: string;
-      count: number;
-      entries: MemoryEntryInfo[];
-    }) => {
-      if (!payload?.count) return;
-      setAutoMemoryNotice({ agentId: payload.agentId, count: payload.count });
-      if (payload.entries?.length) {
-        setRoomContext((prev) => {
-          const entries = prev?.entries ? [...prev.entries] : [];
-          for (const entry of payload.entries) {
-            const idx = entries.findIndex((e) => e.id === entry.id);
-            if (idx >= 0) entries[idx] = entry;
-            else entries.unshift(entry);
-          }
-          return {
-            memoryVersion: prev?.memoryVersion ?? 0,
-            map: prev?.map ?? null,
-            entries,
-            lastReceiptByAgent: prev?.lastReceiptByAgent ?? {},
-          };
-        });
-      }
-    };
-
     const onChangesReverted = (payload: {
       agentId?: string;
       filePaths: string[];
@@ -631,8 +515,6 @@ export function useSocket(
       s.on("chat-delta", onChatDelta);
       s.on("agent-status", onAgentStatus);
       s.on("agents", onAgents);
-      s.on("agent-conflicts", onConflicts);
-      s.on("file-locks", onFileLocks);
       s.on("tool-approvals", onToolApprovals);
       s.on("tool-approval-requested", onToolApprovalRequested);
       s.on("tool-approval-resolved", onToolApprovalResolved);
@@ -640,7 +522,6 @@ export function useSocket(
       s.on("review-flagged", onReviewFlagged);
       s.on("review-acked", onReviewAcked);
       s.on("review-dismissed", onReviewDismissed);
-      s.on("agent-conflict-blocked", onConflictBlocked);
       s.on("drive-requested", onDriveRequested);
       s.on("drive-request-pending", onDriveRequestPending);
       s.on("drive-granted", onDriveGranted);
@@ -653,12 +534,6 @@ export function useSocket(
       s.on("kicked", onKicked);
       s.on("typing", onTyping);
       s.on("typing-stop", onTypingStop);
-      s.on("room-context", onRoomContext);
-      s.on("memory-updated", onMemoryUpdated);
-      s.on("repo-map-updated", onRepoMapUpdated);
-      s.on("context-receipt", onContextReceipt);
-      s.on("context-stale", onContextStale);
-      s.on("auto-memory-saved", onAutoMemorySaved);
       s.on("changes-reverted", onChangesReverted);
     })();
 
@@ -675,8 +550,6 @@ export function useSocket(
         attached.off("chat-delta", onChatDelta);
         attached.off("agent-status", onAgentStatus);
         attached.off("agents", onAgents);
-        attached.off("agent-conflicts", onConflicts);
-        attached.off("file-locks", onFileLocks);
         attached.off("tool-approvals", onToolApprovals);
         attached.off("tool-approval-requested", onToolApprovalRequested);
         attached.off("tool-approval-resolved", onToolApprovalResolved);
@@ -686,7 +559,6 @@ export function useSocket(
         attached.off("review-dismissed", onReviewDismissed);
         attached.off("changes-reverted", onChangesReverted);
         attached.off("review-dismissed", onReviewDismissed);
-        attached.off("agent-conflict-blocked", onConflictBlocked);
         attached.off("drive-requested", onDriveRequested);
         attached.off("drive-request-pending", onDriveRequestPending);
         attached.off("drive-granted", onDriveGranted);
@@ -699,12 +571,6 @@ export function useSocket(
         attached.off("kicked", onKicked);
         attached.off("typing", onTyping);
         attached.off("typing-stop", onTypingStop);
-        attached.off("room-context", onRoomContext);
-        attached.off("memory-updated", onMemoryUpdated);
-        attached.off("repo-map-updated", onRepoMapUpdated);
-        attached.off("context-receipt", onContextReceipt);
-        attached.off("context-stale", onContextStale);
-        attached.off("auto-memory-saved", onAutoMemorySaved);
       }
       releaseSocket(roomId);
       socketRef.current = null;
@@ -725,23 +591,11 @@ export function useSocket(
       setStatusByAgent({});
       setErrorByAgent({});
       setDiffByAgent({});
-      setConflicts([]);
-      setFileLocks([]);
       setPendingApprovals([]);
       setOpenPings([]);
-      setLastBlocked(null);
       setTypingByAgent({});
-      setRoomContext(null);
-      setContextStale(null);
-      setAutoMemoryNotice(null);
     };
   }, [roomId, name, isSignedIn]);
-
-  useEffect(() => {
-    if (!autoMemoryNotice) return;
-    const t = setTimeout(() => setAutoMemoryNotice(null), 8000);
-    return () => clearTimeout(t);
-  }, [autoMemoryNotice]);
 
   useEffect(() => {
     setMessages([]);
@@ -897,9 +751,6 @@ export function useSocket(
     statusByAgent,
     errorByAgent,
     diffByAgent,
-    conflicts,
-    fileLocks,
-    lastBlocked,
     pendingApprovals,
     openPings,
     typingByAgent,
@@ -932,8 +783,5 @@ export function useSocket(
     leaveRoom,
     removeMember,
     drivingAgentIds,
-    roomContext,
-    contextStale,
-    autoMemoryNotice,
   };
 }

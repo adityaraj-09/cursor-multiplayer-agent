@@ -504,7 +504,6 @@ export async function updateRoomSettings(
   data: {
     controlMode?: "open" | "driver" | "host";
     approvalMode?: "off" | "dangerous" | "all";
-    autoMemory?: "off" | "extract";
   },
 ): Promise<RoomInfo> {
   const res = await fetch(`${API_BASE}/rooms/${id}/settings`, {
@@ -992,24 +991,6 @@ export async function validateAgentScope(
   };
 }
 
-export async function forceReleaseFileLock(
-  roomId: string,
-  path: string,
-): Promise<void> {
-  const res = await fetch(`${API_BASE}/rooms/${roomId}/file-locks/force-release`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...(await authHeaders()),
-    },
-    body: JSON.stringify({ path }),
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err.error || "Failed to release lock");
-  }
-}
-
 export async function stopRoomAgent(
   roomId: string,
   agentId: string,
@@ -1394,148 +1375,6 @@ export async function clearOrgOpenaiKey(orgId: string): Promise<void> {
 async function parseApiError(res: Response, fallback: string): Promise<string> {
   const err = await res.json().catch(() => ({}));
   return (err as { error?: string }).error || fallback;
-}
-
-export async function fetchRoomContext(
-  roomId: string,
-): Promise<import("../../shared/roomContext").RoomContextSnapshot> {
-  const res = await fetch(`${API_BASE}/rooms/${roomId}/context`, {
-    headers: await authHeaders(),
-  });
-  if (!res.ok) throw new Error(await parseApiError(res, "Failed to load context"));
-  return res.json();
-}
-
-export async function createRoomMemory(
-  roomId: string,
-  data: {
-    kind: string;
-    title: string;
-    content: string;
-    pinned?: boolean;
-    agentId?: string;
-    sourcePath?: string;
-  },
-): Promise<import("../../shared/roomContext").MemoryEntryInfo> {
-  const res = await fetch(`${API_BASE}/rooms/${roomId}/memory`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...(await authHeaders()),
-    },
-    body: JSON.stringify(data),
-  });
-  if (!res.ok) throw new Error(await parseApiError(res, "Failed to create memory"));
-  return res.json();
-}
-
-export async function updateRoomMemory(
-  roomId: string,
-  entryId: string,
-  data: {
-    expectedRevision: number;
-    title?: string;
-    content?: string;
-    pinned?: boolean;
-  },
-): Promise<import("../../shared/roomContext").MemoryEntryInfo> {
-  const res = await fetch(
-    `${API_BASE}/rooms/${roomId}/memory/${encodeURIComponent(entryId)}`,
-    {
-      method: "PATCH",
-      headers: {
-        "Content-Type": "application/json",
-        ...(await authHeaders()),
-      },
-      body: JSON.stringify(data),
-    },
-  );
-  if (!res.ok) throw new Error(await parseApiError(res, "Failed to update memory"));
-  return res.json();
-}
-
-export async function acceptRoomMemory(
-  roomId: string,
-  entryId: string,
-  expectedRevision?: number,
-): Promise<import("../../shared/roomContext").MemoryEntryInfo> {
-  const res = await fetch(
-    `${API_BASE}/rooms/${roomId}/memory/${encodeURIComponent(entryId)}/accept`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(await authHeaders()),
-      },
-      body: JSON.stringify({ expectedRevision }),
-    },
-  );
-  if (!res.ok) throw new Error(await parseApiError(res, "Failed to accept memory"));
-  return res.json();
-}
-
-export async function archiveRoomMemory(
-  roomId: string,
-  entryId: string,
-  expectedRevision?: number,
-): Promise<import("../../shared/roomContext").MemoryEntryInfo> {
-  const res = await fetch(
-    `${API_BASE}/rooms/${roomId}/memory/${encodeURIComponent(entryId)}/archive`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(await authHeaders()),
-      },
-      body: JSON.stringify({ expectedRevision }),
-    },
-  );
-  if (!res.ok) throw new Error(await parseApiError(res, "Failed to archive memory"));
-  return res.json();
-}
-
-export async function refreshRoomRepoMap(
-  roomId: string,
-): Promise<import("../../shared/roomContext").RepoMapInfo> {
-  const res = await fetch(`${API_BASE}/rooms/${roomId}/repo-map`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...(await authHeaders()),
-    },
-  });
-  if (!res.ok) throw new Error(await parseApiError(res, "Failed to refresh repo map"));
-  const data = await res.json();
-  return data.map;
-}
-
-export async function fetchHandoffDraft(
-  roomId: string,
-  agentId: string,
-): Promise<import("../../shared/roomContext").HandoffDraft> {
-  const res = await fetch(
-    `${API_BASE}/rooms/${roomId}/memory/handoff-draft?agentId=${encodeURIComponent(agentId)}`,
-    { headers: await authHeaders() },
-  );
-  if (!res.ok) throw new Error(await parseApiError(res, "Failed to load handoff draft"));
-  return res.json();
-}
-
-export async function captureHandoffDraft(
-  roomId: string,
-  agentId: string,
-  data?: { title?: string; content?: string; asProposal?: boolean },
-): Promise<import("../../shared/roomContext").MemoryEntryInfo> {
-  const res = await fetch(`${API_BASE}/rooms/${roomId}/memory/handoff-draft`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...(await authHeaders()),
-    },
-    body: JSON.stringify({ agentId, ...data }),
-  });
-  if (!res.ok) throw new Error(await parseApiError(res, "Failed to capture handoff"));
-  return res.json();
 }
 
 export type { IssueInfo, IssueSettingsInfo, IssueAttachmentInfo, IssueTranscript };

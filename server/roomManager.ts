@@ -78,7 +78,6 @@ import {
 } from "../shared/approvals.js";
 import { attributionPromptSuffix, type SteerAuthor } from "../shared/attribution.js";
 import { looksLikePlan, planImplementPrompt } from "../shared/plans.js";
-import { extractAutoMemories } from "./repoContext/extract.js";
 import {
   buildAgentBriefing,
   buildHandoffDraft,
@@ -152,8 +151,7 @@ import {
   type RoomInviteRole,
   type RoomRole,
 } from "../shared/roomPermissions.js";
-import { detectAgentConflicts, resolveAgentCwd, findScopeOverlap, formatScopeOverlapError } from "./agentConflicts.js";
-import { FileLockRegistry, broadcastFileLocks } from "./fileLocks.js";
+import { resolveAgentCwd, findScopeOverlap, formatScopeOverlapError } from "./agentConflicts.js";
 import {
   envSlackWebhookConfigured,
   notifyEvent,
@@ -168,8 +166,6 @@ import {
 import { log } from "./logger.js";
 import type {
   AgentInfo,
-  AgentConflict,
-  AgentConflictBlocked,
   AgentBackendKind,
   AgentStatus,
   AgentRuntime,
@@ -469,24 +465,13 @@ function attachRoomCursorByok(row: db.RoomRow, apiKey: string): void {
 export class RoomManager {
   private rooms = new Map<string, RoomState>();
   private socketRooms = new Map<string, string>();
-  readonly fileLocks: FileLockRegistry;
+  /** Cached collaboration roles — invalidated on membership changes. */
+  private roleCache = new Map<string, RoomRole | null>();
 
   constructor(
     private io: Server<ClientToServerEvents, ServerToClientEvents>,
     private workerRelay?: WorkerRelay,
-    fileLocks?: FileLockRegistry,
   ) {
-    this.fileLocks =
-      fileLocks ??
-      new FileLockRegistry((roomId) => {
-        const room = this.rooms.get(roomId);
-        if (room) this.broadcastFileLocks(room);
-      });
-    this.fileLocks.setOnChange((roomId) => {
-      const room = this.rooms.get(roomId);
-      if (room) this.broadcastFileLocks(room);
-    });
-
     this.restoreRooms();
 
     this.workerRelay?.onRunsDisconnected((runs) => {
@@ -1224,7 +1209,6 @@ export class RoomManager {
     if (agent) agent.row = agentRow;
     if (room) {
       this.broadcastAgents(room);
-      this.broadcastConflicts(room);
     }
     return this.toAgentInfo(agentRow);
   }
@@ -1279,14 +1263,12 @@ export class RoomManager {
     }
   }
 
-  broadcastRoomContext(roomId: string): void {
-    this.io.to(roomId).emit("room-context", this.getRoomContextSnapshot(roomId));
+  broadcastRoomContext(_roomId: string): void {
+    // Shared memory UI disabled.
   }
 
-  private broadcastMemoryUpdated(roomId: string, entry: MemoryEntryInfo): void {
-    this.io
-      .to(roomId)
-      .emit("memory-updated", entry, db.getRoomMemoryVersion(roomId));
+  private broadcastMemoryUpdated(_roomId: string, _entry: MemoryEntryInfo): void {
+    // Shared memory UI disabled.
   }
 
   userCanEditMemory(roomId: string, userId: string): boolean {
@@ -1523,21 +1505,6 @@ export class RoomManager {
     return entry;
   }
 
-  private broadcastConflicts(room: RoomState): void {
-    const agentData = [...room.agents.values()].map((a) => ({
-      id: a.row.id,
-      status: a.row.status,
-      scopePath: a.row.scope_path,
-      touchedPaths: a.touchedPaths,
-    }));
-    const conflicts = detectAgentConflicts(agentData);
-    this.io.to(room.id).emit("agent-conflicts", conflicts);
-  }
-
-  private broadcastFileLocks(room: RoomState): void {
-    broadcastFileLocks(this.io, room.id, this.fileLocks);
-  }
-
   private agentScopeCandidates(roomId: string): Array<{
     id: string;
     label: string;
@@ -1580,50 +1547,6 @@ export class RoomManager {
     if (agent) return agent.row.label;
     const row = db.getAgent(agentId);
     return row?.label || agentId.slice(0, 6);
-  }
-
-  private emitConflictBlocked(
-    room: RoomState,
-    agentId: string,
-    path: string,
-    holderAgentId: string,
-  ): void {
-    const payload: AgentConflictBlocked = {
-      agentId,
-      path,
-      holderAgentId,
-      action: "aborted",
-    };
-    this.io.to(room.id).emit("agent-conflict-blocked", payload);
-  }
-
-  private tryAcquireEditLock(
-    room: RoomState,
-    agent: AgentState,
-    toolName: string | undefined,
-    path: string | undefined,
-    callId?: string,
-  ): boolean {
-    if (!path || !toolName || !isEditTool(toolName)) return true;
-    const result = this.fileLocks.tryAcquire(
-      room.id,
-      agent.row.id,
-      path,
-      callId,
-    );
-    if (result.ok) return true;
-    this.emitConflictBlocked(room, agent.row.id, path, result.holderAgentId);
-    return false;
-  }
-
-  private releaseEditLock(
-    room: RoomState,
-    agent: AgentState,
-    toolName: string | undefined,
-    path: string | undefined,
-  ): void {
-    if (!path || !toolName || !isEditTool(toolName)) return;
-    this.fileLocks.release(room.id, agent.row.id, path);
   }
 
   /** True when this tool event should land on the agent's single todos card. */
@@ -1711,30 +1634,6 @@ export class RoomManager {
     return id;
   }
 
-  forceReleaseFileLock(
-    roomId: string,
-    rawPath: string,
-    actorUserId: string,
-  ): boolean {
-    const row = db.getRoom(roomId);
-    if (!row || row.status !== "active") {
-      throw new Error("Room not found");
-    }
-    this.assertCanManage(roomId, actorUserId);
-    const released = this.fileLocks.forceRelease(roomId, rawPath);
-    broadcastFileLocks(this.io, roomId, this.fileLocks);
-    return released;
-  }
-
-  private lockConflictMessage(
-    room: RoomState,
-    path: string,
-    holderAgentId: string,
-  ): string {
-    const holder = this.agentLabel(room, holderAgentId);
-    return `\`${path}\` is locked by ${holder}. Wait for the other agent to finish or ask the host to release the lock.`;
-  }
-
   private emitAgentStatus(
     room: RoomState,
     agentId: string,
@@ -1780,13 +1679,8 @@ export class RoomManager {
       .emit("cursor-session-updated", agent.row.id, next);
   }
 
-  private noteTouchedPath(
-    room: RoomState,
-    agent: AgentState,
-    path: string,
-  ): void {
+  private noteTouchedPath(agent: AgentState, path: string): void {
     agent.touchedPaths.add(path);
-    this.broadcastConflicts(room);
   }
 
   private assistantStreamSink(
@@ -1969,22 +1863,13 @@ export class RoomManager {
       agentInfos.map((agent) => agent.id),
       80,
     );
-    const conflictData = [...room.agents.values()].map((a) => ({
-      id: a.row.id,
-      status: a.row.status,
-      scopePath: a.row.scope_path,
-      touchedPaths: a.touchedPaths,
-    }));
-    const conflicts = detectAgentConflicts(conflictData);
     const pendingApprovals = db
       .listPendingApprovals(roomId)
       .map((r) => this.approvalRowToInfo(r));
     const openPings = db
       .listOpenRoomPings(roomId)
       .map((r) => this.pingRowToInfo(r));
-    const roomContext = this.getRoomContextSnapshot(roomId);
     const members = this.listMembers(roomId);
-    const fileLocks = this.fileLocks.list(roomId);
     const cloudMeta = room.row.runtime === "cloud" ? room.cloudMeta : null;
 
     socket.emit("room-snapshot", {
@@ -1992,21 +1877,15 @@ export class RoomManager {
       hasMoreHistory: history.hasMore,
       hasMoreByAgent: history.hasMoreByAgent,
       agents: agentInfos,
-      conflicts,
-      fileLocks,
       pendingApprovals,
       openPings,
-      roomContext,
       cloudMeta,
       members,
     });
     socket.emit("chat-history", history.messages);
     socket.emit("agents", agentInfos);
-    socket.emit("agent-conflicts", conflicts);
-    socket.emit("file-locks", fileLocks);
     socket.emit("tool-approvals", pendingApprovals);
     socket.emit("room-pings", openPings);
-    socket.emit("room-context", roomContext);
     if (cloudMeta) socket.emit("cloud-meta", cloudMeta);
 
     // Emit per-agent status
@@ -2163,6 +2042,7 @@ export class RoomManager {
     }
 
     db.removeRoomMember(room.id, userId);
+    this.invalidateRoleCacheForRoom(room.id);
     socket.emit("kicked", "You left the session");
     this.leaveRoom(socket);
     this.broadcastMembers(room.id);
@@ -2186,6 +2066,7 @@ export class RoomManager {
     }
 
     db.removeRoomMember(room.id, targetUserId);
+    this.invalidateRoleCacheForRoom(room.id);
 
     for (const [sid, p] of [...room.participants.entries()]) {
       if (p.userId !== targetUserId) continue;
@@ -2885,25 +2766,6 @@ export class RoomManager {
             bubbleBaseLen = seenFullText.length;
             const toolPath = event.path;
             if (
-              !this.tryAcquireEditLock(
-                room,
-                agent,
-                event.name,
-                toolPath,
-                event.callId,
-              )
-            ) {
-              const holder =
-                this.fileLocks.list(room.id).find((l) => l.path === toolPath)
-                  ?.agentId || "another agent";
-              finishWorkerRun(
-                "error",
-                this.lockConflictMessage(room, toolPath || "file", holder),
-              );
-              this.workerRelay?.abortRun(room.id, agent.row.id);
-              break;
-            }
-            if (
               this.gateDangerousTool(
                 room,
                 agent,
@@ -2938,9 +2800,8 @@ export class RoomManager {
               (event.callId
                 ? agent.toolPaths.get(event.callId)
                 : undefined);
-            this.releaseEditLock(room, agent, event.name, toolPath);
             if (toolPath && event.name && isEditTool(event.name)) {
-              this.noteTouchedPath(room, agent, toolPath);
+              this.noteTouchedPath(agent, toolPath);
             }
             this.upsertAgentToolMessage(room, agent, {
               callId: event.callId,
@@ -2994,7 +2855,7 @@ export class RoomManager {
         });
 
         agent.filePatches.set(path, patch);
-        this.noteTouchedPath(room, agent, path);
+        this.noteTouchedPath(agent, path);
         this.emitAgentDiff(room, agent);
       },
     );
@@ -3070,7 +2931,6 @@ export class RoomManager {
     agent.workerRunActive = false;
     for (const c of agent.workerRunCleanups) c();
     agent.workerRunCleanups = [];
-    this.fileLocks.releaseAllForAgent(roomId, agentId);
     this.workerRelay?.releaseRun(roomId, agentId);
     this.workerRelay?.clearRunListeners(roomId, agentId);
 
@@ -3228,7 +3088,7 @@ export class RoomManager {
       });
 
       agent.filePatches.set(path, patch);
-      this.noteTouchedPath(room, agent, path);
+      this.noteTouchedPath(agent, path);
       this.emitAgentDiff(room, agent);
     };
 
@@ -3343,24 +3203,6 @@ export class RoomManager {
             const path =
               event.path || extractToolPath(event.detail) || undefined;
             if (
-              !this.tryAcquireEditLock(
-                room,
-                agent,
-                event.name,
-                path,
-                event.callId,
-              )
-            ) {
-              const holder =
-                this.fileLocks
-                  .list(room.id)
-                  .find((l) => path && l.path === path)?.agentId ||
-                "another agent";
-              throw new Error(
-                this.lockConflictMessage(room, path || "file", holder),
-              );
-            }
-            if (
               this.gateDangerousTool(
                 room,
                 agent,
@@ -3397,9 +3239,8 @@ export class RoomManager {
                 : undefined) ||
               extractToolPath(event.detail) ||
               undefined;
-            this.releaseEditLock(room, agent, event.name, path);
             if (path && event.name && isEditTool(event.name)) {
-              this.noteTouchedPath(room, agent, path);
+              this.noteTouchedPath(agent, path);
             }
             const content = event.detail || path || "Done";
             const synthetic = event.diffPatch?.trim() || "";
@@ -3585,118 +3426,8 @@ export class RoomManager {
       roomId: room.id,
       meta: { agentId: agent.row.id, outcome },
     });
-    if (outcome === "completed" || outcome === "error") {
-      const receipts = db.listAgentContextReceipts(agent.row.id, 1);
-      const current = db.getRoomMemoryVersion(room.id);
-      if (receipts[0] && receipts[0].memory_version < current) {
-        this.io.to(room.id).emit("context-stale", {
-          agentId: agent.row.id,
-          usedVersion: receipts[0].memory_version,
-          currentVersion: current,
-        });
-      }
-    }
-    this.ingestAutoMemory(room, agent, outcome);
     if (isIntegratorAgent(agent.row)) {
       void this.finishIntegrationJob(room, agent, outcome);
-    }
-  }
-
-  private ingestAutoMemory(
-    room: RoomState,
-    agent: AgentState,
-    outcome: "completed" | "error" | "aborted",
-  ): void {
-    const now = Date.now();
-    const advanceCursor = () => {
-      try {
-        db.setAgentAutoMemCursor(agent.row.id, now);
-        agent.row.auto_mem_cursor_ts = now;
-      } catch (err) {
-        console.warn(
-          "[RoomManager] auto-memory cursor failed:",
-          err instanceof Error ? err.message : err,
-        );
-      }
-    };
-
-    if (outcome !== "completed") {
-      advanceCursor();
-      return;
-    }
-
-    const mode = parseAutoMemoryMode(room.row.auto_memory);
-    if (mode === "off") {
-      advanceCursor();
-      return;
-    }
-
-    try {
-      const cursor = Number(agent.row.auto_mem_cursor_ts ?? 0);
-      // Inclusive of the user turn that started this run (it is stored before
-      // runStartedAt). First extract uses a short lookback instead of all history.
-      const since =
-        cursor > 0
-          ? cursor
-          : Math.max(0, (agent.runStartedAt ?? now) - 5 * 60 * 1000);
-      const messages = db
-        .getMessages(room.id, 400)
-        .filter((m) => m.agentId === agent.row.id && m.ts > since);
-      const existing = db.listMemoryEntries(room.id, { includeProposed: true });
-      const candidates = extractAutoMemories({
-        agentLabel: agent.row.label,
-        messages,
-        touchedPaths: [...agent.touchedPaths],
-        branch: agent.row.branch,
-        prUrl: agent.row.pr_url,
-        existing: existing.map((e) => ({
-          kind: e.kind,
-          title: e.title,
-          content: e.content,
-          status: e.status,
-          source: e.source,
-        })),
-      });
-      const saved: MemoryEntryInfo[] = [];
-      for (const candidate of candidates) {
-        try {
-          saved.push(
-            createSanitizedMemory({
-              roomId: room.id,
-              kind: candidate.kind,
-              title: candidate.title,
-              content: candidate.content,
-              status: "active",
-              createdByAgentId: agent.row.id,
-              sourceMessageId: candidate.sourceMessageId,
-              sourcePath: candidate.sourcePath,
-              source: "auto",
-            }),
-          );
-        } catch (err) {
-          console.warn(
-            "[RoomManager] auto-memory persist skipped:",
-            err instanceof Error ? err.message : err,
-          );
-        }
-      }
-      if (saved.length) {
-        for (const entry of saved) this.broadcastMemoryUpdated(room.id, entry);
-        this.io.to(room.id).emit("auto-memory-saved", {
-          agentId: agent.row.id,
-          count: saved.length,
-          entries: saved,
-        });
-        this.broadcastRoomContext(room.id);
-      }
-    } catch (err) {
-      console.warn(
-        "[RoomManager] auto-memory extract failed:",
-        err instanceof Error ? err.message : err,
-      );
-    } finally {
-      advanceCursor();
-      agent.runStartedAt = null;
     }
   }
 
@@ -4531,7 +4262,6 @@ export class RoomManager {
     room.agents.set(agentRow.id, agentState);
     this.applyBackendMode(agentState);
     this.broadcastAgents(room);
-    this.broadcastConflicts(room);
 
     return this.toAgentInfo(agentRow);
   }
@@ -4567,11 +4297,8 @@ export class RoomManager {
     db.updateAgentStatus(agentId, "stopped");
     agent.row.status = "stopped";
 
-    this.fileLocks.releaseAllForAgent(roomId, agentId);
-
     this.emitAgentStatus(room, agentId, "idle");
     this.broadcastAgents(room);
-    this.broadcastConflicts(room);
   }
 
   // -----------------------------------------------------------------------
@@ -4737,7 +4464,6 @@ export class RoomManager {
     await agent.backend.abortAndWait();
 
     agent.workerRunActive = false;
-    this.fileLocks.releaseAllForAgent(id, resolvedAgentId);
 
     const note: ChatMessage = {
       id: nanoid(12),
@@ -4985,18 +4711,41 @@ export class RoomManager {
    * Resolve the caller's collaboration role for a room.
    * Owner always wins; explicit room membership is next; org members default to editor.
    */
-  resolveUserRoomRole(roomId: string, userId: string): RoomRole | null {
-    const row = db.getRoom(roomId);
-    if (!row) return null;
-    if (row.owner_id === userId) return "owner";
-    const memberRole = normalizeRoomRole(db.getRoomMemberRole(roomId, userId));
-    if (memberRole === "owner") return "owner";
-    if (memberRole) return memberRole;
-    if (row.org_id && db.isOrganizationMember(row.org_id, userId)) {
-      // Org access without an explicit room seat — collaborative default.
-      return "editor";
+  private roleCacheKey(roomId: string, userId: string): string {
+    return `${roomId}:${userId}`;
+  }
+
+  private invalidateRoleCacheForRoom(roomId: string): void {
+    const prefix = `${roomId}:`;
+    for (const key of this.roleCache.keys()) {
+      if (key.startsWith(prefix)) this.roleCache.delete(key);
     }
-    return null;
+  }
+
+  resolveUserRoomRole(roomId: string, userId: string): RoomRole | null {
+    const cacheKey = this.roleCacheKey(roomId, userId);
+    if (this.roleCache.has(cacheKey)) {
+      return this.roleCache.get(cacheKey) ?? null;
+    }
+    const row = db.getRoom(roomId);
+    if (!row) {
+      this.roleCache.set(cacheKey, null);
+      return null;
+    }
+    let role: RoomRole | null = null;
+    if (row.owner_id === userId) role = "owner";
+    else {
+      const memberRole = normalizeRoomRole(
+        db.getRoomMemberRole(roomId, userId),
+      );
+      if (memberRole === "owner") role = "owner";
+      else if (memberRole) role = memberRole;
+      else if (row.org_id && db.isOrganizationMember(row.org_id, userId)) {
+        role = "editor";
+      }
+    }
+    this.roleCache.set(cacheKey, role);
+    return role;
   }
 
   userCanSteerAgent(
@@ -5152,6 +4901,7 @@ export class RoomManager {
       }
       const role = parseRoomInviteRole(preferredRole, "viewer");
       db.addRoomMember(roomId, userId, role);
+      this.invalidateRoleCacheForRoom(roomId);
       this.broadcastMembers(roomId);
     } else if (
       isOrgMember &&
@@ -5160,6 +4910,7 @@ export class RoomManager {
     ) {
       // Trusted org members get editor so team sessions stay collaborative.
       db.addRoomMember(roomId, userId, "editor");
+      this.invalidateRoleCacheForRoom(roomId);
       this.broadcastMembers(roomId);
     }
     return this.toRoomInfo(
@@ -5255,6 +5006,7 @@ export class RoomManager {
       throw new Error("Member not found");
     }
     db.addRoomMember(roomId, targetUserId, role);
+    this.invalidateRoleCacheForRoom(roomId);
     const members = this.listMembers(roomId);
     this.broadcastMembers(roomId);
     const live = this.rooms.get(roomId);
@@ -5299,21 +5051,9 @@ export class RoomManager {
       `- Messages: ${messages.length}`,
       `- Status: ${info.status}`,
       ``,
-      `## Shared memory`,
+      `## Transcript`,
       ``,
     ];
-
-    const memory = db.listMemoryEntries(roomId, { includeProposed: true });
-    if (memory.length) {
-      for (const e of memory) {
-        lines.push(
-          `- [${e.kind} ${e.status} r${e.current_revision}${e.pinned ? " pinned" : ""}] ${e.title}: ${e.content}`,
-        );
-      }
-    } else {
-      lines.push(`_No room memory recorded._`);
-    }
-    lines.push(``, `## Transcript`, ``);
 
     for (const m of messages) {
       const when = new Date(m.ts).toISOString();
@@ -6288,38 +6028,13 @@ export class RoomManager {
   }
 
   private recordIntegrationMemory(
-    room: RoomState,
-    agent: AgentState,
-    source: AgentState | undefined,
-    prUrl: string,
-    notes?: string,
+    _room: RoomState,
+    _agent: AgentState,
+    _source: AgentState | undefined,
+    _prUrl: string,
+    _notes?: string,
   ): void {
-    const label = source?.row.label || "agent";
-    const content = [
-      `Merged ${label}${source?.row.branch ? ` (\`${source.row.branch}\`)` : ""} into \`${room.row.integration_branch}\`.`,
-      `PR: ${prUrl}`,
-      notes ? notes : "",
-      "Spot-check that both features survived conflict resolution.",
-    ]
-      .filter(Boolean)
-      .join("\n\n");
-    try {
-      const entry = createSanitizedMemory({
-        roomId: room.id,
-        kind: "discovery",
-        title: `Integration: ${label}`,
-        content,
-        status: "active",
-        createdByAgentId: agent.row.id,
-        source: "auto",
-      });
-      this.broadcastMemoryUpdated(room.id, entry);
-    } catch (err) {
-      console.warn(
-        "[RoomManager] integration memory failed:",
-        err instanceof Error ? err.message : err,
-      );
-    }
+    // Shared memory disabled — integration notes are not persisted.
   }
 
   private toRoomInfo(

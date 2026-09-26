@@ -128,20 +128,12 @@ export function createSanitizedMemory(input: {
   return toMemoryInfo(row);
 }
 
-export function buildRoomContextSnapshot(roomId: string): RoomContextSnapshot {
-  const { map } = loadRoomGraph(roomId);
-  const entries = db
-    .listMemoryEntries(roomId, { includeProposed: true })
-    .map(toMemoryInfo);
-  const lastReceiptByAgent: Record<string, AgentContextReceiptInfo> = {};
-  for (const row of db.latestContextReceiptsByAgent(roomId)) {
-    lastReceiptByAgent[row.agent_id] = toReceiptInfo(row);
-  }
+export function buildRoomContextSnapshot(_roomId: string): RoomContextSnapshot {
   return {
-    memoryVersion: db.getRoomMemoryVersion(roomId),
-    map,
-    entries,
-    lastReceiptByAgent,
+    memoryVersion: 0,
+    map: null,
+    entries: [],
+    lastReceiptByAgent: {},
   };
 }
 
@@ -161,15 +153,11 @@ export function buildAgentBriefing(opts: {
     // map failures should not block the run
   }
   const { map, graph } = loadRoomGraph(opts.room.id);
-  const entries = db
-    .listMemoryEntries(opts.room.id)
-    .filter((e) => e.status === "active")
-    .map(toMemoryInfo);
   const packed = packRoomContext({
     graph,
     map,
-    entries,
-    memoryVersion: db.getRoomMemoryVersion(opts.room.id),
+    entries: [],
+    memoryVersion: 0,
     prompt: opts.prompt,
     agentScopePath: opts.agent.scope_path,
     touchedPaths: opts.touchedPaths,

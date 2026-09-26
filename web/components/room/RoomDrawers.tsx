@@ -2,7 +2,6 @@
 
 import AgentTabs from "../AgentTabs";
 import SidePanel from "../SidePanel";
-import ContextPanel from "../ContextPanel";
 import RoomSettingsDialog from "../RoomSettingsDialog";
 import InvitePanel from "../InvitePanel";
 import FlagForReviewDialog from "../FlagForReviewDialog";
@@ -28,21 +27,16 @@ export default function RoomDrawers() {
     cloudMeta,
     flagReview,
     leaveRoom,
-    roomContext,
-    contextStale,
     runtime,
     controlMode,
     approvalMode,
-    autoMemory,
     myRole,
     amHost,
     canManage,
     canFlag,
-    canEditMemory,
     models,
     savingControlMode,
     savingApprovalMode,
-    savingAutoMemory,
     togglingPlanMode,
     flagOpen,
     setFlagOpen,
@@ -62,8 +56,6 @@ export default function RoomDrawers() {
     changesOpen,
     setChangesOpen,
     setArtifactsOpen,
-    memoryOpen,
-    setMemoryOpen,
     addAgentOpen,
     setAddAgentOpen,
     stopping,
@@ -84,7 +76,6 @@ export default function RoomDrawers() {
     handleStopAgent,
     handleControlModeChange,
     handleApprovalModeChange,
-    handleAutoMemoryChange,
     handleTogglePlanMode,
     handleExport,
     handleStopSession,
@@ -140,20 +131,6 @@ export default function RoomDrawers() {
         />
       )}
 
-      {memoryOpen && (
-        <ContextPanel
-          roomId={roomId}
-          snapshot={roomContext}
-          canEdit={canEditMemory}
-          selectedAgentId={selectedAgentId}
-          selectedAgentLabel={selectedAgent?.label}
-          agentIdle={selectedStatus !== "running"}
-          stale={contextStale}
-          mobile
-          onClose={() => setMemoryOpen(false)}
-        />
-      )}
-
       <RoomSettingsDialog
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
@@ -162,7 +139,6 @@ export default function RoomDrawers() {
         myRole={myRole}
         controlMode={controlMode}
         approvalMode={approvalMode}
-        autoMemory={autoMemory}
         canManage={canManage}
         amHost={amHost}
         selectedAgent={selectedAgent}
@@ -171,12 +147,10 @@ export default function RoomDrawers() {
         planModeBusy={togglingPlanMode}
         savingControlMode={savingControlMode}
         savingApprovalMode={savingApprovalMode}
-        savingAutoMemory={savingAutoMemory}
         exporting={exporting}
         stopping={stopping}
         onControlModeChange={(mode) => void handleControlModeChange(mode)}
         onApprovalModeChange={(mode) => void handleApprovalModeChange(mode)}
-        onAutoMemoryChange={(mode) => void handleAutoMemoryChange(mode)}
         onTogglePlanMode={() => void handleTogglePlanMode()}
         onOpenSlack={() => {
           setSettingsOpen(false);
@@ -194,10 +168,6 @@ export default function RoomDrawers() {
         onOpenAgents={() => {
           setSettingsOpen(false);
           setAgentsOpen(true);
-        }}
-        onOpenMemory={() => {
-          setSettingsOpen(false);
-          setMemoryOpen(true);
         }}
         onOpenChanges={() => {
           setSettingsOpen(false);

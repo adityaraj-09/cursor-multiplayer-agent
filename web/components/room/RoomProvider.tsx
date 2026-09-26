@@ -10,7 +10,6 @@ import {
   addRoomAgent,
   exportRoomTranscript,
   fetchRoomModels,
-  forceReleaseFileLock,
   integrateRoomAgent,
   stopRoom,
   stopRoomAgent,
@@ -53,7 +52,6 @@ import {
   DEFAULT_CODEX_MODEL,
 } from "../../../shared/codexModels";
 import type { AgentBackendKind } from "../../../shared/backends/types";
-import { parseAutoMemoryMode, type AutoMemoryMode } from "../../../shared/roomContext";
 import {
   canRequestDrive,
   canSteerWithRole,
@@ -103,9 +101,6 @@ export default function RoomProvider({
     statusByAgent,
     errorByAgent,
     diffByAgent,
-    conflicts,
-    fileLocks,
-    lastBlocked,
     pendingApprovals,
     openPings,
     typingByAgent,
@@ -137,9 +132,6 @@ export default function RoomProvider({
     leaveRoom,
     dismissDriveRequest,
     drivingAgentIds,
-    roomContext,
-    contextStale,
-    autoMemoryNotice,
   } = useSocket(roomId, userName, {
     onKicked: (reason) => {
       if (onKicked) {
@@ -155,7 +147,6 @@ export default function RoomProvider({
   const modelId = liveModelId || roomInfo?.modelId || "auto";
   const controlMode: ControlMode = roomInfo?.controlMode || "open";
   const approvalMode: ApprovalMode = roomInfo?.approvalMode || "off";
-  const autoMemory: AutoMemoryMode = parseAutoMemoryMode(roomInfo?.autoMemory);
   const myRole: RoomRole =
     roomInfo?.myRole ||
     (user?.id && roomInfo?.ownerId && user.id === roomInfo.ownerId
@@ -164,13 +155,11 @@ export default function RoomProvider({
   const amHost = myRole === "owner";
   const canManage = Boolean(roomInfo?.myCanManage || amHost);
   const canFlag = myRole === "owner" || myRole === "editor";
-  const canEditMemory = myRole === "owner" || myRole === "editor";
   const [models, setModels] = useState<ModelInfo[]>(FALLBACK_MODELS);
   const [modelError, setModelError] = useState("");
   const [savingModel, setSavingModel] = useState(false);
   const [savingControlMode, setSavingControlMode] = useState(false);
   const [savingApprovalMode, setSavingApprovalMode] = useState(false);
-  const [savingAutoMemory, setSavingAutoMemory] = useState(false);
   const [togglingPlanMode, setTogglingPlanMode] = useState(false);
   const [decidingApprovalId, setDecidingApprovalId] = useState<string | null>(
     null,
@@ -186,7 +175,6 @@ export default function RoomProvider({
   const [agentsOpen, setAgentsOpen] = useState(false);
   const [changesOpen, setChangesOpen] = useState(false);
   const [artifactsOpen, setArtifactsOpen] = useState(false);
-  const [memoryOpen, setMemoryOpen] = useState(false);
   const [addAgentOpen, setAddAgentOpen] = useState(false);
   const [cursorSessionError, setCursorSessionError] = useState("");
   const [savingCursorSession, setSavingCursorSession] = useState(false);
@@ -713,19 +701,6 @@ export default function RoomProvider({
     [roomId],
   );
 
-  const handleForceRelease = useCallback(
-    async (path: string) => {
-      try {
-        await forceReleaseFileLock(roomId, path);
-      } catch (err) {
-        setActionError(
-          err instanceof Error ? err.message : "Failed to release lock",
-        );
-      }
-    },
-    [roomId],
-  );
-
   const handleControlModeChange = useCallback(
     async (mode: ControlMode) => {
       if (!canManage || mode === controlMode) return;
@@ -764,25 +739,6 @@ export default function RoomProvider({
       }
     },
     [canManage, approvalMode, roomId, onRoomInfo],
-  );
-
-  const handleAutoMemoryChange = useCallback(
-    async (mode: AutoMemoryMode) => {
-      if (!canManage || mode === autoMemory) return;
-      setSavingAutoMemory(true);
-      setActionError("");
-      try {
-        const updated = await updateRoomSettings(roomId, { autoMemory: mode });
-        onRoomInfo(updated);
-      } catch (err) {
-        setActionError(
-          err instanceof Error ? err.message : "Failed to update auto memory",
-        );
-      } finally {
-        setSavingAutoMemory(false);
-      }
-    },
-    [canManage, autoMemory, roomId, onRoomInfo],
   );
 
   const handleTogglePlanMode = useCallback(async () => {
@@ -886,9 +842,6 @@ export default function RoomProvider({
         statusByAgent,
         errorByAgent,
         diffByAgent,
-        conflicts,
-        fileLocks,
-        lastBlocked,
         pendingApprovals,
         openPings,
         typingByAgent,
@@ -917,24 +870,18 @@ export default function RoomProvider({
         leaveRoom,
         dismissDriveRequest,
         drivingAgentIds,
-        roomContext,
-        contextStale,
-        autoMemoryNotice,
         runtime,
         controlMode,
         approvalMode,
-        autoMemory,
         myRole,
         amHost,
         canManage,
         canFlag,
-        canEditMemory,
         models,
         modelError,
         savingModel,
         savingControlMode,
         savingApprovalMode,
-        savingAutoMemory,
         togglingPlanMode,
         decidingApprovalId,
         flagOpen,
@@ -956,8 +903,6 @@ export default function RoomProvider({
         setChangesOpen,
         artifactsOpen,
         setArtifactsOpen,
-        memoryOpen,
-        setMemoryOpen,
         addAgentOpen,
         setAddAgentOpen,
         cursorSessionError,
@@ -1008,10 +953,8 @@ export default function RoomProvider({
         handleIntegrateAgent,
         handleAddAgent,
         handleStopAgent,
-        handleForceRelease,
         handleControlModeChange,
         handleApprovalModeChange,
-        handleAutoMemoryChange,
         handleTogglePlanMode,
         handleDecideApproval,
         handleExport,

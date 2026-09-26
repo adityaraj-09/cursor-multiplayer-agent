@@ -343,11 +343,8 @@ export interface RoomJoinSnapshot {
   hasMoreHistory: boolean;
   hasMoreByAgent?: Record<string, boolean>;
   agents: AgentInfo[];
-  conflicts: AgentConflict[];
-  fileLocks: FileLease[];
   pendingApprovals: ApprovalRequestInfo[];
   openPings: PingInfo[];
-  roomContext: RoomContextSnapshot;
   cloudMeta: CloudMeta | null;
   members: RoomMemberInfo[];
 }
@@ -390,9 +387,6 @@ export interface ServerToClientEvents {
   "drive-granted": (agentId?: string) => void;
   "drive-released": (agentId?: string) => void;
   agents: (agents: AgentInfo[]) => void;
-  "agent-conflicts": (conflicts: AgentConflict[]) => void;
-  "file-locks": (leases: FileLease[]) => void;
-  "agent-conflict-blocked": (payload: AgentConflictBlocked) => void;
   /** Peer started / refreshed typing toward an agent. */
   typing: (payload: TypingUser) => void;
   /** Peer stopped typing (omit agentId to clear all agents for that socket). */
@@ -545,18 +539,6 @@ export interface WorkerToServerEvents {
     sessions?: CursorChatSession[];
     error?: string;
   }) => void;
-  "worker:acquire-lock": (data: {
-    requestId: string;
-    roomId: string;
-    agentId: string;
-    path: string;
-    callId?: string;
-  }) => void;
-  "worker:release-lock": (data: {
-    roomId: string;
-    agentId: string;
-    path: string;
-  }) => void;
   "worker:files-reverted": (data: {
     roomId: string;
     agentId?: string;
@@ -591,11 +573,6 @@ export interface ServerToWorkerEvents {
     repoPath: string;
   }) => void;
   "worker:error": (message: string) => void;
-  "worker:lock-result": (data: {
-    requestId: string;
-    granted: boolean;
-    holderAgentId?: string;
-  }) => void;
   "worker:revert-files": (data: {
     roomId: string;
     agentId?: string;

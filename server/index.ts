@@ -8,7 +8,6 @@ import { log, logError } from "./logger.js";
 import { requestLog } from "./requestLog.js";
 import { RoomManager } from "./roomManager.js";
 import { WorkerRelay } from "./workerRelay.js";
-import { FileLockRegistry } from "./fileLocks.js";
 import { listModelsForKey, listReposForKey } from "./sdkAgent.js";
 import { listCliModels } from "./cliModels.js";
 import { encryptionConfigured } from "./keyCrypto.js";
@@ -147,7 +146,6 @@ const io = new Server<ClientToServerEvents, ServerToClientEvents>(httpServer, {
   allowEIO3: true,
 });
 
-const fileLocks = new FileLockRegistry();
 const workerRelay = new WorkerRelay(io as unknown as Server, (token) => {
   // CLI workers use hashed session tokens (not Clerk JWTs)
   const session =
@@ -159,9 +157,9 @@ const workerRelay = new WorkerRelay(io as unknown as Server, (token) => {
       | undefined);
   if (!session || session.expires_at < Date.now()) return null;
   return { userId: session.user_id, workerId: `w-${session.user_id}` };
-}, fileLocks);
+});
 
-const roomManager = new RoomManager(io, workerRelay, fileLocks);
+const roomManager = new RoomManager(io, workerRelay);
 
 async function attachRedisAdapter(): Promise<void> {
   const redisUrl = process.env.REDIS_URL?.trim();
@@ -188,7 +186,6 @@ async function attachRedisAdapter(): Promise<void> {
 setInterval(() => {
   try {
     db.deleteExpiredSessions();
-    fileLocks.purgeExpired();
   } catch (err) {
     console.error("[auth] deleteExpiredSessions failed:", err);
   }
@@ -743,7 +740,7 @@ app.post("/api/rooms/:id/pings/:pingId/ack", requireAuth, (req, res) => {
 
 /**
  * PATCH /api/rooms/:id/settings — host updates collaboration settings.
- * Body: { controlMode?, approvalMode?, autoMemory?: "off" | "extract" }
+ * Body: { controlMode?, approvalMode? }
  */
 app.patch("/api/rooms/:id/settings", requireAuth, (req, res) => {
   const id = routeParam(req.params.id);
@@ -760,13 +757,6 @@ app.patch("/api/rooms/:id/settings", requireAuth, (req, res) => {
       room = roomManager.setApprovalMode(
         id,
         String(req.body.approvalMode || ""),
-        req.user!.id,
-      );
-    }
-    if (req.body?.autoMemory !== undefined) {
-      room = roomManager.setAutoMemoryMode(
-        id,
-        String(req.body.autoMemory || ""),
         req.user!.id,
       );
     }
@@ -1067,31 +1057,6 @@ app.post("/api/rooms/:id/agents/validate-scope", requireAuth, (req, res) => {
   res.status(409).json({ ok: false, error: result.error });
 });
 
-app.post("/api/rooms/:id/file-locks/force-release", requireAuth, (req, res) => {
-  const id = routeParam(req.params.id);
-  if (!roomManager.userCanAccessRoom(id, req.user!.id)) {
-    res.status(404).json({ error: "Room not found" });
-    return;
-  }
-  const path = req.body?.path ? String(req.body.path) : "";
-  if (!path.trim()) {
-    res.status(400).json({ error: "path is required" });
-    return;
-  }
-  try {
-    const released = roomManager.forceReleaseFileLock(
-      id,
-      path,
-      req.user!.id,
-    );
-    res.json({ ok: true, released });
-  } catch (err) {
-    res.status(400).json({
-      error: err instanceof Error ? err.message : "Failed to release lock",
-    });
-  }
-});
-
 app.patch("/api/rooms/:id/agents/:agentId", requireAuth, (req, res) => {
   const id = routeParam(req.params.id);
   const agentId = routeParam(req.params.agentId);
@@ -1375,200 +1340,6 @@ app.post("/api/rooms/:id/members/remove", requireAuth, (req, res) => {
   roomManager.kickUserSockets(id, targetUserId, "Removed from the session");
   roomManager.broadcastMembers(id);
   res.json({ ok: true });
-});
-
-function memoryHttpError(err: unknown): { status: number; error: string } {
-  const message = err instanceof Error ? err.message : "Memory request failed";
-  const code = (err as Error & { code?: string }).code;
-  if (code === "revision_conflict" || message.includes("revision conflict")) {
-    return { status: 409, error: message };
-  }
-  if (message === "Not allowed") return { status: 403, error: message };
-  if (message.includes("not found") || message.includes("Room not found")) {
-    return { status: 404, error: message };
-  }
-  return { status: 400, error: message };
-}
-
-app.get("/api/rooms/:id/context", requireAuth, (req, res) => {
-  const id = routeParam(req.params.id);
-  if (!roomManager.userCanAccessRoom(id, req.user!.id)) {
-    res.status(404).json({ error: "Room not found" });
-    return;
-  }
-  res.json(roomManager.getRoomContextSnapshot(id));
-});
-
-app.get("/api/rooms/:id/memory", requireAuth, (req, res) => {
-  try {
-    const entries = roomManager.listRoomMemory(
-      routeParam(req.params.id),
-      req.user!.id,
-    );
-    res.json({
-      entries,
-      memoryVersion: roomManager.getRoomContextSnapshot(routeParam(req.params.id))
-        .memoryVersion,
-    });
-  } catch (err) {
-    const { status, error } = memoryHttpError(err);
-    res.status(status).json({ error });
-  }
-});
-
-app.post("/api/rooms/:id/memory", requireAuth, (req, res) => {
-  try {
-    const entry = roomManager.createRoomMemory(
-      routeParam(req.params.id),
-      req.user!.id,
-      {
-        kind: req.body?.kind,
-        title: req.body?.title,
-        content: req.body?.content,
-        pinned: Boolean(req.body?.pinned),
-        agentId: req.body?.agentId ? String(req.body.agentId) : undefined,
-        sourceMessageId: req.body?.sourceMessageId
-          ? String(req.body.sourceMessageId)
-          : null,
-        sourcePath: req.body?.sourcePath ? String(req.body.sourcePath) : null,
-      },
-    );
-    res.status(201).json(entry);
-  } catch (err) {
-    const { status, error } = memoryHttpError(err);
-    res.status(status).json({ error });
-  }
-});
-
-app.get("/api/rooms/:id/memory/handoff-draft", requireAuth, (req, res) => {
-  try {
-    const agentId = String(req.query.agentId || "").trim();
-    if (!agentId) {
-      res.status(400).json({ error: "agentId is required" });
-      return;
-    }
-    res.json(
-      roomManager.getHandoffDraft(
-        routeParam(req.params.id),
-        agentId,
-        req.user!.id,
-      ),
-    );
-  } catch (err) {
-    const { status, error } = memoryHttpError(err);
-    res.status(status).json({ error });
-  }
-});
-
-app.post("/api/rooms/:id/memory/handoff-draft", requireAuth, (req, res) => {
-  try {
-    const agentId = String(req.body?.agentId || "").trim();
-    if (!agentId) {
-      res.status(400).json({ error: "agentId is required" });
-      return;
-    }
-    const entry = roomManager.captureHandoffDraft(
-      routeParam(req.params.id),
-      agentId,
-      req.user!.id,
-      {
-        title: req.body?.title ? String(req.body.title) : undefined,
-        content: req.body?.content ? String(req.body.content) : undefined,
-        asProposal: Boolean(req.body?.asProposal),
-      },
-    );
-    res.status(201).json(entry);
-  } catch (err) {
-    const { status, error } = memoryHttpError(err);
-    res.status(status).json({ error });
-  }
-});
-
-app.patch("/api/rooms/:id/memory/:entryId", requireAuth, (req, res) => {
-  try {
-    const expectedRevision = Number(req.body?.expectedRevision);
-    if (!Number.isFinite(expectedRevision)) {
-      res.status(400).json({ error: "expectedRevision is required" });
-      return;
-    }
-    const entry = roomManager.updateRoomMemory(
-      routeParam(req.params.id),
-      routeParam(req.params.entryId),
-      req.user!.id,
-      {
-        expectedRevision,
-        title: req.body?.title,
-        content: req.body?.content,
-        pinned: req.body?.pinned,
-      },
-    );
-    res.json(entry);
-  } catch (err) {
-    const { status, error } = memoryHttpError(err);
-    res.status(status).json({ error });
-  }
-});
-
-app.post("/api/rooms/:id/memory/:entryId/accept", requireAuth, (req, res) => {
-  try {
-    const expectedRevision =
-      req.body?.expectedRevision !== undefined
-        ? Number(req.body.expectedRevision)
-        : undefined;
-    const entry = roomManager.acceptRoomMemory(
-      routeParam(req.params.id),
-      routeParam(req.params.entryId),
-      req.user!.id,
-      expectedRevision,
-    );
-    res.json(entry);
-  } catch (err) {
-    const { status, error } = memoryHttpError(err);
-    res.status(status).json({ error });
-  }
-});
-
-app.post("/api/rooms/:id/memory/:entryId/archive", requireAuth, (req, res) => {
-  try {
-    const expectedRevision =
-      req.body?.expectedRevision !== undefined
-        ? Number(req.body.expectedRevision)
-        : undefined;
-    const entry = roomManager.archiveRoomMemory(
-      routeParam(req.params.id),
-      routeParam(req.params.entryId),
-      req.user!.id,
-      expectedRevision,
-    );
-    res.json(entry);
-  } catch (err) {
-    const { status, error } = memoryHttpError(err);
-    res.status(status).json({ error });
-  }
-});
-
-app.get("/api/rooms/:id/repo-map", requireAuth, (req, res) => {
-  try {
-    res.json({
-      map: roomManager.getRepoMapInfo(routeParam(req.params.id), req.user!.id),
-    });
-  } catch (err) {
-    const { status, error } = memoryHttpError(err);
-    res.status(status).json({ error });
-  }
-});
-
-app.post("/api/rooms/:id/repo-map", requireAuth, (req, res) => {
-  try {
-    const map = roomManager.refreshRepoMap(
-      routeParam(req.params.id),
-      req.user!.id,
-    );
-    res.json({ map });
-  } catch (err) {
-    const { status, error } = memoryHttpError(err);
-    res.status(status).json({ error });
-  }
 });
 
 app.use(

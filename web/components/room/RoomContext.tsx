@@ -4,8 +4,6 @@ import { createContext, useContext, type Dispatch, type RefObject, type SetState
 import type { AppSocket } from "../../lib/socket";
 import type { RoomAttention } from "../../../shared/roomAttention";
 import type {
-  AgentConflict,
-  AgentConflictBlocked,
   AgentInfo,
   AgentRunStatus,
   ApprovalMode,
@@ -13,7 +11,6 @@ import type {
   ChatMessage,
   CloudMeta,
   ControlMode,
-  FileLease,
   ModelInfo,
   Participant,
   PingInfo,
@@ -21,7 +18,6 @@ import type {
   RoomMemberInfo,
   TypingUser,
 } from "../../../shared/events";
-import type { AutoMemoryMode, RoomContextSnapshot } from "../../../shared/roomContext";
 import type { RoomRole } from "../../../shared/roomPermissions";
 
 export type RoomVariant = "page" | "tile" | "focus";
@@ -48,9 +44,6 @@ export type RoomContextValue = {
   statusByAgent: Record<string, AgentRunStatus>;
   errorByAgent: Record<string, string>;
   diffByAgent: Record<string, string>;
-  conflicts: AgentConflict[];
-  fileLocks: FileLease[];
-  lastBlocked: AgentConflictBlocked | null;
   pendingApprovals: ApprovalRequestInfo[];
   openPings: PingInfo[];
   typingByAgent: Record<string, TypingUser[]>;
@@ -83,28 +76,18 @@ export type RoomContextValue = {
   leaveRoom: () => void;
   dismissDriveRequest: () => void;
   drivingAgentIds: string[];
-  roomContext: RoomContextSnapshot | null;
-  contextStale: {
-    agentId: string;
-    usedVersion: number;
-    currentVersion: number;
-  } | null;
-  autoMemoryNotice: { agentId: string; count: number } | null;
   runtime: "local" | "cloud";
   controlMode: ControlMode;
   approvalMode: ApprovalMode;
-  autoMemory: AutoMemoryMode;
   myRole: RoomRole;
   amHost: boolean;
   canManage: boolean;
   canFlag: boolean;
-  canEditMemory: boolean;
   models: ModelInfo[];
   modelError: string;
   savingModel: boolean;
   savingControlMode: boolean;
   savingApprovalMode: boolean;
-  savingAutoMemory: boolean;
   togglingPlanMode: boolean;
   decidingApprovalId: string | null;
   flagOpen: boolean;
@@ -126,8 +109,6 @@ export type RoomContextValue = {
   setChangesOpen: Dispatch<SetStateAction<boolean>>;
   artifactsOpen: boolean;
   setArtifactsOpen: Dispatch<SetStateAction<boolean>>;
-  memoryOpen: boolean;
-  setMemoryOpen: Dispatch<SetStateAction<boolean>>;
   addAgentOpen: boolean;
   setAddAgentOpen: Dispatch<SetStateAction<boolean>>;
   cursorSessionError: string;
@@ -186,10 +167,8 @@ export type RoomContextValue = {
     seedContext?: boolean;
   }) => Promise<void>;
   handleStopAgent: (agentId: string) => Promise<void>;
-  handleForceRelease: (path: string) => Promise<void>;
   handleControlModeChange: (mode: ControlMode) => Promise<void>;
   handleApprovalModeChange: (mode: ApprovalMode) => Promise<void>;
-  handleAutoMemoryChange: (mode: AutoMemoryMode) => Promise<void>;
   handleTogglePlanMode: () => Promise<void>;
   handleDecideApproval: (
     requestId: string,

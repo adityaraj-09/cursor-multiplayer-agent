@@ -357,12 +357,12 @@ describe("memory persistence and agent briefing", () => {
     });
     expect(briefing.isBaseline).toBe(true);
     expect(briefing.text).toContain("<steer_repo_map");
-    expect(briefing.text).toContain("<steer_shared_memory");
-    expect(briefing.text).toContain("WIP handoff");
+    expect(briefing.text).not.toContain("<steer_shared_memory");
+    expect(briefing.text).not.toContain("WIP handoff");
     expect(briefing.text).not.toContain("SECRET_CHAT_FROM_A");
     const receipts = db.listAgentContextReceipts(fresh.id, 1);
     expect(receipts[0]?.is_baseline).toBe(1);
-    expect(receipts[0]?.memory_version).toBe(2);
+    expect(receipts[0]?.memory_version).toBe(0);
     void agentB;
   });
 

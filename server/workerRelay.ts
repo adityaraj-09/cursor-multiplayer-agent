@@ -7,7 +7,6 @@ import type {
   CursorChatSession,
 } from "../shared/events.js";
 import * as db from "./db.js";
-import type { FileLockRegistry } from "./fileLocks.js";
 import type { WorkerPromptAttachment } from "../shared/uploads.js";
 
 export function makeRunKey(roomId: string, agentId: string): string {
@@ -114,7 +113,6 @@ export class WorkerRelay {
     private verifyToken: (
       token: string,
     ) => { userId: string; workerId: string } | null,
-    private fileLocks?: FileLockRegistry,
   ) {
     this.setupNamespace();
   }
@@ -282,34 +280,6 @@ export class WorkerRelay {
           } else {
             waiter.resolve(data.sessions || []);
           }
-        });
-
-        socket.on("worker:acquire-lock", (data) => {
-          const room = db.getRoom(data.roomId);
-          if (!room || room.owner_id !== userId || !this.fileLocks) {
-            socket.emit("worker:lock-result", {
-              requestId: data.requestId,
-              granted: false,
-            });
-            return;
-          }
-          const result = this.fileLocks.tryAcquire(
-            data.roomId,
-            data.agentId,
-            data.path,
-            data.callId,
-          );
-          socket.emit("worker:lock-result", {
-            requestId: data.requestId,
-            granted: result.ok,
-            holderAgentId: result.ok ? undefined : result.holderAgentId,
-          });
-        });
-
-        socket.on("worker:release-lock", (data) => {
-          const room = db.getRoom(data.roomId);
-          if (!room || room.owner_id !== userId || !this.fileLocks) return;
-          this.fileLocks.release(data.roomId, data.agentId, data.path);
         });
 
         socket.on("worker:files-reverted", (data) => {

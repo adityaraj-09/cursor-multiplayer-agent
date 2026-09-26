@@ -641,10 +641,10 @@ export default function AddAgentDialog({
             className="mt-0.5"
           />
           <span>
-            Start with repo map + room memory
+            Start with repo map briefing
             <span className="block text-[11px] text-[#6e6e6e] mt-0.5">
-              The first run gets a bounded briefing so the agent doesn’t re-explore
-              the repo from scratch.
+              The first run gets a bounded repo map so the agent doesn’t re-explore
+              from scratch.
             </span>
           </span>
         </label>
