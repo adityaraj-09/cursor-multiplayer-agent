@@ -65,26 +65,18 @@ function exportEnvPrefix(env: Record<string, string>): string {
     .join(" && ");
 }
 
-/** Alpine + Debian snippet: create `steer` and own /home/user. */
+/** Alpine + Debian snippet: create `steer` and own /home/user. No if/then — BusyBox ash. */
 export function ensureSandboxUserScript(): string {
+  const home = shellQuote(BLAXEL_HOME);
+  const repo = shellQuote(BLAXEL_REPO_DIR);
+  const steerDir = shellQuote(`${BLAXEL_HOME}/.steer`);
   return [
-    `if ! id -u ${SANDBOX_USER} >/dev/null 2>&1; then`,
-    `  if command -v adduser >/dev/null 2>&1; then`,
-    `    adduser -D -h ${shellQuote(BLAXEL_HOME)} -s /bin/sh ${SANDBOX_USER} 2>/dev/null`,
-    `    || adduser --disabled-password --gecos "" --home ${shellQuote(BLAXEL_HOME)} --shell /bin/sh ${SANDBOX_USER} 2>/dev/null`,
-    `    || true`,
-    `  fi`,
-    `  if ! id -u ${SANDBOX_USER} >/dev/null 2>&1 && command -v useradd >/dev/null 2>&1; then`,
-    `    useradd -M -d ${shellQuote(BLAXEL_HOME)} -s /bin/sh ${SANDBOX_USER} 2>/dev/null || true`,
-    `  fi`,
-    `fi`,
-    `mkdir -p ${shellQuote(BLAXEL_HOME)} ${shellQuote(BLAXEL_REPO_DIR)} ${shellQuote(`${BLAXEL_HOME}/.steer`)}`,
-    `if id -u ${SANDBOX_USER} >/dev/null 2>&1; then`,
-    `  chown -R ${SANDBOX_USER}:${SANDBOX_USER} ${shellQuote(BLAXEL_HOME)} 2>/dev/null`,
-    `  || chown -R ${SANDBOX_USER} ${shellQuote(BLAXEL_HOME)} 2>/dev/null`,
-    `  || true`,
-    `fi`,
-  ].join(" ");
+    `id -u ${SANDBOX_USER} >/dev/null 2>&1 || adduser -D -h ${home} -s /bin/sh ${SANDBOX_USER}`,
+    `id -u ${SANDBOX_USER} >/dev/null 2>&1 || adduser --disabled-password --gecos "" --home ${home} --shell /bin/sh ${SANDBOX_USER}`,
+    `id -u ${SANDBOX_USER} >/dev/null 2>&1 || useradd -M -d ${home} -s /bin/sh ${SANDBOX_USER}`,
+    `mkdir -p ${home} ${repo} ${steerDir}`,
+    `id -u ${SANDBOX_USER} >/dev/null 2>&1 && chown -R ${SANDBOX_USER} ${home} || true`,
+  ].join(" ; ");
 }
 
 /**
@@ -96,13 +88,19 @@ export function wrapSandboxCliCommand(
   env: Record<string, string>,
 ): string {
   const exported = `${exportEnvPrefix(env)} && ${command}`;
+  return `su -s /bin/sh ${SANDBOX_USER} -c ${shellQuote(exported)} || { ${exported}; }`;
+}
+
+export function buildCliBootstrapCommand(bin: string, pkg: string): string {
+  const marker = `${BLAXEL_HOME}/.steer/cli-${bin}.ok`;
   return [
-    `if id -u ${SANDBOX_USER} >/dev/null 2>&1 && [ "$(id -u)" = "0" ]; then`,
-    `  su -s /bin/sh ${SANDBOX_USER} -c ${shellQuote(exported)}`,
-    `else`,
-    `  ${exported}`,
-    `fi`,
-  ].join(" ");
+    `mkdir -p ${shellQuote(BLAXEL_HOME)} ${shellQuote(`${BLAXEL_HOME}/.steer`)} ${shellQuote(BLAXEL_REPO_DIR)}`,
+    `command -v ${shellQuote(bin)} >/dev/null 2>&1 || npm i -g ${shellQuote(pkg)}`,
+    `command -v ${shellQuote(bin)} >/dev/null 2>&1 || { echo "failed to install ${bin}" >&2; exit 1; }`,
+    `touch ${shellQuote(marker)}`,
+    ensureSandboxUserScript(),
+    `echo READY`,
+  ].join(" ; ");
 }
 
 export interface CliSandboxConfig {
@@ -400,17 +398,8 @@ export class CliSandboxSession {
     if (this.cliReady) return;
     const bin = CLI_BINARIES[this.config.backend];
     const pkg = CLI_PACKAGES[this.config.backend];
-    const marker = `${BLAXEL_HOME}/.steer/cli-${this.config.backend}.ok`;
     const result = await execInSandbox(sbx, {
-      command: [
-        `mkdir -p ${shellQuote(BLAXEL_HOME)} ${shellQuote(`${BLAXEL_HOME}/.steer`)} ${shellQuote(BLAXEL_REPO_DIR)}`,
-        `if [ -f ${shellQuote(marker)} ] && command -v ${bin} >/dev/null 2>&1; then ${ensureSandboxUserScript()} && echo READY; exit 0; fi`,
-        `command -v ${bin} >/dev/null 2>&1 || npm i -g ${shellQuote(pkg)}`,
-        `command -v ${bin} >/dev/null 2>&1 || { echo "failed to install ${bin}" >&2; exit 1; }`,
-        `touch ${shellQuote(marker)}`,
-        ensureSandboxUserScript(),
-        `echo READY`,
-      ].join(" && "),
+      command: buildCliBootstrapCommand(bin, pkg),
       workingDir: BLAXEL_HOME,
       env: this.providerEnv(),
       timeoutMs: BOOTSTRAP_TIMEOUT_MS,
