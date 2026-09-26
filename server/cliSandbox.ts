@@ -80,15 +80,15 @@ export function ensureSandboxUserScript(): string {
 }
 
 /**
- * Run the agent CLI as a non-root user with env inlined into the shell.
- * Existing Blaxel sandboxes may not pick up newly added process env vars.
+ * Inline provider env onto the CLI command.
+ * Do not wrap with `su` — BusyBox su can block on a password prompt (silent
+ * hang) and child stdout often never reaches Blaxel streamLogs.
  */
 export function wrapSandboxCliCommand(
   command: string,
   env: Record<string, string>,
 ): string {
-  const exported = `${exportEnvPrefix(env)} && ${command}`;
-  return `su -s /bin/sh ${SANDBOX_USER} -c ${shellQuote(exported)} || { ${exported}; }`;
+  return `${exportEnvPrefix(env)} && ${command}`;
 }
 
 export function buildCliBootstrapCommand(bin: string, pkg: string): string {
@@ -758,7 +758,7 @@ export class CliSandboxSession {
     };
 
     try {
-      let result: { exitCode: number; stderr?: string };
+      let result: { exitCode: number; stdout?: string; stderr?: string };
       try {
         result = await execInSandbox(sbx, {
           name: processName,
@@ -782,6 +782,16 @@ export class CliSandboxSession {
 
       await stdoutChain.catch(() => undefined);
       if (lineBuf.trim()) await flushLine(lineBuf);
+      // streamLogs can miss child output; parse whatever wait() captured.
+      if (
+        !ctx.gotTerminalEvent.value &&
+        !pendingDone &&
+        result.stdout?.trim()
+      ) {
+        for (const line of result.stdout.split("\n")) {
+          await flushLine(line);
+        }
+      }
 
       if (this.aborted || killed) {
         item.onEvent({ kind: "error", message: "Aborted" });
@@ -789,18 +799,18 @@ export class CliSandboxSession {
       }
 
       if (!ctx.gotTerminalEvent.value && !pendingDone) {
-        if (result.exitCode !== 0) {
+        const fallbackText = ctx.assistantBuf.value.trim();
+        if (result.exitCode === 0 && fallbackText) {
+          pendingDone = { kind: "done", result: fallbackText };
+        } else {
           const msg =
             ctx.stderr.trim() ||
             result.stderr?.trim() ||
-            `${productLabel(this.config.backend)} exited with code ${result.exitCode}`;
+            (result.exitCode === 0
+              ? `${productLabel(this.config.backend)} finished without any output`
+              : `${productLabel(this.config.backend)} exited with code ${result.exitCode}`);
           item.onEvent({ kind: "error", message: msg });
           sawError = true;
-        } else {
-          pendingDone = {
-            kind: "done",
-            result: ctx.assistantBuf.value || "",
-          };
         }
       }
 
