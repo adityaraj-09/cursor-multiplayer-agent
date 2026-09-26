@@ -15,6 +15,7 @@ import {
   todosFromToolArgs,
   TOOL_RESULT_DETAIL_LIMIT,
 } from "./cursor.js";
+import { stringifyUnknown } from "../stringifyUnknown";
 interface PendingTool {
   name: string;
   path?: string;
@@ -336,6 +337,20 @@ export class ClaudeCodeBackend implements WorkerBackend {
       return out;
     }
 
+    if (type === "error") {
+      ctx.gotTerminalEvent.value = true;
+      out.push({
+        kind: "error",
+        message:
+          stringifyUnknown(ev.error) ||
+          stringifyUnknown(ev.message) ||
+          stringifyUnknown(ev.result) ||
+          ctx.stderr ||
+          "Claude Code error",
+      });
+      return out;
+    }
+
     if (type === "result") {
       ctx.gotTerminalEvent.value = true;
       if (ev.session_id) {
@@ -348,17 +363,20 @@ export class ClaudeCodeBackend implements WorkerBackend {
         subtype === "error_during_execution" ||
         subtype === "error_max_turns";
       if (isError) {
-        const msg = String(
-          (typeof ev.result === "string" && ev.result) ||
-            (typeof ev.errors === "string" && ev.errors) ||
-            ctx.stderr ||
-            `Claude Code error (${subtype || "unknown"})`,
-        );
+        const msg =
+          stringifyUnknown(ev.result) ||
+          stringifyUnknown(ev.errors) ||
+          stringifyUnknown(ev.error) ||
+          ctx.stderr ||
+          `Claude Code error (${subtype || "unknown"})`;
         out.push({ kind: "error", message: msg });
       } else {
         out.push({
           kind: "done",
-          result: String(ev.result ?? ctx.assistantBuf.value),
+          result:
+            stringifyUnknown(ev.result) ||
+            ctx.assistantBuf.value ||
+            "",
         });
       }
     }

@@ -36,6 +36,7 @@ import {
 } from "./sandbox/blaxel.js";
 import { DEFAULT_CLAUDE_MODEL } from "../shared/claudeModels.js";
 import { DEFAULT_CODEX_MODEL } from "../shared/codexModels.js";
+import { errorMessage } from "../shared/stringifyUnknown.js";
 
 export type CliSandboxStreamEvent = NormalizedAgentEvent;
 
@@ -259,7 +260,7 @@ export class CliSandboxSession {
       if (this.aborted) {
         item.resolve();
       } else {
-        item.reject(err instanceof Error ? err : new Error(String(err)));
+        item.reject(err instanceof Error ? err : new Error(errorMessage(err)));
       }
     } finally {
       this.processing = false;
@@ -751,7 +752,7 @@ export class CliSandboxSession {
         try {
           git = await this.finalizeGit();
         } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
+          const message = errorMessage(err);
           item.onEvent({ kind: "error", message });
         }
       }
@@ -770,7 +771,7 @@ export class CliSandboxSession {
         item.onEvent({ kind: "error", message: "Aborted" });
         return;
       }
-      const message = err instanceof Error ? err.message : String(err);
+      const message = errorMessage(err);
       if (!ctx.gotTerminalEvent.value && !pendingDone) {
         item.onEvent({ kind: "error", message });
       }

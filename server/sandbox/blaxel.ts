@@ -1,5 +1,6 @@
 import { SandboxInstance } from "@blaxel/core";
 import { nanoid } from "nanoid";
+import { errorMessage } from "../../shared/stringifyUnknown.js";
 
 const DEFAULT_IMAGE = "blaxel/base-image:latest";
 const DEFAULT_MEMORY_MB = 4096;
@@ -220,7 +221,7 @@ export async function execInSandbox(
     };
   } catch (err) {
     if (opts.signal?.aborted) throw new Error("Aborted");
-    throw err instanceof Error ? err : new Error(String(err));
+    throw err instanceof Error ? err : new Error(errorMessage(err));
   } finally {
     try {
       stream?.close();

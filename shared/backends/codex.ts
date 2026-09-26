@@ -10,6 +10,7 @@ import {
   isEditTool,
   TOOL_RESULT_DETAIL_LIMIT,
 } from "./cursor.js";
+import { stringifyUnknown } from "../stringifyUnknown";
 
 /**
  * OpenAI Codex CLI headless backend.
@@ -60,19 +61,25 @@ export class CodexBackend implements WorkerBackend {
       ctx.gotTerminalEvent.value = true;
       out.push({
         kind: "error",
-        message: String(ev.message || ctx.stderr || "Codex error"),
+        message:
+          stringifyUnknown(ev.message) ||
+          stringifyUnknown(ev.error) ||
+          ctx.stderr ||
+          "Codex error",
       });
       return out;
     }
 
     if (type === "turn.failed") {
       ctx.gotTerminalEvent.value = true;
-      const err = ev.error;
-      const message =
-        err && typeof err === "object" && "message" in err
-          ? String((err as { message: unknown }).message)
-          : String(ev.message || ctx.stderr || "Codex turn failed");
-      out.push({ kind: "error", message });
+      out.push({
+        kind: "error",
+        message:
+          stringifyUnknown(ev.error) ||
+          stringifyUnknown(ev.message) ||
+          ctx.stderr ||
+          "Codex turn failed",
+      });
       return out;
     }
 
