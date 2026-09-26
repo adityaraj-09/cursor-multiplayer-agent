@@ -70,6 +70,167 @@ describe("ClaudeCodeBackend", () => {
     expect(ctx.assistantBuf.value).toBe("Hello");
   });
 
+  it("emits tool_start from stream_event content_block_start tool_use", () => {
+    const backend = new ClaudeCodeBackend();
+    const start = backend.parseLine({
+      type: "stream_event",
+      event: {
+        type: "content_block_start",
+        index: 1,
+        content_block: {
+          type: "tool_use",
+          id: "toolu_stream",
+          name: "Read",
+          input: {},
+        },
+      },
+    });
+    expect(start[0]).toMatchObject({
+      kind: "tool_start",
+      callId: "toolu_stream",
+      name: "Read",
+    });
+  });
+
+  it("accumulates input_json_delta and updates the tool card on stop", () => {
+    const backend = new ClaudeCodeBackend();
+    backend.parseLine({
+      type: "stream_event",
+      event: {
+        type: "content_block_start",
+        index: 1,
+        content_block: {
+          type: "tool_use",
+          id: "toolu_json",
+          name: "Read",
+          input: {},
+        },
+      },
+    });
+    expect(
+      backend.parseLine({
+        type: "stream_event",
+        event: {
+          type: "content_block_delta",
+          index: 1,
+          delta: { type: "input_json_delta", partial_json: '{"file' },
+        },
+      }),
+    ).toEqual([]);
+
+    const mid = backend.parseLine({
+      type: "stream_event",
+      event: {
+        type: "content_block_delta",
+        index: 1,
+        delta: {
+          type: "input_json_delta",
+          partial_json: '_path":"README.md"}',
+        },
+      },
+    });
+    expect(mid[0]).toMatchObject({
+      kind: "tool_start",
+      callId: "toolu_json",
+      name: "Read",
+      path: "README.md",
+    });
+
+    expect(
+      backend.parseLine({
+        type: "stream_event",
+        event: { type: "content_block_stop", index: 1 },
+      }),
+    ).toEqual([]);
+
+    const done = backend.parseLine({
+      type: "user",
+      message: {
+        content: [
+          { type: "tool_result", tool_use_id: "toolu_json", content: "ok" },
+        ],
+      },
+    });
+    expect(done[0]).toMatchObject({
+      kind: "tool_done",
+      callId: "toolu_json",
+      name: "Read",
+      path: "README.md",
+    });
+  });
+
+  it("does not duplicate tool_start when assistant tool_use follows stream_event", () => {
+    const backend = new ClaudeCodeBackend();
+    backend.parseLine({
+      type: "stream_event",
+      event: {
+        type: "content_block_start",
+        index: 0,
+        content_block: {
+          type: "tool_use",
+          id: "toolu_dup_stream",
+          name: "Bash",
+          input: {},
+        },
+      },
+    });
+    const later = backend.parseLine({
+      type: "assistant",
+      message: {
+        content: [
+          {
+            type: "tool_use",
+            id: "toolu_dup_stream",
+            name: "Bash",
+            input: { command: "pwd" },
+          },
+        ],
+      },
+    });
+    expect(later).toHaveLength(1);
+    expect(later[0]).toMatchObject({
+      kind: "tool_start",
+      callId: "toolu_dup_stream",
+      name: "Bash",
+      detail: "pwd",
+    });
+    expect(
+      backend.parseLine({
+        type: "assistant",
+        message: {
+          content: [
+            {
+              type: "tool_use",
+              id: "toolu_dup_stream",
+              name: "Bash",
+              input: { command: "pwd" },
+            },
+          ],
+        },
+      }),
+    ).toEqual([]);
+  });
+
+  it("parses top-level content_block_start tool_use events", () => {
+    const backend = new ClaudeCodeBackend();
+    const events = backend.parseLine({
+      type: "content_block_start",
+      index: 0,
+      content_block: {
+        type: "tool_use",
+        id: "toolu_top",
+        name: "Glob",
+        input: { pattern: "**/*.ts" },
+      },
+    });
+    expect(events[0]).toMatchObject({
+      kind: "tool_start",
+      callId: "toolu_top",
+      name: "Glob",
+      detail: "**/*.ts",
+    });
+  });
+
   it("pairs tool_use and tool_result into tool_start / tool_done", () => {
     const backend = new ClaudeCodeBackend();
     const ctx = {

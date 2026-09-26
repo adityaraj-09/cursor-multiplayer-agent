@@ -2974,6 +2974,20 @@ export class RoomManager {
             afterTools = true;
             break;
           }
+          case "subagent_nested": {
+            closeAssistant("done");
+            afterTools = true;
+            bubbleBaseLen = seenFullText.length;
+            this.upsertAgentToolMessage(room, agent, {
+              callId: event.callId,
+              name: event.name || "tool",
+              content: event.detail || "Running…",
+              path: event.path,
+              status: event.status === "completed" ? "done" : "streaming",
+              allowLastToolFallback: event.status === "completed",
+            });
+            break;
+          }
           case "error":
             emitAssistantFromWorker(event.message || "Unknown error", "error");
             finishWorkerRun("error", event.message || "Agent error");
@@ -3442,6 +3456,20 @@ export class RoomManager {
               );
             }
             afterTools = true;
+            break;
+          }
+          case "subagent_nested": {
+            closeAssistant("done");
+            afterTools = true;
+            bubbleBaseLen = seenFullText.length;
+            this.upsertAgentToolMessage(room, agent, {
+              callId: event.callId,
+              name: event.name || "tool",
+              content: event.detail || "Running…",
+              path: event.path,
+              status: event.status === "completed" ? "done" : "streaming",
+              allowLastToolFallback: event.status === "completed",
+            });
             break;
           }
           case "error":
