@@ -408,7 +408,7 @@ export default function AddAgentDialog({
           <p className="text-[11px] text-[#6e6e6e] mb-3 -mt-1">
             {runtime === "cloud"
               ? blaxelConfigured
-                ? `Runs in a Blaxel sandbox. Bring your own ${backend === "codex" ? "OpenAI" : "Anthropic"} API key.`
+                ? `Runs in a Blaxel sandbox. Bring your own ${backend === "codex" ? "OpenAI" : "Anthropic"} API key. Clone, push, and PRs use the GitHub account connected in Settings.`
                 : "Server is missing BL_API_KEY / BL_WORKSPACE — cloud CLI agents won’t start until they’re set."
               : `Uses the ${backend === "codex" ? "codex" : "claude"} CLI on the host running steer start.`}
           </p>

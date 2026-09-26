@@ -13,6 +13,7 @@ import {
   looksLikeGithubToken,
   type GithubRepo,
 } from "./githubApi.js";
+import { githubTokenFromEnv } from "./githubPr.js";
 
 export interface WorkspaceGithubInfo {
   connected: boolean;
@@ -36,6 +37,28 @@ export function workspaceGithubOAuthAvailable(): boolean {
     process.env.GITHUB_CLIENT_ID?.trim() &&
       process.env.GITHUB_CLIENT_SECRET?.trim(),
   );
+}
+
+/**
+ * Token used to clone/push/PR private GitHub repos.
+ * Connected Steer workspace GitHub wins; server GITHUB_TOKEN is fallback only.
+ */
+export function resolveGithubAccessToken(input?: {
+  userId?: string | null;
+  orgId?: string | null;
+  explicit?: string | null;
+}): string {
+  const pasted = input?.explicit?.trim() || "";
+  if (pasted) return pasted;
+  const userId = input?.userId?.trim();
+  if (userId) {
+    const connected = getWorkspaceGithubToken({
+      userId,
+      orgId: input?.orgId,
+    });
+    if (connected) return connected;
+  }
+  return githubTokenFromEnv() || "";
 }
 
 export function getWorkspaceGithubToken(input: {

@@ -61,6 +61,8 @@ export interface CliSandboxConfig {
   repoUrl: string;
   startingRef?: string;
   githubToken?: string;
+  /** Live token lookup so a later Settings → GitHub connect is picked up. */
+  resolveGithubToken?: () => string | null | undefined;
   autoCreatePR?: boolean;
   sessionId?: string | null;
   /** Persist Blaxel sandbox name across reconnects (`sdk_agent_id`). */
@@ -97,7 +99,7 @@ function requireApiKey(config: CliSandboxConfig): string {
 }
 
 function defaultModel(backend: CliSandboxBackendKind): string {
-  return backend === "codex" ? "gpt-5.3-codex" : "claude-sonnet-4-6";
+  return backend === "codex" ? "gpt-6-sol" : "claude-sonnet-5";
 }
 
 function gitUserName(backend: CliSandboxBackendKind): string {
@@ -266,7 +268,8 @@ export class CliSandboxSession {
   }
 
   private token(): string | undefined {
-    return githubTokenFromEnv(this.config.githubToken);
+    const live = this.config.resolveGithubToken?.() ?? this.config.githubToken;
+    return githubTokenFromEnv(live);
   }
 
   private providerEnv(): Record<string, string> {
@@ -541,7 +544,7 @@ export class CliSandboxSession {
     );
     if (push.exitCode !== 0) {
       throw new Error(
-        `Failed to push branch ${this.branch}: ${push.stderr || push.stdout}. Ensure GITHUB_TOKEN has repo write access.`,
+        `Failed to push branch ${this.branch}: ${push.stderr || push.stdout}. Connect GitHub in Settings (or set GITHUB_TOKEN) with repo write access.`,
       );
     }
 

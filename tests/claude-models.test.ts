@@ -7,12 +7,12 @@ import {
 
 describe("CLAUDE_MODELS", () => {
   it("exposes versioned model ids with display names", () => {
-    expect(DEFAULT_CLAUDE_MODEL).toBe("claude-sonnet-4-6");
+    expect(DEFAULT_CLAUDE_MODEL).toBe("claude-sonnet-5");
     expect(CLAUDE_MODELS.map((m) => m.id)).toEqual([
-      "claude-sonnet-4-6",
-      "claude-opus-4-8",
+      "claude-sonnet-5",
+      "claude-opus-5-5",
+      "claude-fable-5-1",
       "claude-haiku-4-5",
-      "claude-fable-5",
     ]);
     for (const m of CLAUDE_MODELS) {
       expect(m.displayName.length).toBeGreaterThan(0);

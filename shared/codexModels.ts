@@ -6,27 +6,28 @@ import type { ModelInfo } from "./events.js";
  */
 export const CODEX_MODELS: ModelInfo[] = [
   {
-    id: "gpt-5.3-codex",
-    displayName: "GPT-5.3 Codex",
-    description: "Codex-tuned model for autonomous coding in the sandbox",
+    id: "gpt-6-sol",
+    displayName: "GPT-6 Sol",
+    description: "Latest Codex default for autonomous coding and agentic work",
   },
   {
-    id: "gpt-5.4",
-    displayName: "GPT-5.4",
-    description: "Best general-purpose model for mixed coding and reasoning",
+    id: "gpt-6-luna",
+    displayName: "GPT-6 Luna",
+    description: "Faster / cheaper Codex model for small edits and subagents",
   },
   {
-    id: "gpt-5.4-mini",
-    displayName: "GPT-5.4 mini",
-    description: "Faster / cheaper for small edits and Q&A",
+    id: "gpt-6-astra-medium",
+    displayName: "GPT-6 Astra",
+    description: "Highest-capability Codex model for the hardest long-horizon work",
   },
 ];
 
-export const DEFAULT_CODEX_MODEL = "gpt-5.3-codex";
+export const DEFAULT_CODEX_MODEL = "gpt-6-sol";
 
 export function isCodexModelId(id: string): boolean {
   if (CODEX_MODELS.some((m) => m.id === id)) return true;
   return (
+    id.startsWith("gpt-6") ||
     id.startsWith("gpt-5") ||
     id.startsWith("gpt-4") ||
     id.includes("codex") ||

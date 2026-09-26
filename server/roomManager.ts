@@ -16,9 +16,9 @@ import {
 import {
   commentOnPullRequest,
   ensurePullRequest,
-  githubTokenFromEnv,
   parseGithubRepoUrl,
 } from "./githubPr.js";
+import { resolveGithubAccessToken } from "./workspaceGithub.js";
 import {
   buildFeatureAgentGitRules,
   buildIntegratePrompt,
@@ -1133,13 +1133,21 @@ export class RoomManager {
       name: `${row.name}/${agentRow.label}`,
       repoUrl: row.repo_url?.trim() || "",
       startingRef: row.starting_ref || "main",
-      autoCreatePR: false,
       sessionId: agentRow.session_id,
       sandboxId: agentRow.sdk_agent_id,
       branch: agentRow.branch,
       prUrl: agentRow.pr_url,
       mode: agentRow.plan_mode ? "plan" : "agent",
-      githubToken: githubTokenFromEnv(),
+      autoCreatePR: Boolean(row.auto_create_pr),
+      githubToken: resolveGithubAccessToken({
+        userId: row.owner_id,
+        orgId: row.org_id,
+      }),
+      resolveGithubToken: () =>
+        resolveGithubAccessToken({
+          userId: row.owner_id,
+          orgId: row.org_id,
+        }),
       roomId,
       agentId,
       onReady: ({ sandboxId, branch }) => {
@@ -5746,12 +5754,17 @@ export class RoomManager {
     prUrl: string | null;
     job: IntegrationJobInfo;
   }> {
-    const token = githubTokenFromEnv();
+    const token = resolveGithubAccessToken({
+      userId: room.row.owner_id || actorUserId,
+      orgId: room.row.org_id,
+    });
     const repoUrl = room.row.repo_url?.trim() || "";
     const head = source.row.branch!.trim();
     const base = room.row.starting_ref?.trim() || "main";
     if (!token) {
-      throw new Error("GITHUB_TOKEN is required to open a pull request");
+      throw new Error(
+        "Connect GitHub in Settings to open a pull request (or set GITHUB_TOKEN on the server)",
+      );
     }
     const parsed = parseGithubRepoUrl(repoUrl);
     if (!parsed) {
@@ -6128,7 +6141,10 @@ export class RoomManager {
     room: RoomState,
     agent: AgentState,
   ): Promise<void> {
-    const token = githubTokenFromEnv();
+    const token = resolveGithubAccessToken({
+      userId: room.row.owner_id,
+      orgId: room.row.org_id,
+    });
     const repoUrl = room.row.repo_url?.trim();
     const head =
       room.row.integration_branch?.trim() || agent.row.branch?.trim();
@@ -6168,7 +6184,7 @@ export class RoomManager {
       this.postIntegratorSystem(
         room,
         agent,
-        `Integration branch \`${head}\` is pushed, but no pull request was opened. The Integrator must create \`${head}\` → \`${room.row.starting_ref || "main"}\` (or set GITHUB_TOKEN on the server).`,
+        `Integration branch \`${head}\` is pushed, but no pull request was opened. The Integrator must create \`${head}\` → \`${room.row.starting_ref || "main"}\` (or connect GitHub in Settings).`,
       );
       return;
     }
