@@ -19,7 +19,7 @@ describe("CodexBackend", () => {
     const backend = new CodexBackend();
     const args = backend.buildArgs({
       prompt: "fix the bug",
-      modelId: "gpt-5.3-codex",
+      modelId: "gpt-6-sol",
       sessionId: "thread-abc",
     });
     expect(args).toEqual([
@@ -27,7 +27,7 @@ describe("CodexBackend", () => {
       "--json",
       "--dangerously-bypass-approvals-and-sandbox",
       "--model",
-      "gpt-5.3-codex",
+      "gpt-6-sol",
       "resume",
       "thread-abc",
       "fix the bug",

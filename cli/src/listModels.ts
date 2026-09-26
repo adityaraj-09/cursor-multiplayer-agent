@@ -1,5 +1,14 @@
 import { execFile } from "child_process";
 import { promisify } from "util";
+import type { AgentBackendKind } from "../../shared/backends/types.js";
+import { CLAUDE_MODELS } from "../../shared/claudeModels.js";
+import { CODEX_MODELS } from "../../shared/codexModels.js";
+import {
+  fetchAnthropicModels,
+  fetchOpenaiCodingModels,
+  mergeModelLists,
+  parseCodexDebugModels,
+} from "../../shared/providerModels.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -9,6 +18,7 @@ const MODEL_LINE_RE = /^([a-zA-Z0-9][a-zA-Z0-9._-]*)\s+[-–—]\s+(.+)$/;
 export interface ModelInfo {
   id: string;
   displayName: string;
+  description?: string;
 }
 
 function stripAnsi(text: string): string {
@@ -78,4 +88,90 @@ export async function listLocalModels(): Promise<ModelInfo[]> {
     return [{ id: "auto", displayName: "Auto" }];
   }
   return models;
+}
+
+async function runCodexDebugModels(): Promise<string> {
+  const attempts = [["debug", "models"], ["debug", "models", "--bundled"]];
+  let lastError: Error | null = null;
+  for (const args of attempts) {
+    try {
+      const { stdout, stderr } = await execFileAsync("codex", args, {
+        timeout: 30_000,
+        encoding: "utf8",
+        maxBuffer: 16 * 1024 * 1024,
+        env: {
+          ...process.env,
+          NO_COLOR: "1",
+          FORCE_COLOR: "0",
+          TERM: "dumb",
+        },
+      });
+      const text = `${stdout || ""}\n${stderr || ""}`;
+      if (text.trim()) return text;
+    } catch (err) {
+      const e = err as {
+        code?: string;
+        stdout?: string;
+        stderr?: string;
+        message?: string;
+      };
+      if (e.stdout && String(e.stdout).trim()) return String(e.stdout);
+      if (e.code === "ENOENT") {
+        throw new Error("codex CLI not found on PATH.");
+      }
+      lastError = new Error(
+        e.stderr?.trim() || e.message || "Failed to run `codex debug models`",
+      );
+    }
+  }
+  throw lastError || new Error("`codex debug models` returned no output");
+}
+
+export async function listLocalClaudeModels(): Promise<ModelInfo[]> {
+  const live: ModelInfo[] = [];
+  const key = process.env.ANTHROPIC_API_KEY?.trim();
+  if (key) {
+    try {
+      live.push(...(await fetchAnthropicModels(key)));
+    } catch (err) {
+      console.warn(
+        "[listModels] Anthropic catalog failed:",
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+  return mergeModelLists(CLAUDE_MODELS, live);
+}
+
+export async function listLocalCodexModels(): Promise<ModelInfo[]> {
+  const live: ModelInfo[] = [];
+  try {
+    live.push(...parseCodexDebugModels(await runCodexDebugModels()));
+  } catch (err) {
+    console.warn(
+      "[listModels] `codex debug models` failed:",
+      err instanceof Error ? err.message : err,
+    );
+  }
+  const key =
+    process.env.OPENAI_API_KEY?.trim() || process.env.CODEX_API_KEY?.trim();
+  if (key) {
+    try {
+      live.push(...(await fetchOpenaiCodingModels(key)));
+    } catch (err) {
+      console.warn(
+        "[listModels] OpenAI catalog failed:",
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+  return mergeModelLists(CODEX_MODELS, live);
+}
+
+export async function listLocalModelsForBackend(
+  backend: AgentBackendKind = "cursor",
+): Promise<ModelInfo[]> {
+  if (backend === "claude-code") return listLocalClaudeModels();
+  if (backend === "codex") return listLocalCodexModels();
+  return listLocalModels();
 }

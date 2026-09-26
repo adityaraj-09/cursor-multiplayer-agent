@@ -8,6 +8,16 @@ describe("ClaudeCodeBackend", () => {
     expect(getBackend("claude-code").kind).toBe("claude-code");
   });
 
+  it("omits --model when the room is on auto", () => {
+    const backend = new ClaudeCodeBackend();
+    const args = backend.buildArgs({
+      prompt: "fix the bug",
+      modelId: "auto",
+    });
+    expect(args).not.toContain("--model");
+    expect(args.at(-1)).toBe("fix the bug");
+  });
+
   it("builds headless stream-json args with resume and model", () => {
     const backend = new ClaudeCodeBackend();
     const args = backend.buildArgs({

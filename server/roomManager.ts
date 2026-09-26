@@ -16,9 +16,9 @@ import {
 import {
   commentOnPullRequest,
   ensurePullRequest,
-  githubTokenFromEnv,
   parseGithubRepoUrl,
 } from "./githubPr.js";
+import { resolveGithubAccessToken } from "./workspaceGithub.js";
 import {
   buildFeatureAgentGitRules,
   buildIntegratePrompt,
@@ -58,6 +58,15 @@ import {
   CODEX_MODELS,
   DEFAULT_CODEX_MODEL,
 } from "../shared/codexModels.js";
+import {
+  ensureModelPresent,
+  mergeModelLists,
+} from "../shared/providerModels.js";
+import {
+  listAnthropicModelsCached,
+  listCodexCliModels,
+  listOpenaiModelsCached,
+} from "./providerModels.js";
 import {
   isCliSandboxBackend,
   parseAgentBackendKind,
@@ -1133,13 +1142,21 @@ export class RoomManager {
       name: `${row.name}/${agentRow.label}`,
       repoUrl: row.repo_url?.trim() || "",
       startingRef: row.starting_ref || "main",
-      autoCreatePR: false,
       sessionId: agentRow.session_id,
       sandboxId: agentRow.sdk_agent_id,
       branch: agentRow.branch,
       prUrl: agentRow.pr_url,
       mode: agentRow.plan_mode ? "plan" : "agent",
-      githubToken: githubTokenFromEnv(),
+      autoCreatePR: Boolean(row.auto_create_pr),
+      githubToken: resolveGithubAccessToken({
+        userId: row.owner_id,
+        orgId: row.org_id,
+      }),
+      resolveGithubToken: () =>
+        resolveGithubAccessToken({
+          userId: row.owner_id,
+          orgId: row.org_id,
+        }),
       roomId,
       agentId,
       onReady: ({ sandboxId, branch }) => {
@@ -5438,23 +5455,20 @@ export class RoomManager {
     const row = db.getRoom(id);
     if (!row) throw new Error("Room not found");
 
+    const agents = db.listAgents(id);
     const agentRow = agentId
       ? db.getAgent(agentId)
-      : db.listAgents(id)[0] || null;
-    if (agentRow?.backend === "claude-code") {
-      return CLAUDE_MODELS;
-    }
-    if (agentRow?.backend === "codex") {
-      return CODEX_MODELS;
-    }
+      : agents[0] || null;
+    const backend =
+      agentRow?.backend ||
+      (agents.length > 0 && agents.every((a) => a.backend === "claude-code")
+        ? "claude-code"
+        : agents.length > 0 && agents.every((a) => a.backend === "codex")
+          ? "codex"
+          : null);
 
-    // CLI-sandbox-primary rooms created without a Cursor key still use auth_mode=server.
-    const agents = db.listAgents(id);
-    if (agents.length > 0 && agents.every((a) => a.backend === "claude-code")) {
-      return CLAUDE_MODELS;
-    }
-    if (agents.length > 0 && agents.every((a) => a.backend === "codex")) {
-      return CODEX_MODELS;
+    if (backend === "claude-code" || backend === "codex") {
+      return this.listCliSandboxModels(row, backend, agentRow?.model_id);
     }
 
     if (row.auth_mode === "cli") {
@@ -5498,6 +5512,82 @@ export class RoomManager {
         "No Cursor API key configured for this room — paste a Cursor BYOK key when adding a Cursor agent, or set CURSOR_API_KEY on the server",
       );
     }
+  }
+
+  /**
+   * Live Claude Code / Codex catalog: CLI aliases + provider API and/or
+   * the paired worker (`codex debug models`, Anthropic `/v1/models`).
+   */
+  private async listCliSandboxModels(
+    row: db.RoomRow,
+    backend: "claude-code" | "codex",
+    currentModelId?: string | null,
+  ): Promise<ModelInfo[]> {
+    const fallback = backend === "codex" ? CODEX_MODELS : CLAUDE_MODELS;
+    const cacheKey = `${backend}:${row.owner_id || row.id}:${row.runtime}`;
+    const cached = db.getModelCache(cacheKey);
+    if (cached && Date.now() - cached.updatedAt < 15 * 60_000) {
+      return ensureModelPresent(cached.models, currentModelId);
+    }
+
+    const live: ModelInfo[] = [];
+    const ownerId = row.owner_id;
+    const worker =
+      ownerId && row.runtime === "local"
+        ? this.workerRelay?.findAnyWorkerForUser(ownerId)
+        : null;
+    if (ownerId && worker && worker.protocol >= 6) {
+      try {
+        const models = await this.workerRelay!.requestListModels(
+          ownerId,
+          backend,
+        );
+        live.push(...models);
+      } catch (err) {
+        console.warn(
+          `[listModels] ${backend} worker catalog failed for room ${row.id}:`,
+          err instanceof Error ? err.message : err,
+        );
+      }
+    }
+
+    const apiKey =
+      backend === "codex"
+        ? resolveOpenaiApiKey(row.owner_id, null, row.org_id)
+        : resolveAnthropicApiKey(row.owner_id, null, row.org_id);
+    if (apiKey) {
+      try {
+        const models =
+          backend === "codex"
+            ? await listOpenaiModelsCached(apiKey)
+            : await listAnthropicModelsCached(apiKey);
+        live.push(...models);
+      } catch (err) {
+        console.warn(
+          `[listModels] ${backend} provider catalog failed for room ${row.id}:`,
+          err instanceof Error ? err.message : err,
+        );
+      }
+    }
+
+    if (backend === "codex" && live.length <= fallback.length) {
+      try {
+        live.push(...(await listCodexCliModels()));
+      } catch {
+        // Server often has no local `codex` binary — aliases / OpenAI list are enough.
+      }
+    }
+
+    const merged = ensureModelPresent(
+      mergeModelLists(fallback, live),
+      currentModelId,
+    );
+    if (merged.length) db.setModelCache(cacheKey, merged);
+    if (merged.length) return merged;
+    if (cached?.models.length) {
+      return ensureModelPresent(cached.models, currentModelId);
+    }
+    return ensureModelPresent(fallback, currentModelId);
   }
 
   // -----------------------------------------------------------------------
@@ -5746,12 +5836,17 @@ export class RoomManager {
     prUrl: string | null;
     job: IntegrationJobInfo;
   }> {
-    const token = githubTokenFromEnv();
+    const token = resolveGithubAccessToken({
+      userId: room.row.owner_id || actorUserId,
+      orgId: room.row.org_id,
+    });
     const repoUrl = room.row.repo_url?.trim() || "";
     const head = source.row.branch!.trim();
     const base = room.row.starting_ref?.trim() || "main";
     if (!token) {
-      throw new Error("GITHUB_TOKEN is required to open a pull request");
+      throw new Error(
+        "Connect GitHub in Settings to open a pull request (or set GITHUB_TOKEN on the server)",
+      );
     }
     const parsed = parseGithubRepoUrl(repoUrl);
     if (!parsed) {
@@ -6128,7 +6223,10 @@ export class RoomManager {
     room: RoomState,
     agent: AgentState,
   ): Promise<void> {
-    const token = githubTokenFromEnv();
+    const token = resolveGithubAccessToken({
+      userId: room.row.owner_id,
+      orgId: room.row.org_id,
+    });
     const repoUrl = room.row.repo_url?.trim();
     const head =
       room.row.integration_branch?.trim() || agent.row.branch?.trim();
@@ -6168,7 +6266,7 @@ export class RoomManager {
       this.postIntegratorSystem(
         room,
         agent,
-        `Integration branch \`${head}\` is pushed, but no pull request was opened. The Integrator must create \`${head}\` → \`${room.row.starting_ref || "main"}\` (or set GITHUB_TOKEN on the server).`,
+        `Integration branch \`${head}\` is pushed, but no pull request was opened. The Integrator must create \`${head}\` → \`${room.row.starting_ref || "main"}\` (or connect GitHub in Settings).`,
       );
       return;
     }
