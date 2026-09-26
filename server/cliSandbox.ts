@@ -281,6 +281,11 @@ export class CliSandboxSession {
     const env: Record<string, string> = {
       HOME: BLAXEL_HOME,
       PATH: "/usr/local/bin:/usr/bin:/bin",
+      // Blaxel images run as root. Claude Code refuses
+      // `--dangerously-skip-permissions` unless it knows this is an isolated
+      // sandbox (same signal Anthropic documents for Docker/CI).
+      IS_SANDBOX: "1",
+      USER: "user",
     };
     if (this.config.backend === "codex") {
       env.OPENAI_API_KEY = apiKey;
