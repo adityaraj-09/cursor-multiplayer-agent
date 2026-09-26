@@ -200,6 +200,7 @@ import {
   type IntegrationJobInfo,
 } from "../shared/events.js";
 import { agentUsageFromSdk, parseAgentUsageJson } from "../shared/agentUsage.js";
+import { errorMessage } from "../shared/stringifyUnknown.js";
 
 const MAX_NAME_LENGTH = 30;
 
@@ -3035,7 +3036,7 @@ export class RoomManager {
       );
     } catch (err) {
       // Multi-agent CLI upgrade error
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = errorMessage(err);
       finishWorkerRun("error", msg);
       return true;
     }
@@ -3569,7 +3570,7 @@ export class RoomManager {
       this.notifyRunFinished(room, agent, "completed");
     } catch (err) {
       if (!isCurrent()) return;
-      const message = err instanceof Error ? err.message : String(err);
+      const message = errorMessage(err);
       emitAssistant(message, "error");
       await this.refreshAgentUsage(room, agent);
       this.emitAgentStatus(room, agent.row.id, "error", message);

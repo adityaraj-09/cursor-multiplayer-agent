@@ -241,6 +241,39 @@ describe("ClaudeCodeBackend", () => {
     expect(err).toContainEqual({ kind: "error", message: "boom" });
   });
 
+  it("extracts a readable message from object result / error payloads", () => {
+    const backend = new ClaudeCodeBackend();
+    const objResult = backend.parseLine({
+      type: "result",
+      subtype: "success",
+      result: [{ type: "text", text: "Hello there" }],
+    });
+    expect(objResult).toContainEqual({
+      kind: "done",
+      result: "Hello there",
+    });
+
+    const objError = backend.parseLine({
+      type: "result",
+      subtype: "error_during_execution",
+      is_error: true,
+      result: { message: "invalid api key" },
+    });
+    expect(objError).toContainEqual({
+      kind: "error",
+      message: "invalid api key",
+    });
+
+    const typed = backend.parseLine({
+      type: "error",
+      error: { message: "sandbox exploded" },
+    });
+    expect(typed).toContainEqual({
+      kind: "error",
+      message: "sandbox exploded",
+    });
+  });
+
   it("does not emit duplicate tool_start for the same tool_use id", () => {
     const backend = new ClaudeCodeBackend();
     const toolUse = {

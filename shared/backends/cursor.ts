@@ -5,6 +5,7 @@ import type {
   ParseLineContext,
   WorkerBackend,
 } from "./types.js";
+import { stringifyUnknown } from "../stringifyUnknown.js";
 
 const QUESTION_TOOL_RE =
   /^(askuserquestion|askfollowupquestion|askquestion|ask_user|ask_followup_question|ask_user_question|clarify|question|userinput|getinput)/i;
@@ -933,16 +934,17 @@ export class CursorAgentBackend implements WorkerBackend {
         out.push({ kind: "session", sessionId: String(ev.session_id) });
       }
       if (ev.is_error) {
-        const msg = String(
-          ev.result != null && ev.result !== ""
-            ? ev.result
-            : ctx.stderr || "Agent error",
-        );
+        const msg =
+          stringifyUnknown(ev.result) ||
+          stringifyUnknown(ev.errors) ||
+          stringifyUnknown(ev.error) ||
+          ctx.stderr ||
+          "Agent error";
         out.push({ kind: "error", message: msg });
       } else {
         out.push({
           kind: "done",
-          result: String(ev.result ?? ctx.assistantBuf.value),
+          result: stringifyUnknown(ev.result) || ctx.assistantBuf.value || "",
         });
       }
     }
