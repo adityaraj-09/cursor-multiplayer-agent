@@ -36,7 +36,9 @@ describe("Blaxel sandbox helpers", () => {
     expect(isValidBlaxelName("")).toBe(false);
     expect(isValidBlaxelName("-bad")).toBe(false);
     expect(isValidBlaxelName("Good_Name")).toBe(false);
-    expect(sandboxExternalId("r1", "a1")).toBe("steer:r1:a1");
+    expect(sandboxExternalId("r1", "a1")).toBe("steer-r1-a1");
+    expect(sandboxExternalId("room_1", "ag:ent")).toBe("steer-room-1-ag-ent");
+    expect(sandboxExternalId("r1", "a1")).toMatch(/^[a-zA-Z0-9-]+$/);
   });
 
   it("shell-quotes unsafe process arguments", () => {
