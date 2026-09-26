@@ -6,7 +6,8 @@ import { dirname, resolve } from "path";
 import chalk from "chalk";
 import { loadConfig } from "./config.js";
 import { pickFolder } from "./pickFolder.js";
-import { listLocalModels } from "./listModels.js";
+import { listLocalModelsForBackend } from "./listModels.js";
+import type { AgentBackendKind } from "../../shared/backends/types.js";
 import {
   runAgentWithHandle,
   abortRun,
@@ -22,7 +23,8 @@ import {
   type WorkerPromptAttachment,
 } from "../../shared/uploads.js";
 
-const WORKER_PROTOCOL = 5;
+/** 6: worker:list-models accepts optional `backend` (cursor | claude-code | codex). */
+const WORKER_PROTOCOL = 6;
 const MAX_CONCURRENT = Number(process.env.STEER_MAX_CONCURRENT_AGENTS || 4);
 const LOCK_WAIT_MS = 5000;
 /** Match server attachFileDiff — wait for the working tree to flush. */
@@ -617,10 +619,17 @@ export function startWorker(repoPathOverride?: string): void {
 
   socket.on(
     "worker:list-models",
-    async (payload: { requestId: string }) => {
-      console.log(chalk.cyan("  Listing Cursor models…"));
+    async (payload: { requestId: string; backend?: AgentBackendKind }) => {
+      const backend = payload.backend || "cursor";
+      const label =
+        backend === "claude-code"
+          ? "Claude Code"
+          : backend === "codex"
+            ? "Codex"
+            : "Cursor";
+      console.log(chalk.cyan(`  Listing ${label} models…`));
       try {
-        const models = await listLocalModels();
+        const models = await listLocalModelsForBackend(backend);
         console.log(chalk.green(`  ✓ ${models.length} models`));
         emitOrQueue("worker:models-listed", {
           requestId: payload.requestId,

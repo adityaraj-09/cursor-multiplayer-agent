@@ -34,6 +34,8 @@ import {
   sandboxNameFor,
   shellQuote,
 } from "./sandbox/blaxel.js";
+import { DEFAULT_CLAUDE_MODEL } from "../shared/claudeModels.js";
+import { DEFAULT_CODEX_MODEL } from "../shared/codexModels.js";
 
 export type CliSandboxStreamEvent = NormalizedAgentEvent;
 
@@ -99,7 +101,7 @@ function requireApiKey(config: CliSandboxConfig): string {
 }
 
 function defaultModel(backend: CliSandboxBackendKind): string {
-  return backend === "codex" ? "gpt-6-sol" : "claude-sonnet-5";
+  return backend === "codex" ? DEFAULT_CODEX_MODEL : DEFAULT_CLAUDE_MODEL;
 }
 
 function gitUserName(backend: CliSandboxBackendKind): string {

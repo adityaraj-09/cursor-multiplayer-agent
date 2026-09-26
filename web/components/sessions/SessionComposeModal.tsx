@@ -25,16 +25,8 @@ import type {
   AuthMode,
   RepoInfo,
 } from "../../../shared/events";
-import {
-  CLAUDE_MODELS,
-  DEFAULT_CLAUDE_MODEL,
-  isClaudeModelId,
-} from "../../../shared/claudeModels";
-import {
-  CODEX_MODELS,
-  DEFAULT_CODEX_MODEL,
-  isCodexModelId,
-} from "../../../shared/codexModels";
+import { isClaudeModelId } from "../../../shared/claudeModels";
+import { isCodexModelId } from "../../../shared/codexModels";
 import type { AgentBackendKind } from "../../../shared/backends/types";
 import { isCliSandboxBackend } from "../../../shared/backends/types";
 import {
@@ -250,11 +242,8 @@ export default function SessionComposeModal({
   const selectBackend = (next: AgentBackendKind) => {
     setBackend(next);
     setError("");
-    if (next === "claude-code") {
-      setModelId(DEFAULT_CLAUDE_MODEL);
-      if (runtime === "local") setAuthMode("cli");
-    } else if (next === "codex") {
-      setModelId(DEFAULT_CODEX_MODEL);
+    if (isCliSandboxBackend(next)) {
+      setModelId("auto");
       if (runtime === "local") setAuthMode("cli");
     } else if (
       modelId !== "auto" &&
@@ -532,11 +521,7 @@ export default function SessionComposeModal({
         controlMode,
         planMode,
         approvalMode,
-        modelId: isClaude
-          ? modelId || DEFAULT_CLAUDE_MODEL
-          : isCodex
-            ? modelId || DEFAULT_CODEX_MODEL
-            : modelId || "auto",
+        modelId: isCliSandbox ? "auto" : modelId || "auto",
         repoPath: runtime === "local" ? repoPath.trim() || undefined : undefined,
         repoUrl: runtime === "cloud" ? repoUrl.trim() : undefined,
         startingRef:
@@ -771,24 +756,10 @@ export default function SessionComposeModal({
               </div>
 
               {isCliSandbox && (
-                <Field label="Model">
-                  <select
-                    value={modelId}
-                    onChange={(e) => setModelId(e.target.value)}
-                    className={inputClass}
-                  >
-                    {(isCodex ? CODEX_MODELS : CLAUDE_MODELS).map((m) => (
-                      <option key={m.id} value={m.id}>
-                        {m.displayName}
-                      </option>
-                    ))}
-                  </select>
-                  <p className="text-[11px] text-[#6e6e6e] mt-1.5">
-                    {(isCodex ? CODEX_MODELS : CLAUDE_MODELS).find(
-                      (m) => m.id === modelId,
-                    )?.description}
-                  </p>
-                </Field>
+                <p className="text-[11px] text-[#6e6e6e] -mt-1">
+                  Starts on Auto ({cliLabel}&apos;s current default). Pick a
+                  specific model in the room — the catalog is fetched live.
+                </p>
               )}
 
               {isCliLocal && (

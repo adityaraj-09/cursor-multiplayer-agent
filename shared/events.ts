@@ -585,7 +585,11 @@ export interface ServerToWorkerEvents {
   }) => void;
   "worker:abort": (data: { roomId: string; agentId?: string }) => void;
   "worker:pick-folder": (data: { requestId: string }) => void;
-  "worker:list-models": (data: { requestId: string }) => void;
+  "worker:list-models": (data: {
+    requestId: string;
+    /** Protocol 6+: list models for this CLI backend. Omitted = cursor. */
+    backend?: AgentBackendKind;
+  }) => void;
   "worker:list-sessions": (data: {
     requestId: string;
     repoPath: string;

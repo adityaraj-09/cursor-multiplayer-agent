@@ -2,16 +2,8 @@
 
 import { useEffect, useState } from "react";
 import type { ModelInfo } from "../../shared/events";
-import {
-  CLAUDE_MODELS,
-  DEFAULT_CLAUDE_MODEL,
-  isClaudeModelId,
-} from "../../shared/claudeModels";
-import {
-  CODEX_MODELS,
-  DEFAULT_CODEX_MODEL,
-  isCodexModelId,
-} from "../../shared/codexModels";
+import { isClaudeModelId } from "../../shared/claudeModels";
+import { isCodexModelId } from "../../shared/codexModels";
 import type { AgentBackendKind } from "../../shared/backends/types";
 import { isCliSandboxBackend } from "../../shared/backends/types";
 import {
@@ -123,29 +115,20 @@ export default function AddAgentDialog({
   }, [open, orgId]);
 
   // Reset model when the dialog opens or backend changes.
+  // Claude Code / Codex start on Auto — the room page fetches the live catalog.
   useEffect(() => {
     if (!open) return;
-    if (backend === "claude-code") {
-      setModelId(
-        defaultModelId && isClaudeModelId(defaultModelId)
-          ? defaultModelId
-          : DEFAULT_CLAUDE_MODEL,
-      );
-    } else if (backend === "codex") {
-      setModelId(
-        defaultModelId && isCodexModelId(defaultModelId)
-          ? defaultModelId
-          : DEFAULT_CODEX_MODEL,
-      );
-    } else {
-      const fallback =
-        defaultModelId &&
-        !isClaudeModelId(defaultModelId) &&
-        !isCodexModelId(defaultModelId)
-          ? defaultModelId
-          : "auto";
-      setModelId(fallback);
+    if (isCliSandboxBackend(backend)) {
+      setModelId("auto");
+      return;
     }
+    const fallback =
+      defaultModelId &&
+      !isClaudeModelId(defaultModelId) &&
+      !isCodexModelId(defaultModelId)
+        ? defaultModelId
+        : "auto";
+    setModelId(fallback);
   }, [open, backend, defaultModelId]);
 
   // Load Cursor models from the Cursor API (BYOK / server), not the room's
@@ -315,7 +298,7 @@ export default function AddAgentDialog({
         label: label.trim() || "Agent",
         backend,
         scopePath: scopePath.trim() || undefined,
-        modelId,
+        modelId: isCliSandboxBackend(backend) ? "auto" : modelId,
         planMode,
         seedContext,
         anthropicApiKey:
@@ -345,19 +328,12 @@ export default function AddAgentDialog({
     }
   };
 
-  const modelOptions =
-    backend === "claude-code"
-      ? CLAUDE_MODELS
-      : backend === "codex"
-        ? CODEX_MODELS
-        : cursorModels.length
-          ? cursorModels
-          : models.length &&
-              !models.every(
-                (m) => isClaudeModelId(m.id) || isCodexModelId(m.id),
-              )
-            ? models
-            : [{ id: "auto", displayName: "Auto" }];
+  const modelOptions = cursorModels.length
+    ? cursorModels
+    : models.length &&
+        !models.every((m) => isClaudeModelId(m.id) || isCodexModelId(m.id))
+      ? models
+      : [{ id: "auto", displayName: "Auto" }];
 
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 p-3">
@@ -591,21 +567,30 @@ export default function AddAgentDialog({
           </>
         )}
 
-        <label className="block text-[11px] text-[#6e6e6e] mb-1">
-          Model
-          {backend === "cursor" && loadingCursorModels ? " (loading…)" : ""}
-        </label>
-        <select
-          value={modelId}
-          onChange={(e) => setModelId(e.target.value)}
-          className="w-full h-9 mb-3 px-2.5 rounded-md bg-[#252525] border border-[#2b2b2b] text-[13px] text-[#e4e4e4] outline-none"
-        >
-          {modelOptions.map((m) => (
-            <option key={m.id} value={m.id}>
-              {m.displayName}
-            </option>
-          ))}
-        </select>
+        {isCliSandboxBackend(backend) ? (
+          <p className="text-[11px] text-[#6e6e6e] mb-3">
+            Starts on Auto. Pick a model in the room — the latest catalog is
+            fetched from {backend === "codex" ? "Codex" : "Claude Code"}.
+          </p>
+        ) : (
+          <>
+            <label className="block text-[11px] text-[#6e6e6e] mb-1">
+              Model
+              {loadingCursorModels ? " (loading…)" : ""}
+            </label>
+            <select
+              value={modelId}
+              onChange={(e) => setModelId(e.target.value)}
+              className="w-full h-9 mb-3 px-2.5 rounded-md bg-[#252525] border border-[#2b2b2b] text-[13px] text-[#e4e4e4] outline-none"
+            >
+              {modelOptions.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.displayName}
+                </option>
+              ))}
+            </select>
+          </>
+        )}
 
         <label className="block text-[11px] text-[#6e6e6e] mb-1">Mode</label>
         <div className="grid grid-cols-2 gap-2 mb-3">
