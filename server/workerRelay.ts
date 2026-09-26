@@ -6,6 +6,7 @@ import type {
   ModelInfo,
   CursorChatSession,
 } from "../shared/events.js";
+import type { AgentBackendKind } from "../shared/backends/types.js";
 import * as db from "./db.js";
 import type { WorkerPromptAttachment } from "../shared/uploads.js";
 
@@ -729,22 +730,24 @@ export class WorkerRelay {
 
   requestListModels(
     userId: string,
+    backend: AgentBackendKind = "cursor",
     timeoutMs = 60_000,
   ): Promise<ModelInfo[]> {
-    const cacheKey = `cli:${userId}`;
+    const cacheKey = `cli:${userId}:${backend}`;
+    const memKey = `${userId}:${backend}`;
     const dbCached = db.getModelCache(cacheKey);
     if (
       dbCached &&
       Date.now() - dbCached.updatedAt < WorkerRelay.MODELS_CACHE_MS
     ) {
-      this.modelsCache.set(userId, {
+      this.modelsCache.set(memKey, {
         at: dbCached.updatedAt,
         models: dbCached.models,
       });
       return Promise.resolve(dbCached.models);
     }
 
-    const cached = this.modelsCache.get(userId);
+    const cached = this.modelsCache.get(memKey);
     if (
       cached &&
       Date.now() - cached.at < WorkerRelay.MODELS_CACHE_MS &&
@@ -760,6 +763,14 @@ export class WorkerRelay {
       return Promise.reject(
         new Error(
           "No online Steer worker. Run `steer start` on your machine first.",
+        ),
+      );
+    }
+
+    if (backend !== "cursor" && worker.protocol < 6) {
+      return Promise.reject(
+        new Error(
+          "Update the Steer CLI (`npm i -g @oblivihon/steer@latest`) to list Claude Code / Codex models from this machine",
         ),
       );
     }
@@ -782,7 +793,7 @@ export class WorkerRelay {
       this.listModelsWaiters.set(requestId, {
         resolve: (models) => {
           if (models.length > 0) {
-            this.modelsCache.set(userId, { at: Date.now(), models });
+            this.modelsCache.set(memKey, { at: Date.now(), models });
             db.setModelCache(cacheKey, models);
           }
           resolve(models);
@@ -790,7 +801,7 @@ export class WorkerRelay {
         reject,
         timer,
       });
-      worker.socket.emit("worker:list-models", { requestId });
+      worker.socket.emit("worker:list-models", { requestId, backend });
     });
   }
 

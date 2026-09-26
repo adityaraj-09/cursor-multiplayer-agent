@@ -1,5 +1,6 @@
 import { SandboxInstance } from "@blaxel/core";
 import { nanoid } from "nanoid";
+import { errorMessage } from "../../shared/stringifyUnknown.js";
 
 const DEFAULT_IMAGE = "blaxel/base-image:latest";
 const DEFAULT_MEMORY_MB = 4096;
@@ -73,8 +74,13 @@ export function isValidBlaxelName(name: string): boolean {
   return /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(name);
 }
 
+/** Blaxel metadata.externalId: alphanumeric + hyphens only. */
 export function sandboxExternalId(roomId: string, agentId: string): string {
-  return `steer:${roomId}:${agentId}`.slice(0, 128);
+  const raw = `steer-${roomId}-${agentId}`
+    .replace(/[^a-zA-Z0-9-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return raw.slice(0, 128).replace(/-+$/g, "") || "steer";
 }
 
 function processName(prefix: string): string {
@@ -115,7 +121,13 @@ export async function createOrReconnectSandbox(opts: {
         app: "steer",
         ...(opts.labels ?? {}),
       },
-      externalId: opts.externalId,
+      externalId: opts.externalId
+        ? opts.externalId
+            .replace(/[^a-zA-Z0-9-]+/g, "-")
+            .replace(/-+/g, "-")
+            .replace(/^-+|-+$/g, "")
+            .slice(0, 128)
+        : undefined,
     });
 
   try {
@@ -220,7 +232,7 @@ export async function execInSandbox(
     };
   } catch (err) {
     if (opts.signal?.aborted) throw new Error("Aborted");
-    throw err instanceof Error ? err : new Error(String(err));
+    throw err instanceof Error ? err : new Error(errorMessage(err));
   } finally {
     try {
       stream?.close();

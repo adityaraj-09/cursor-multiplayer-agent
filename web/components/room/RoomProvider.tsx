@@ -469,25 +469,17 @@ export default function RoomProvider({
 
   useEffect(() => {
     let cancelled = false;
-    if (selectedBackend === "claude-code") {
-      setCachedModels(modelsCacheKey, CLAUDE_MODELS);
-      const frame = requestAnimationFrame(() => {
-        setModels(CLAUDE_MODELS);
-        setModelError("");
-      });
-      return () => cancelAnimationFrame(frame);
-    }
-    if (selectedBackend === "codex") {
-      setCachedModels(modelsCacheKey, CODEX_MODELS);
-      const frame = requestAnimationFrame(() => {
-        setModels(CODEX_MODELS);
-        setModelError("");
-      });
-      return () => cancelAnimationFrame(frame);
-    }
-
+    const seed =
+      selectedBackend === "claude-code"
+        ? CLAUDE_MODELS
+        : selectedBackend === "codex"
+          ? CODEX_MODELS
+          : FALLBACK_MODELS;
     const cached = getCachedModels(modelsCacheKey);
-    const initialModels = cached?.length ? cached : FALLBACK_MODELS;
+    const initialModels = cached?.length ? cached : seed;
+    if (!cached?.length && seed !== FALLBACK_MODELS) {
+      setCachedModels(modelsCacheKey, seed);
+    }
     const initialModelsFrame = requestAnimationFrame(() => {
       setModels(initialModels);
     });

@@ -34,6 +34,9 @@ import {
   sandboxNameFor,
   shellQuote,
 } from "./sandbox/blaxel.js";
+import { DEFAULT_CLAUDE_MODEL } from "../shared/claudeModels.js";
+import { DEFAULT_CODEX_MODEL } from "../shared/codexModels.js";
+import { errorMessage } from "../shared/stringifyUnknown.js";
 
 export type CliSandboxStreamEvent = NormalizedAgentEvent;
 
@@ -52,6 +55,54 @@ const CLI_BINARIES: Record<CliSandboxBackendKind, string> = {
   codex: "codex",
 };
 
+/** Non-root account Claude Code requires for `--dangerously-skip-permissions`. */
+export const SANDBOX_USER = "steer";
+
+function exportEnvPrefix(env: Record<string, string>): string {
+  return Object.entries(env)
+    .filter(([, value]) => Boolean(value))
+    .map(([key, value]) => `export ${key}=${shellQuote(value)}`)
+    .join(" && ");
+}
+
+/** Alpine + Debian snippet: create `steer` and own /home/user. No if/then — BusyBox ash. */
+export function ensureSandboxUserScript(): string {
+  const home = shellQuote(BLAXEL_HOME);
+  const repo = shellQuote(BLAXEL_REPO_DIR);
+  const steerDir = shellQuote(`${BLAXEL_HOME}/.steer`);
+  return [
+    `id -u ${SANDBOX_USER} >/dev/null 2>&1 || adduser -D -h ${home} -s /bin/sh ${SANDBOX_USER}`,
+    `id -u ${SANDBOX_USER} >/dev/null 2>&1 || adduser --disabled-password --gecos "" --home ${home} --shell /bin/sh ${SANDBOX_USER}`,
+    `id -u ${SANDBOX_USER} >/dev/null 2>&1 || useradd -M -d ${home} -s /bin/sh ${SANDBOX_USER}`,
+    `mkdir -p ${home} ${repo} ${steerDir}`,
+    `id -u ${SANDBOX_USER} >/dev/null 2>&1 && chown -R ${SANDBOX_USER} ${home} || true`,
+  ].join(" ; ");
+}
+
+/**
+ * Inline provider env onto the CLI command.
+ * Do not wrap with `su` — BusyBox su can block on a password prompt (silent
+ * hang) and child stdout often never reaches Blaxel streamLogs.
+ */
+export function wrapSandboxCliCommand(
+  command: string,
+  env: Record<string, string>,
+): string {
+  return `${exportEnvPrefix(env)} && ${command}`;
+}
+
+export function buildCliBootstrapCommand(bin: string, pkg: string): string {
+  const marker = `${BLAXEL_HOME}/.steer/cli-${bin}.ok`;
+  return [
+    `mkdir -p ${shellQuote(BLAXEL_HOME)} ${shellQuote(`${BLAXEL_HOME}/.steer`)} ${shellQuote(BLAXEL_REPO_DIR)}`,
+    `command -v ${shellQuote(bin)} >/dev/null 2>&1 || npm i -g ${shellQuote(pkg)}`,
+    `command -v ${shellQuote(bin)} >/dev/null 2>&1 || { echo "failed to install ${bin}" >&2; exit 1; }`,
+    `touch ${shellQuote(marker)}`,
+    ensureSandboxUserScript(),
+    `echo READY`,
+  ].join(" ; ");
+}
+
 export interface CliSandboxConfig {
   backend: CliSandboxBackendKind;
   /** Provider API key (Anthropic for Claude, OpenAI for Codex). */
@@ -61,6 +112,8 @@ export interface CliSandboxConfig {
   repoUrl: string;
   startingRef?: string;
   githubToken?: string;
+  /** Live token lookup so a later Settings → GitHub connect is picked up. */
+  resolveGithubToken?: () => string | null | undefined;
   autoCreatePR?: boolean;
   sessionId?: string | null;
   /** Persist Blaxel sandbox name across reconnects (`sdk_agent_id`). */
@@ -97,7 +150,7 @@ function requireApiKey(config: CliSandboxConfig): string {
 }
 
 function defaultModel(backend: CliSandboxBackendKind): string {
-  return backend === "codex" ? "gpt-5.3-codex" : "claude-sonnet-4-6";
+  return backend === "codex" ? DEFAULT_CODEX_MODEL : DEFAULT_CLAUDE_MODEL;
 }
 
 function gitUserName(backend: CliSandboxBackendKind): string {
@@ -255,7 +308,7 @@ export class CliSandboxSession {
       if (this.aborted) {
         item.resolve();
       } else {
-        item.reject(err instanceof Error ? err : new Error(String(err)));
+        item.reject(err instanceof Error ? err : new Error(errorMessage(err)));
       }
     } finally {
       this.processing = false;
@@ -266,7 +319,8 @@ export class CliSandboxSession {
   }
 
   private token(): string | undefined {
-    return githubTokenFromEnv(this.config.githubToken);
+    const live = this.config.resolveGithubToken?.() ?? this.config.githubToken;
+    return githubTokenFromEnv(live);
   }
 
   private providerEnv(): Record<string, string> {
@@ -275,6 +329,12 @@ export class CliSandboxSession {
     const env: Record<string, string> = {
       HOME: BLAXEL_HOME,
       PATH: "/usr/local/bin:/usr/bin:/bin",
+      // Blaxel images run as root. Claude Code refuses
+      // `--dangerously-skip-permissions` unless it knows this is an isolated
+      // sandbox (same signal Anthropic documents for Docker/CI).
+      IS_SANDBOX: "1",
+      CLAUDE_CODE_BUBBLEWRAP: "1",
+      USER: SANDBOX_USER,
     };
     if (this.config.backend === "codex") {
       env.OPENAI_API_KEY = apiKey;
@@ -338,16 +398,8 @@ export class CliSandboxSession {
     if (this.cliReady) return;
     const bin = CLI_BINARIES[this.config.backend];
     const pkg = CLI_PACKAGES[this.config.backend];
-    const marker = `${BLAXEL_HOME}/.steer/cli-${this.config.backend}.ok`;
     const result = await execInSandbox(sbx, {
-      command: [
-        `mkdir -p ${shellQuote(BLAXEL_HOME)} ${shellQuote(`${BLAXEL_HOME}/.steer`)} ${shellQuote(BLAXEL_REPO_DIR)}`,
-        `if [ -f ${shellQuote(marker)} ] && command -v ${bin} >/dev/null 2>&1; then echo READY; exit 0; fi`,
-        `command -v ${bin} >/dev/null 2>&1 || npm i -g ${shellQuote(pkg)}`,
-        `command -v ${bin} >/dev/null 2>&1 || { echo "failed to install ${bin}" >&2; exit 1; }`,
-        `touch ${shellQuote(marker)}`,
-        `echo READY`,
-      ].join(" && "),
+      command: buildCliBootstrapCommand(bin, pkg),
       workingDir: BLAXEL_HOME,
       env: this.providerEnv(),
       timeoutMs: BOOTSTRAP_TIMEOUT_MS,
@@ -376,9 +428,17 @@ export class CliSandboxSession {
           30_000,
         ).catch(() => undefined);
       }
+      await this.ownRepoForSandboxUser();
       return;
     }
     await this.cloneAndPrepareRepo();
+    await this.ownRepoForSandboxUser();
+  }
+
+  private async ownRepoForSandboxUser(): Promise<void> {
+    await this.sh(ensureSandboxUserScript(), 30_000, BLAXEL_HOME).catch(
+      () => undefined,
+    );
   }
 
   private async cloneAndPrepareRepo(): Promise<void> {
@@ -541,7 +601,7 @@ export class CliSandboxSession {
     );
     if (push.exitCode !== 0) {
       throw new Error(
-        `Failed to push branch ${this.branch}: ${push.stderr || push.stdout}. Ensure GITHUB_TOKEN has repo write access.`,
+        `Failed to push branch ${this.branch}: ${push.stderr || push.stdout}. Connect GitHub in Settings (or set GITHUB_TOKEN) with repo write access.`,
       );
     }
 
@@ -613,7 +673,10 @@ export class CliSandboxSession {
       }
     }
 
-    const cmd = [backend.command, ...args.map(shellQuote)].join(" ");
+    const cmd = wrapSandboxCliCommand(
+      [backend.command, ...args.map(shellQuote)].join(" "),
+      this.providerEnv(),
+    );
     const processName = `cli-${nanoid(6).toLowerCase()}`;
     this.activeProcessName = processName;
 
@@ -695,7 +758,7 @@ export class CliSandboxSession {
     };
 
     try {
-      let result: { exitCode: number; stderr?: string };
+      let result: { exitCode: number; stdout?: string; stderr?: string };
       try {
         result = await execInSandbox(sbx, {
           name: processName,
@@ -719,6 +782,16 @@ export class CliSandboxSession {
 
       await stdoutChain.catch(() => undefined);
       if (lineBuf.trim()) await flushLine(lineBuf);
+      // streamLogs can miss child output; parse whatever wait() captured.
+      if (
+        !ctx.gotTerminalEvent.value &&
+        !pendingDone &&
+        result.stdout?.trim()
+      ) {
+        for (const line of result.stdout.split("\n")) {
+          await flushLine(line);
+        }
+      }
 
       if (this.aborted || killed) {
         item.onEvent({ kind: "error", message: "Aborted" });
@@ -726,18 +799,18 @@ export class CliSandboxSession {
       }
 
       if (!ctx.gotTerminalEvent.value && !pendingDone) {
-        if (result.exitCode !== 0) {
+        const fallbackText = ctx.assistantBuf.value.trim();
+        if (result.exitCode === 0 && fallbackText) {
+          pendingDone = { kind: "done", result: fallbackText };
+        } else {
           const msg =
             ctx.stderr.trim() ||
             result.stderr?.trim() ||
-            `${productLabel(this.config.backend)} exited with code ${result.exitCode}`;
+            (result.exitCode === 0
+              ? `${productLabel(this.config.backend)} finished without any output`
+              : `${productLabel(this.config.backend)} exited with code ${result.exitCode}`);
           item.onEvent({ kind: "error", message: msg });
           sawError = true;
-        } else {
-          pendingDone = {
-            kind: "done",
-            result: ctx.assistantBuf.value || "",
-          };
         }
       }
 
@@ -746,7 +819,7 @@ export class CliSandboxSession {
         try {
           git = await this.finalizeGit();
         } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
+          const message = errorMessage(err);
           item.onEvent({ kind: "error", message });
         }
       }
@@ -765,7 +838,7 @@ export class CliSandboxSession {
         item.onEvent({ kind: "error", message: "Aborted" });
         return;
       }
-      const message = err instanceof Error ? err.message : String(err);
+      const message = errorMessage(err);
       if (!ctx.gotTerminalEvent.value && !pendingDone) {
         item.onEvent({ kind: "error", message });
       }

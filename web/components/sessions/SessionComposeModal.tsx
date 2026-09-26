@@ -13,7 +13,10 @@ import {
   fetchOnlineWorkers,
   fetchOrgs,
   fetchRepositories,
+  fetchWorkspaceGithub,
+  fetchWorkspaceGithubRepos,
   pickLocalFolder,
+  type WorkspaceGithubInfo,
   setServerKey,
   type OrgInfo,
 } from "../../lib/api";
@@ -22,16 +25,6 @@ import type {
   AuthMode,
   RepoInfo,
 } from "../../../shared/events";
-import {
-  CLAUDE_MODELS,
-  DEFAULT_CLAUDE_MODEL,
-  isClaudeModelId,
-} from "../../../shared/claudeModels";
-import {
-  CODEX_MODELS,
-  DEFAULT_CODEX_MODEL,
-  isCodexModelId,
-} from "../../../shared/codexModels";
 import type { AgentBackendKind } from "../../../shared/backends/types";
 import { isCliSandboxBackend } from "../../../shared/backends/types";
 import {
@@ -71,7 +64,6 @@ export default function SessionComposeModal({
   const [apiKey, setApiKey] = useState("");
   const [anthropicApiKey, setAnthropicApiKey] = useState("");
   const [openaiApiKey, setOpenaiApiKey] = useState("");
-  const [modelId, setModelId] = useState("auto");
   const [serverKeyInput, setServerKeyInput] = useState("");
   const [repoPath, setRepoPath] = useState("");
   const [repoUrl, setRepoUrl] = useState("");
@@ -113,6 +105,7 @@ export default function SessionComposeModal({
   const [workspace, setWorkspace] = useState<WorkspaceScope>(
     initialOrgId && initialOrgId !== "personal" ? initialOrgId : "personal",
   );
+  const [github, setGithub] = useState<WorkspaceGithubInfo | null>(null);
 
   const isClaude = backend === "claude-code";
   const isCodex = backend === "codex";
@@ -123,6 +116,10 @@ export default function SessionComposeModal({
   const isCodexCloud = isCodex && runtime === "cloud";
   const cliLabel = isCodex ? "Codex" : "Claude Code";
   const inOrg = workspace !== "personal";
+  const settingsHref = inOrg
+    ? `/settings?org=${encodeURIComponent(workspace)}`
+    : "/settings";
+  const githubReady = Boolean(github?.connected);
   const activeOrg = orgs.find((o) => o.id === workspace) || null;
   const teamKeyReady = inOrg
     ? orgCursorKeyConfigured || serverKeyConfigured
@@ -185,6 +182,21 @@ export default function SessionComposeModal({
   }, [workspace]);
 
   useEffect(() => {
+    let cancelled = false;
+    const orgId = workspace !== "personal" ? workspace : null;
+    void fetchWorkspaceGithub({ orgId })
+      .then((info) => {
+        if (!cancelled) setGithub(info);
+      })
+      .catch(() => {
+        if (!cancelled) setGithub(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [workspace]);
+
+  useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") onClose();
     };
@@ -227,17 +239,8 @@ export default function SessionComposeModal({
   const selectBackend = (next: AgentBackendKind) => {
     setBackend(next);
     setError("");
-    if (next === "claude-code") {
-      setModelId(DEFAULT_CLAUDE_MODEL);
-      if (runtime === "local") setAuthMode("cli");
-    } else if (next === "codex") {
-      setModelId(DEFAULT_CODEX_MODEL);
-      if (runtime === "local") setAuthMode("cli");
-    } else if (
-      modelId !== "auto" &&
-      (isClaudeModelId(modelId) || isCodexModelId(modelId))
-    ) {
-      setModelId("auto");
+    if (isCliSandboxBackend(next) && runtime === "local") {
+      setAuthMode("cli");
     }
   };
 
@@ -350,9 +353,32 @@ export default function SessionComposeModal({
 
   useEffect(() => {
     let cancelled = false;
-    if (runtime !== "cloud" || isCliSandboxBackend(backend)) {
+    if (runtime !== "cloud") {
       setRepos([]);
       return;
+    }
+    if (isCliSandboxBackend(backend)) {
+      if (!githubReady) {
+        setRepos([]);
+        return;
+      }
+      void fetchWorkspaceGithubRepos({
+        orgId: inOrg ? workspace : null,
+      })
+        .then((list) => {
+          if (cancelled) return;
+          setRepos(list.map((r) => ({ url: r.url })));
+          if (list[0] && !repoUrl) {
+            setRepoUrl(list[0].url);
+            setStartingRef(list[0].defaultBranch || "main");
+          }
+        })
+        .catch(() => {
+          if (!cancelled) setRepos([]);
+        });
+      return () => {
+        cancelled = true;
+      };
     }
     if (authMode === "server" && !teamKeyReady) {
       setRepos([]);
@@ -395,6 +421,8 @@ export default function SessionComposeModal({
     userByokConfigured,
     inOrg,
     workspace,
+    githubReady,
+    repoUrl,
   ]);
 
   const handleSubmit = async (e?: FormEvent) => {
@@ -484,11 +512,7 @@ export default function SessionComposeModal({
         controlMode,
         planMode,
         approvalMode,
-        modelId: isClaude
-          ? modelId || DEFAULT_CLAUDE_MODEL
-          : isCodex
-            ? modelId || DEFAULT_CODEX_MODEL
-            : modelId || "auto",
+        modelId: "auto",
         repoPath: runtime === "local" ? repoPath.trim() || undefined : undefined,
         repoUrl: runtime === "cloud" ? repoUrl.trim() : undefined,
         startingRef:
@@ -722,26 +746,10 @@ export default function SessionComposeModal({
                 </Field>
               </div>
 
-              {isCliSandbox && (
-                <Field label="Model">
-                  <select
-                    value={modelId}
-                    onChange={(e) => setModelId(e.target.value)}
-                    className={inputClass}
-                  >
-                    {(isCodex ? CODEX_MODELS : CLAUDE_MODELS).map((m) => (
-                      <option key={m.id} value={m.id}>
-                        {m.displayName}
-                      </option>
-                    ))}
-                  </select>
-                  <p className="text-[11px] text-[#6e6e6e] mt-1.5">
-                    {(isCodex ? CODEX_MODELS : CLAUDE_MODELS).find(
-                      (m) => m.id === modelId,
-                    )?.description}
-                  </p>
-                </Field>
-              )}
+              <p className="text-[11px] text-[#6e6e6e] -mt-1">
+                Starts on Auto. Pick a specific model in the room — the catalog
+                is fetched live.
+              </p>
 
               {isCliLocal && (
                 <Note>
@@ -772,9 +780,30 @@ export default function SessionComposeModal({
                       Cloud Claude Code
                     </p>
                     <p className="text-[11px] text-[#6e6e6e] mt-1">
-                      Runs in a Blaxel sandbox. Push/PR needs{" "}
-                      <code className="text-[#a0a0a0]">GITHUB_TOKEN</code> on
-                      the server.
+                      Runs in a Blaxel sandbox. Clone, push, and PRs use your
+                      connected GitHub
+                      {github?.login ? ` (@${github.login})` : ""} — including
+                      private repos.
+                    </p>
+                    <p
+                      className={`text-[11px] mt-1 ${
+                        githubReady ? "text-[#3ecf8e]" : "text-[#f07070]"
+                      }`}
+                    >
+                      {githubReady ? (
+                        `GitHub connected${github?.login ? ` as @${github.login}` : ""}`
+                      ) : (
+                        <>
+                          Connect GitHub in{" "}
+                          <Link
+                            href={settingsHref}
+                            className="text-[#4d9fff] hover:underline"
+                          >
+                            Settings
+                          </Link>{" "}
+                          to clone and push private repos.
+                        </>
+                      )}
                     </p>
                     <p
                       className={`text-[11px] mt-1 ${
@@ -852,9 +881,30 @@ export default function SessionComposeModal({
                   <Note>
                     <p className="text-[12px] text-[#e4e4e4]">Cloud Codex</p>
                     <p className="text-[11px] text-[#6e6e6e] mt-1">
-                      Runs in a Blaxel sandbox. Push/PR needs{" "}
-                      <code className="text-[#a0a0a0]">GITHUB_TOKEN</code> on
-                      the server.
+                      Runs in a Blaxel sandbox. Clone, push, and PRs use your
+                      connected GitHub
+                      {github?.login ? ` (@${github.login})` : ""} — including
+                      private repos.
+                    </p>
+                    <p
+                      className={`text-[11px] mt-1 ${
+                        githubReady ? "text-[#3ecf8e]" : "text-[#f07070]"
+                      }`}
+                    >
+                      {githubReady ? (
+                        `GitHub connected${github?.login ? ` as @${github.login}` : ""}`
+                      ) : (
+                        <>
+                          Connect GitHub in{" "}
+                          <Link
+                            href={settingsHref}
+                            className="text-[#4d9fff] hover:underline"
+                          >
+                            Settings
+                          </Link>{" "}
+                          to clone and push private repos.
+                        </>
+                      )}
                     </p>
                     <p
                       className={`text-[11px] mt-1 ${
@@ -1106,7 +1156,7 @@ export default function SessionComposeModal({
               ) : (
                 <>
                   <Field label="GitHub repository">
-                    {repos.length > 0 && !isClaude && (
+                    {repos.length > 0 && (
                       <select
                         value={
                           repos.some((r) => r.url === repoUrl) ? repoUrl : ""
@@ -1129,11 +1179,22 @@ export default function SessionComposeModal({
                       placeholder="https://github.com/org/repo"
                       className={`${inputClass} font-mono`}
                     />
-                    {isClaude && (
+                    {isCliSandbox && (
                       <p className="text-[11px] text-[#6e6e6e] mt-1.5">
-                        Paste any https://github.com/… URL. Private repos require{" "}
-                        <code className="text-[#a0a0a0]">GITHUB_TOKEN</code> on
-                        the server.
+                        {githubReady
+                          ? "Private and public repos from your connected GitHub. Auto-create PR uses that same account."
+                          : (
+                            <>
+                              Connect GitHub in{" "}
+                              <Link
+                                href={settingsHref}
+                                className="text-[#4d9fff] hover:underline"
+                              >
+                                Settings
+                              </Link>{" "}
+                              so {cliLabel} can clone and push private repos.
+                            </>
+                          )}
                       </p>
                     )}
                   </Field>

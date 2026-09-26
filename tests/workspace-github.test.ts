@@ -83,12 +83,45 @@ describe("per-workspace GitHub storage", () => {
     expect(github.getWorkspaceGithubToken({ userId, orgId: org.id })).toBe(
       "ghp_team_token_value",
     );
+    expect(
+      github.resolveGithubAccessToken({ userId, orgId: org.id }),
+    ).toBe("ghp_team_token_value");
+    expect(github.resolveGithubAccessToken({ userId })).toBe(
+      "ghp_personal_token_value",
+    );
 
     github.clearWorkspaceGithub({ userId });
     expect(github.getWorkspaceGithubToken({ userId })).toBe("");
     expect(github.getWorkspaceGithubToken({ userId, orgId: org.id })).toBe(
       "ghp_team_token_value",
     );
+  });
+
+  it("prefers a connected workspace GitHub token over GITHUB_TOKEN env", async () => {
+    const userId = `user_gh_env_${randomUUID()}`;
+    db.createUser(userId, `${userId}@example.com`, "GH Env", "x");
+    const prev = process.env.GITHUB_TOKEN;
+    process.env.GITHUB_TOKEN = "env_server_token";
+    expect(github.resolveGithubAccessToken({ userId })).toBe(
+      "env_server_token",
+    );
+    vi.stubGlobal("fetch", async () => ({
+      ok: true,
+      json: async () => ({
+        login: "connected-dev",
+        avatar_url: "https://example.com/c.png",
+        name: "connected-dev",
+      }),
+    }));
+    await github.connectWorkspaceGithub({
+      userId,
+      token: "ghp_connected_workspace_token",
+    });
+    expect(github.resolveGithubAccessToken({ userId })).toBe(
+      "ghp_connected_workspace_token",
+    );
+    if (prev === undefined) delete process.env.GITHUB_TOKEN;
+    else process.env.GITHUB_TOKEN = prev;
   });
 
   it("lists only team keys for an org workspace", async () => {
