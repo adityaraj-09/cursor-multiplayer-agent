@@ -55,6 +55,56 @@ const CLI_BINARIES: Record<CliSandboxBackendKind, string> = {
   codex: "codex",
 };
 
+/** Non-root account Claude Code requires for `--dangerously-skip-permissions`. */
+export const SANDBOX_USER = "steer";
+
+function exportEnvPrefix(env: Record<string, string>): string {
+  return Object.entries(env)
+    .filter(([, value]) => Boolean(value))
+    .map(([key, value]) => `export ${key}=${shellQuote(value)}`)
+    .join(" && ");
+}
+
+/** Alpine + Debian snippet: create `steer` and own /home/user. */
+export function ensureSandboxUserScript(): string {
+  return [
+    `if ! id -u ${SANDBOX_USER} >/dev/null 2>&1; then`,
+    `  if command -v adduser >/dev/null 2>&1; then`,
+    `    adduser -D -h ${shellQuote(BLAXEL_HOME)} -s /bin/sh ${SANDBOX_USER} 2>/dev/null`,
+    `    || adduser --disabled-password --gecos "" --home ${shellQuote(BLAXEL_HOME)} --shell /bin/sh ${SANDBOX_USER} 2>/dev/null`,
+    `    || true`,
+    `  fi`,
+    `  if ! id -u ${SANDBOX_USER} >/dev/null 2>&1 && command -v useradd >/dev/null 2>&1; then`,
+    `    useradd -M -d ${shellQuote(BLAXEL_HOME)} -s /bin/sh ${SANDBOX_USER} 2>/dev/null || true`,
+    `  fi`,
+    `fi`,
+    `mkdir -p ${shellQuote(BLAXEL_HOME)} ${shellQuote(BLAXEL_REPO_DIR)} ${shellQuote(`${BLAXEL_HOME}/.steer`)}`,
+    `if id -u ${SANDBOX_USER} >/dev/null 2>&1; then`,
+    `  chown -R ${SANDBOX_USER}:${SANDBOX_USER} ${shellQuote(BLAXEL_HOME)} 2>/dev/null`,
+    `  || chown -R ${SANDBOX_USER} ${shellQuote(BLAXEL_HOME)} 2>/dev/null`,
+    `  || true`,
+    `fi`,
+  ].join(" ");
+}
+
+/**
+ * Run the agent CLI as a non-root user with env inlined into the shell.
+ * Existing Blaxel sandboxes may not pick up newly added process env vars.
+ */
+export function wrapSandboxCliCommand(
+  command: string,
+  env: Record<string, string>,
+): string {
+  const exported = `${exportEnvPrefix(env)} && ${command}`;
+  return [
+    `if id -u ${SANDBOX_USER} >/dev/null 2>&1 && [ "$(id -u)" = "0" ]; then`,
+    `  su -s /bin/sh ${SANDBOX_USER} -c ${shellQuote(exported)}`,
+    `else`,
+    `  ${exported}`,
+    `fi`,
+  ].join(" ");
+}
+
 export interface CliSandboxConfig {
   backend: CliSandboxBackendKind;
   /** Provider API key (Anthropic for Claude, OpenAI for Codex). */
@@ -285,7 +335,8 @@ export class CliSandboxSession {
       // `--dangerously-skip-permissions` unless it knows this is an isolated
       // sandbox (same signal Anthropic documents for Docker/CI).
       IS_SANDBOX: "1",
-      USER: "user",
+      CLAUDE_CODE_BUBBLEWRAP: "1",
+      USER: SANDBOX_USER,
     };
     if (this.config.backend === "codex") {
       env.OPENAI_API_KEY = apiKey;
@@ -353,10 +404,11 @@ export class CliSandboxSession {
     const result = await execInSandbox(sbx, {
       command: [
         `mkdir -p ${shellQuote(BLAXEL_HOME)} ${shellQuote(`${BLAXEL_HOME}/.steer`)} ${shellQuote(BLAXEL_REPO_DIR)}`,
-        `if [ -f ${shellQuote(marker)} ] && command -v ${bin} >/dev/null 2>&1; then echo READY; exit 0; fi`,
+        `if [ -f ${shellQuote(marker)} ] && command -v ${bin} >/dev/null 2>&1; then ${ensureSandboxUserScript()} && echo READY; exit 0; fi`,
         `command -v ${bin} >/dev/null 2>&1 || npm i -g ${shellQuote(pkg)}`,
         `command -v ${bin} >/dev/null 2>&1 || { echo "failed to install ${bin}" >&2; exit 1; }`,
         `touch ${shellQuote(marker)}`,
+        ensureSandboxUserScript(),
         `echo READY`,
       ].join(" && "),
       workingDir: BLAXEL_HOME,
@@ -387,9 +439,17 @@ export class CliSandboxSession {
           30_000,
         ).catch(() => undefined);
       }
+      await this.ownRepoForSandboxUser();
       return;
     }
     await this.cloneAndPrepareRepo();
+    await this.ownRepoForSandboxUser();
+  }
+
+  private async ownRepoForSandboxUser(): Promise<void> {
+    await this.sh(ensureSandboxUserScript(), 30_000, BLAXEL_HOME).catch(
+      () => undefined,
+    );
   }
 
   private async cloneAndPrepareRepo(): Promise<void> {
@@ -624,7 +684,10 @@ export class CliSandboxSession {
       }
     }
 
-    const cmd = [backend.command, ...args.map(shellQuote)].join(" ");
+    const cmd = wrapSandboxCliCommand(
+      [backend.command, ...args.map(shellQuote)].join(" "),
+      this.providerEnv(),
+    );
     const processName = `cli-${nanoid(6).toLowerCase()}`;
     this.activeProcessName = processName;
 
