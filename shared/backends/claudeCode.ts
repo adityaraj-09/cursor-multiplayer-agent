@@ -15,7 +15,7 @@ import {
   todosFromToolArgs,
   TOOL_RESULT_DETAIL_LIMIT,
 } from "./cursor.js";
-import { stringifyUnknown } from "../stringifyUnknown.js";
+import { stringifyUnknown } from "../stringifyUnknown";
 interface PendingTool {
   name: string;
   path?: string;

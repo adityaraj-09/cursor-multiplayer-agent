@@ -10,7 +10,7 @@ import {
   isEditTool,
   TOOL_RESULT_DETAIL_LIMIT,
 } from "./cursor.js";
-import { stringifyUnknown } from "../stringifyUnknown.js";
+import { stringifyUnknown } from "../stringifyUnknown";
 
 /**
  * OpenAI Codex CLI headless backend.

@@ -5,7 +5,7 @@ import type {
   ParseLineContext,
   WorkerBackend,
 } from "./types.js";
-import { stringifyUnknown } from "../stringifyUnknown.js";
+import { stringifyUnknown } from "../stringifyUnknown";
 
 const QUESTION_TOOL_RE =
   /^(askuserquestion|askfollowupquestion|askquestion|ask_user|ask_followup_question|ask_user_question|clarify|question|userinput|getinput)/i;

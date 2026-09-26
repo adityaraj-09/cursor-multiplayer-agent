@@ -1,5 +1,8 @@
 import type { ChatMessage } from "../../shared/events";
 import { isEditTool, isTodoTool } from "../../shared/backends/cursor";
+import { stringifyUnknown } from "../../shared/stringifyUnknown";
+
+export { stringifyUnknown };
 
 export type ToolCategoryKey =
   | "edit"
