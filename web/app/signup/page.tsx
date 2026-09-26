@@ -13,12 +13,13 @@ function SignupPageInner() {
     redirect !== "/dashboard"
       ? `?redirect=${encodeURIComponent(redirect)}`
       : "";
+  const onboardingUrl = `/onboarding?redirect=${encodeURIComponent(redirect)}`;
 
   return (
     <AuthSplitLayout>
       <SignUp
         routing="hash"
-        fallbackRedirectUrl={redirect}
+        fallbackRedirectUrl={onboardingUrl}
         signInUrl={`/login${qs}`}
         appearance={authClerkAppearance}
       />

@@ -1619,6 +1619,7 @@ export async function connectWorkspaceGithubPat(
 
 export async function startWorkspaceGithubOAuth(opts?: {
   orgId?: string | null;
+  returnTo?: string;
 }): Promise<string> {
   const res = await fetch(`${API_BASE}/workspace/github/oauth/start`, {
     method: "POST",
@@ -1626,7 +1627,10 @@ export async function startWorkspaceGithubOAuth(opts?: {
       "Content-Type": "application/json",
       ...(await authHeaders()),
     },
-    body: JSON.stringify({ orgId: opts?.orgId }),
+    body: JSON.stringify({
+      orgId: opts?.orgId,
+      returnTo: opts?.returnTo,
+    }),
   });
   if (!res.ok) {
     throw new Error(await parseApiError(res, "Failed to start GitHub OAuth"));

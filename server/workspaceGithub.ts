@@ -171,6 +171,7 @@ const OAUTH_TTL_MS = 10 * 60 * 1000;
 export function createGithubOAuthState(input: {
   userId: string;
   orgId?: string | null;
+  returnTo?: string;
 }): string {
   const state = nanoid(24);
   db.setSetting(
@@ -178,6 +179,7 @@ export function createGithubOAuthState(input: {
     JSON.stringify({
       userId: input.userId,
       orgId: input.orgId || null,
+      returnTo: input.returnTo || null,
       exp: Date.now() + OAUTH_TTL_MS,
     }),
   );
@@ -187,6 +189,7 @@ export function createGithubOAuthState(input: {
 export function consumeGithubOAuthState(state: string): {
   userId: string;
   orgId?: string;
+  returnTo?: string;
 } | null {
   const key = `github_oauth:${state}`;
   const raw = db.getSetting(key);
@@ -196,12 +199,14 @@ export function consumeGithubOAuthState(state: string): {
     const parsed = JSON.parse(raw) as {
       userId?: string;
       orgId?: string | null;
+      returnTo?: string | null;
       exp?: number;
     };
     if (!parsed.userId || !parsed.exp || parsed.exp < Date.now()) return null;
     return {
       userId: parsed.userId,
       orgId: parsed.orgId || undefined,
+      returnTo: parsed.returnTo || undefined,
     };
   } catch {
     return null;

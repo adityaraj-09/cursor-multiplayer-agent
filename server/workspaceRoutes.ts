@@ -285,7 +285,12 @@ router.post("/github/oauth/start", requireAuth, (req, res) => {
       });
       return;
     }
-    const state = createGithubOAuthState(workspace);
+    const requestedReturnTo = String(req.body?.returnTo || "");
+    const returnTo =
+      requestedReturnTo.startsWith("/") && !requestedReturnTo.startsWith("//")
+        ? requestedReturnTo
+        : undefined;
+    const state = createGithubOAuthState({ ...workspace, returnTo });
     const url = new URL("https://github.com/login/oauth/authorize");
     url.searchParams.set("client_id", process.env.GITHUB_CLIENT_ID!.trim());
     url.searchParams.set("redirect_uri", githubRedirectUri());
@@ -305,7 +310,7 @@ router.post("/github/oauth/start", requireAuth, (req, res) => {
 router.get("/github/oauth/callback", async (req, res) => {
   const fail = (message: string) => {
     logWarn("github", "oauth callback failed", { message });
-    const dest = new URL("/settings", APP_ORIGIN);
+    const dest = new URL(pending.returnTo || "/settings", APP_ORIGIN);
     dest.searchParams.set("github", "error");
     dest.searchParams.set("message", message);
     res.redirect(dest.toString());
