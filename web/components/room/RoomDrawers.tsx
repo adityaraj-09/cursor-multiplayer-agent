@@ -72,7 +72,6 @@ export default function RoomDrawers() {
     chatFilterAgentId,
     setChatFilterAgentId,
     selectedAgent,
-    selectedModelId,
     selectedStatus,
     splitPool,
     visibleIds,
@@ -276,8 +275,6 @@ export default function RoomDrawers() {
         onClose={() => setAddAgentOpen(false)}
         roomId={roomId}
         onSubmit={handleAddAgent}
-        models={models}
-        defaultModelId={selectedModelId}
         runtime={runtime}
         orgId={roomInfo?.orgId}
       />

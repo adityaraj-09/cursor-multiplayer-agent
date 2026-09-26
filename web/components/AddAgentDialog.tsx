@@ -1,9 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { ModelInfo } from "../../shared/events";
-import { isClaudeModelId } from "../../shared/claudeModels";
-import { isCodexModelId } from "../../shared/codexModels";
 import type { AgentBackendKind } from "../../shared/backends/types";
 import { isCliSandboxBackend } from "../../shared/backends/types";
 import {
@@ -11,7 +8,6 @@ import {
   clearByokKey,
   clearOpenaiByokKey,
   fetchAuthStatus,
-  fetchModels,
   validateAgentScope,
 } from "../lib/api";
 
@@ -30,9 +26,6 @@ interface AddAgentDialogProps {
     planMode?: boolean;
     seedContext?: boolean;
   }) => Promise<void>;
-  /** Fallback Cursor models from the room page (may be Claude models if a Claude agent is selected). */
-  models: ModelInfo[];
-  defaultModelId?: string;
   runtime: "local" | "cloud";
   /** When set, Claude cloud can reuse the org shared Anthropic key. */
   orgId?: string;
@@ -43,8 +36,6 @@ export default function AddAgentDialog({
   onClose,
   roomId,
   onSubmit,
-  models,
-  defaultModelId,
   runtime,
   orgId,
 }: AddAgentDialogProps) {
@@ -52,9 +43,6 @@ export default function AddAgentDialog({
   const [backend, setBackend] = useState<AgentBackendKind>("cursor");
   const [scopePath, setScopePath] = useState("");
   const [scopeWarning, setScopeWarning] = useState("");
-  const [modelId, setModelId] = useState("auto");
-  const [cursorModels, setCursorModels] = useState<ModelInfo[]>([]);
-  const [loadingCursorModels, setLoadingCursorModels] = useState(false);
   const [apiKey, setApiKey] = useState("");
   const [anthropicApiKey, setAnthropicApiKey] = useState("");
   const [openaiApiKey, setOpenaiApiKey] = useState("");
@@ -77,8 +65,6 @@ export default function AddAgentDialog({
   const [error, setError] = useState("");
 
   const needsCursorKey = backend === "cursor" && runtime === "cloud";
-  const hasCursorAuth =
-    Boolean(apiKey.trim()) || userByokConfigured || serverKeyConfigured;
   const hasAnthropicAuth =
     Boolean(anthropicApiKey.trim()) ||
     anthropicConfigured ||
@@ -113,88 +99,6 @@ export default function AddAgentDialog({
       cancelled = true;
     };
   }, [open, orgId]);
-
-  // Reset model when the dialog opens or backend changes.
-  // Claude Code / Codex start on Auto — the room page fetches the live catalog.
-  useEffect(() => {
-    if (!open) return;
-    if (isCliSandboxBackend(backend)) {
-      setModelId("auto");
-      return;
-    }
-    const fallback =
-      defaultModelId &&
-      !isClaudeModelId(defaultModelId) &&
-      !isCodexModelId(defaultModelId)
-        ? defaultModelId
-        : "auto";
-    setModelId(fallback);
-  }, [open, backend, defaultModelId]);
-
-  // Load Cursor models from the Cursor API (BYOK / server), not the room's
-  // currently-selected agent models (which may be Claude aliases).
-  useEffect(() => {
-    if (!open || backend !== "cursor") return;
-    let cancelled = false;
-
-    const roomLooksLikeCursor =
-      models.length > 0 && !models.every((m) => isClaudeModelId(m.id));
-    if (roomLooksLikeCursor) {
-      setCursorModels(models);
-    }
-
-    if (runtime === "local") {
-      // Local CLI rooms list models via the room endpoint; keep prop/fallback.
-      if (!roomLooksLikeCursor) {
-        setCursorModels([{ id: "auto", displayName: "Auto" }]);
-      }
-      return;
-    }
-
-    if (!hasCursorAuth && !apiKey.trim()) {
-      if (!roomLooksLikeCursor) {
-        setCursorModels([{ id: "auto", displayName: "Auto" }]);
-      }
-      return;
-    }
-
-    setLoadingCursorModels(true);
-    const authMode =
-      apiKey.trim() || userByokConfigured ? "byok" : "server";
-    void fetchModels({
-      authMode,
-      apiKey: apiKey.trim() || undefined,
-    })
-      .then((list) => {
-        if (cancelled || !list.length) return;
-        setCursorModels(list);
-        setModelId((prev) =>
-          list.some((m) => m.id === prev) ? prev : list[0]?.id || "auto",
-        );
-      })
-      .catch(() => {
-        if (cancelled) return;
-        if (!roomLooksLikeCursor) {
-          setCursorModels([{ id: "auto", displayName: "Auto" }]);
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setLoadingCursorModels(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    open,
-    backend,
-    runtime,
-    apiKey,
-    userByokConfigured,
-    serverKeyConfigured,
-    hasCursorAuth,
-    models,
-  ]);
 
   useEffect(() => {
     if (!open || runtime !== "local") {
@@ -298,7 +202,7 @@ export default function AddAgentDialog({
         label: label.trim() || "Agent",
         backend,
         scopePath: scopePath.trim() || undefined,
-        modelId: isCliSandboxBackend(backend) ? "auto" : modelId,
+        modelId: "auto",
         planMode,
         seedContext,
         anthropicApiKey:
@@ -327,13 +231,6 @@ export default function AddAgentDialog({
       setBusy(false);
     }
   };
-
-  const modelOptions = cursorModels.length
-    ? cursorModels
-    : models.length &&
-        !models.every((m) => isClaudeModelId(m.id) || isCodexModelId(m.id))
-      ? models
-      : [{ id: "auto", displayName: "Auto" }];
 
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 p-3">
@@ -567,30 +464,10 @@ export default function AddAgentDialog({
           </>
         )}
 
-        {isCliSandboxBackend(backend) ? (
-          <p className="text-[11px] text-[#6e6e6e] mb-3">
-            Starts on Auto. Pick a model in the room — the latest catalog is
-            fetched from {backend === "codex" ? "Codex" : "Claude Code"}.
-          </p>
-        ) : (
-          <>
-            <label className="block text-[11px] text-[#6e6e6e] mb-1">
-              Model
-              {loadingCursorModels ? " (loading…)" : ""}
-            </label>
-            <select
-              value={modelId}
-              onChange={(e) => setModelId(e.target.value)}
-              className="w-full h-9 mb-3 px-2.5 rounded-md bg-[#252525] border border-[#2b2b2b] text-[13px] text-[#e4e4e4] outline-none"
-            >
-              {modelOptions.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.displayName}
-                </option>
-              ))}
-            </select>
-          </>
-        )}
+        <p className="text-[11px] text-[#6e6e6e] mb-3">
+          Starts on Auto. Pick a model in the room — the latest catalog is
+          fetched live.
+        </p>
 
         <label className="block text-[11px] text-[#6e6e6e] mb-1">Mode</label>
         <div className="grid grid-cols-2 gap-2 mb-3">

@@ -25,8 +25,6 @@ import type {
   AuthMode,
   RepoInfo,
 } from "../../../shared/events";
-import { isClaudeModelId } from "../../../shared/claudeModels";
-import { isCodexModelId } from "../../../shared/codexModels";
 import type { AgentBackendKind } from "../../../shared/backends/types";
 import { isCliSandboxBackend } from "../../../shared/backends/types";
 import {
@@ -66,7 +64,6 @@ export default function SessionComposeModal({
   const [apiKey, setApiKey] = useState("");
   const [anthropicApiKey, setAnthropicApiKey] = useState("");
   const [openaiApiKey, setOpenaiApiKey] = useState("");
-  const [modelId, setModelId] = useState("auto");
   const [serverKeyInput, setServerKeyInput] = useState("");
   const [repoPath, setRepoPath] = useState("");
   const [repoUrl, setRepoUrl] = useState("");
@@ -242,14 +239,8 @@ export default function SessionComposeModal({
   const selectBackend = (next: AgentBackendKind) => {
     setBackend(next);
     setError("");
-    if (isCliSandboxBackend(next)) {
-      setModelId("auto");
-      if (runtime === "local") setAuthMode("cli");
-    } else if (
-      modelId !== "auto" &&
-      (isClaudeModelId(modelId) || isCodexModelId(modelId))
-    ) {
-      setModelId("auto");
+    if (isCliSandboxBackend(next) && runtime === "local") {
+      setAuthMode("cli");
     }
   };
 
@@ -521,7 +512,7 @@ export default function SessionComposeModal({
         controlMode,
         planMode,
         approvalMode,
-        modelId: isCliSandbox ? "auto" : modelId || "auto",
+        modelId: "auto",
         repoPath: runtime === "local" ? repoPath.trim() || undefined : undefined,
         repoUrl: runtime === "cloud" ? repoUrl.trim() : undefined,
         startingRef:
@@ -755,12 +746,10 @@ export default function SessionComposeModal({
                 </Field>
               </div>
 
-              {isCliSandbox && (
-                <p className="text-[11px] text-[#6e6e6e] -mt-1">
-                  Starts on Auto ({cliLabel}&apos;s current default). Pick a
-                  specific model in the room — the catalog is fetched live.
-                </p>
-              )}
+              <p className="text-[11px] text-[#6e6e6e] -mt-1">
+                Starts on Auto. Pick a specific model in the room — the catalog
+                is fetched live.
+              </p>
 
               {isCliLocal && (
                 <Note>
